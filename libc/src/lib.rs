@@ -13,6 +13,9 @@ use core::sync::atomic::{AtomicI32, AtomicUsize, Ordering};
 
 const EILSEQ: c_int = 84;
 const EINVAL: c_int = 22;
+const EFAULT: c_int = 14;
+const ENOMEM: c_int = 12;
+const EINTR: c_int = 4;
 
 static mut ERRNO: c_int = 0;
 
@@ -947,18 +950,83 @@ pub const SIG_DFL: usize = 0;
 pub const SIG_IGN: usize = 1;
 pub const SIG_ERR: usize = !0usize;
 
+pub const SIGHUP: c_int = 1;
 pub const SIGINT: c_int = 2;
-pub const SIGILL: c_int = 4;
-pub const SIGABRT: c_int = 6;
-pub const SIGFPE: c_int = 8;
-pub const SIGSEGV: c_int = 11;
-pub const SIGTERM: c_int = 15;
 pub const SIGQUIT: c_int = 3;
+pub const SIGILL: c_int = 4;
+pub const SIGTRAP: c_int = 5;
+pub const SIGABRT: c_int = 6;
+pub const SIGIOT: c_int = 6;
+pub const SIGBUS: c_int = 7;
+pub const SIGFPE: c_int = 8;
+pub const SIGKILL: c_int = 9;
+pub const SIGUSR1: c_int = 10;
+pub const SIGSEGV: c_int = 11;
+pub const SIGUSR2: c_int = 12;
+pub const SIGPIPE: c_int = 13;
+pub const SIGALRM: c_int = 14;
+pub const SIGTERM: c_int = 15;
+pub const SIGSTKFLT: c_int = 16;
 pub const SIGCHLD: c_int = 17;
+pub const SIGCONT: c_int = 18;
+pub const SIGSTOP: c_int = 19;
+pub const SIGTSTP: c_int = 20;
+pub const SIGTTIN: c_int = 21;
+pub const SIGTTOU: c_int = 22;
+pub const SIGURG: c_int = 23;
+pub const SIGXCPU: c_int = 24;
+pub const SIGXFSZ: c_int = 25;
+pub const SIGVTALRM: c_int = 26;
+pub const SIGPROF: c_int = 27;
+pub const SIGWINCH: c_int = 28;
+pub const SIGIO: c_int = 29;
+pub const SIGPOLL: c_int = 29;
+pub const SIGPWR: c_int = 30;
+pub const SIGSYS: c_int = 31;
+pub const SIGUNUSED: c_int = 31;
+pub const _NSIG: c_int = 65;
 
 pub const SIG_BLOCK: c_int = 0;
 pub const SIG_UNBLOCK: c_int = 1;
 pub const SIG_SETMASK: c_int = 2;
+
+pub const SA_NOCLDSTOP: c_ulong = 1;
+pub const SA_NOCLDWAIT: c_ulong = 2;
+pub const SA_SIGINFO: c_ulong = 4;
+pub const SA_ONSTACK: c_ulong = 0x08000000;
+pub const SA_RESTART: c_ulong = 0x10000000;
+pub const SA_NODEFER: c_ulong = 0x40000000;
+pub const SA_RESETHAND: c_ulong = 0x80000000;
+
+pub const SS_ONSTACK: c_int = 1;
+pub const SS_DISABLE: c_int = 2;
+pub const MINSIGSTKSZ: usize = 2048;
+pub const SIGSTKSZ: usize = 8192;
+
+pub const SI_USER: c_int = 0;
+pub const SI_TKILL: c_int = -6;
+
+#[repr(C)]
+pub struct timespec {
+    pub tv_sec: c_long,
+    pub tv_nsec: c_long,
+}
+
+#[repr(C)]
+pub struct siginfo_t {
+    pub si_signo: c_int,
+    pub si_errno: c_int,
+    pub si_code: c_int,
+    // ponytail: rest of 128-byte struct, only si_signo accessed
+    _pad: [u8; 128 - 3 * core::mem::size_of::<c_int>()],
+}
+
+#[repr(C)]
+pub struct stack_t {
+    pub ss_sp: *mut c_void,
+    pub ss_flags: c_int,
+    pub ss_size: usize,
+}
 
 #[repr(C)]
 pub struct sigaction {
@@ -1024,6 +1092,84 @@ unsafe fn sys_rt_sigprocmask(
     result
 }
 
+#[inline]
+unsafe fn sys_rt_sigpending(set: *mut SigSetT, sigsetsize: usize) -> i64 {
+    let result: i64;
+    core::arch::asm!(
+        "syscall",
+        inlateout("rax") 127i64 => result,
+        in("rdi") set,
+        in("rsi") sigsetsize,
+        lateout("rcx") _,
+        lateout("r11") _,
+    );
+    result
+}
+
+#[inline]
+unsafe fn sys_rt_sigsuspend(mask: *const SigSetT, sigsetsize: usize) -> i64 {
+    let result: i64;
+    core::arch::asm!(
+        "syscall",
+        inlateout("rax") 130i64 => result,
+        in("rdi") mask,
+        in("rsi") sigsetsize,
+        lateout("rcx") _,
+        lateout("r11") _,
+    );
+    result
+}
+
+#[inline]
+unsafe fn sys_rt_sigtimedwait(
+    set: *const SigSetT,
+    info: *mut siginfo_t,
+    timeout: *const timespec,
+    sigsetsize: usize,
+) -> i64 {
+    let result: i64;
+    core::arch::asm!(
+        "syscall",
+        inlateout("rax") 128i64 => result,
+        in("rdi") set,
+        in("rsi") info,
+        in("rdx") timeout,
+        in("r10") sigsetsize,
+        lateout("rcx") _,
+        lateout("r11") _,
+    );
+    result
+}
+
+#[inline]
+unsafe fn sys_sigaltstack(ss: *const stack_t, old_ss: *mut stack_t) -> i64 {
+    let result: i64;
+    core::arch::asm!(
+        "syscall",
+        inlateout("rax") 131i64 => result,
+        in("rdi") ss,
+        in("rsi") old_ss,
+        lateout("rcx") _,
+        lateout("r11") _,
+    );
+    result
+}
+
+#[inline]
+unsafe fn sys_tgkill(tgid: c_int, tid: c_int, sig: c_int) -> i64 {
+    let result: i64;
+    core::arch::asm!(
+        "syscall",
+        inlateout("rax") 234i64 => result,
+        in("rdi") tgid as i64,
+        in("rsi") tid as i64,
+        in("rdx") sig as i64,
+        lateout("rcx") _,
+        lateout("r11") _,
+    );
+    result
+}
+
 #[no_mangle]
 pub unsafe extern "C" fn sigprocmask(
     how: c_int,
@@ -1066,8 +1212,21 @@ pub unsafe extern "C" fn sigaction(
     act: *const sigaction,
     oldact: *mut sigaction,
 ) -> c_int {
-    let r = sys_rt_sigaction(signum, act, oldact, core::mem::size_of::<[c_ulong; 1]>());
+    let kact: sigaction;
+    let act_ptr = if act.is_null() {
+        core::ptr::null()
+    } else {
+        kact = sigaction {
+            sa_handler: (*act).sa_handler,
+            sa_flags: (*act).sa_flags | SA_RESTORER,
+            sa_restorer: sig_restorer as usize,
+            sa_mask: (*act).sa_mask,
+        };
+        &kact as *const sigaction
+    };
+    let r = sys_rt_sigaction(signum, act_ptr, oldact, core::mem::size_of::<SigSetT>());
     if r < 0 {
+        ERRNO = (-r) as c_int;
         -1
     } else {
         0
@@ -1101,13 +1260,18 @@ pub unsafe extern "C" fn kill(pid: c_int, sig: c_int) -> c_int {
 }
 
 #[no_mangle]
+pub unsafe extern "C" fn tgkill(tgid: c_int, tid: c_int, sig: c_int) -> c_int {
+    if sys_tgkill(tgid, tid, sig) < 0 { -1 } else { 0 }
+}
+
+#[no_mangle]
 pub unsafe extern "C" fn getpid() -> c_int {
     sys_getpid() as c_int
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn raise(sig: c_int) -> c_int {
-    if sys_kill(sys_getpid() as c_int, sig) < 0 {
+    if sys_tgkill(sys_getpid() as c_int, sys_gettid() as c_int, sig) < 0 {
         -1
     } else {
         0
@@ -1122,25 +1286,117 @@ pub unsafe extern "C" fn sigemptyset(set: *mut SigSetT) -> c_int {
 
 #[no_mangle]
 pub unsafe extern "C" fn sigfillset(set: *mut SigSetT) -> c_int {
-    *set = !0;
+    // musl: all signals except 32 (SIGCANCEL) and 33 (SIGSYNCCALL)
+    *set = 0xFFFF_FFFC_7FFF_FFFFu64;
     0
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn sigaddset(set: *mut SigSetT, signum: c_int) -> c_int {
-    *set |= 1u64 << (signum - 1);
+    let s = (signum as c_uint).wrapping_sub(1);
+    if s as usize >= 64 || (signum as c_uint).wrapping_sub(32) < 3 {
+        ERRNO = EINVAL;
+        return -1;
+    }
+    *set |= 1u64 << s;
     0
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn sigdelset(set: *mut SigSetT, signum: c_int) -> c_int {
-    *set &= !(1u64 << (signum - 1));
+    let s = (signum as c_uint).wrapping_sub(1);
+    if s as usize >= 64 || (signum as c_uint).wrapping_sub(32) < 3 {
+        ERRNO = EINVAL;
+        return -1;
+    }
+    *set &= !(1u64 << s);
     0
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn sigismember(set: *const SigSetT, signum: c_int) -> c_int {
-    ((*set & (1u64 << (signum - 1))) != 0) as c_int
+    let s = (signum as c_uint).wrapping_sub(1);
+    if s as usize >= 64 { return 0; }
+    ((*set & (1u64 << s)) != 0) as c_int
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn sigpending(set: *mut SigSetT) -> c_int {
+    let r = sys_rt_sigpending(set, core::mem::size_of::<SigSetT>());
+    if r < 0 {
+        ERRNO = (-r) as c_int;
+        return -1;
+    }
+    0
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn sigsuspend(mask: *const SigSetT) -> c_int {
+    let r = sys_rt_sigsuspend(mask, core::mem::size_of::<SigSetT>());
+    if r < 0 {
+        ERRNO = (-r) as c_int;
+    }
+    -1
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn sigtimedwait(
+    mask: *const SigSetT,
+    info: *mut siginfo_t,
+    timeout: *const timespec,
+) -> c_int {
+    loop {
+        let r = sys_rt_sigtimedwait(mask, info, timeout, core::mem::size_of::<SigSetT>());
+        if r >= 0 {
+            return r as c_int;
+        }
+        let e = (-r) as c_int;
+        if e != EINTR {
+            ERRNO = e;
+            return -1;
+        }
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn sigwaitinfo(
+    mask: *const SigSetT,
+    info: *mut siginfo_t,
+) -> c_int {
+    sigtimedwait(mask, info, core::ptr::null())
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn sigwait(
+    mask: *const SigSetT,
+    sig: *mut c_int,
+) -> c_int {
+    let mut info: siginfo_t = core::mem::zeroed();
+    if sigtimedwait(mask, &mut info, core::ptr::null()) < 0 {
+        return ERRNO;
+    }
+    *sig = info.si_signo;
+    0
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn sigaltstack(ss: *const stack_t, old_ss: *mut stack_t) -> c_int {
+    if !ss.is_null() {
+        if (*ss).ss_flags & SS_ONSTACK != 0 {
+            ERRNO = EINVAL;
+            return -1;
+        }
+        if (*ss).ss_flags & SS_DISABLE == 0 && (*ss).ss_size < MINSIGSTKSZ {
+            ERRNO = ENOMEM;
+            return -1;
+        }
+    }
+    let r = sys_sigaltstack(ss, old_ss);
+    if r < 0 {
+        ERRNO = (-r) as c_int;
+        return -1;
+    }
+    0
 }
 
 // ============================================================

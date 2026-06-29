@@ -553,7 +553,7 @@ unsafe fn load_dso_from_fd(fd: i64, base: u64) -> bool {
         let adj = p_vaddr & (page - 1);
         let map_addr = base + p_vaddr - adj;
         let map_off = p_offset - adj;
-        let map_len = ((p_filesz + adj + page - 1) & !(page - 1)) as usize;
+        let map_len = ((p_memsz + adj + page - 1) & !(page - 1)) as usize;
         let prot = prot_from_flags(p_flags);
 
         let ptr = sys_mmap(
@@ -1056,7 +1056,7 @@ unsafe fn load_and_jump(sp: usize) -> ! {
         let adj = p_vaddr & (page - 1);
         let map_addr = p_vaddr - adj;
         let map_off = p_offset - adj;
-        let map_len = ((p_filesz + adj + page - 1) & !(page - 1)) as usize;
+        let map_len = ((p_memsz + adj + page - 1) & !(page - 1)) as usize;
         let prot = prot_from_flags(p_flags);
 
         let ptr = sys_mmap(
