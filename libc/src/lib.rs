@@ -865,6 +865,175 @@ pub extern "C" fn rand() -> c_int {
 }
 
 // ============================================================
+// signal.h
+// ============================================================
+
+pub const SA_RESTORER: c_ulong = 0x04000000;
+
+pub const SIG_DFL: usize = 0;
+pub const SIG_IGN: usize = 1;
+pub const SIG_ERR: usize = !0usize;
+
+pub const SIGINT: c_int = 2;
+pub const SIGILL: c_int = 4;
+pub const SIGABRT: c_int = 6;
+pub const SIGFPE: c_int = 8;
+pub const SIGSEGV: c_int = 11;
+pub const SIGTERM: c_int = 15;
+
+#[repr(C)]
+pub struct sigaction {
+    pub sa_handler: usize,
+    pub sa_flags: c_ulong,
+    pub sa_restorer: usize,
+    pub sa_mask: [c_ulong; 1],
+}
+
+pub type SigSetT = c_ulong;
+
+core::arch::global_asm!(
+    ".global sig_restorer",
+    ".type sig_restorer, @function",
+    "sig_restorer:",
+    "mov eax, 15",
+    "syscall",
+);
+
+extern "C" {
+    fn sig_restorer();
+}
+
+#[inline]
+unsafe fn sys_rt_sigaction(
+    sig: c_int,
+    act: *const sigaction,
+    oldact: *mut sigaction,
+    sigsetsize: usize,
+) -> i64 {
+    let result: i64;
+    core::arch::asm!(
+        "syscall",
+        inlateout("rax") 13i64 => result,
+        in("rdi") sig as i64,
+        in("rsi") act,
+        in("rdx") oldact,
+        in("r10") sigsetsize,
+        lateout("rcx") _,
+        lateout("r11") _,
+    );
+    result
+}
+
+#[inline]
+unsafe fn sys_kill(pid: c_int, sig: c_int) -> i64 {
+    let result: i64;
+    core::arch::asm!(
+        "syscall",
+        inlateout("rax") 62i64 => result,
+        in("rdi") pid as i64,
+        in("rsi") sig as i64,
+        lateout("rcx") _,
+        lateout("r11") _,
+    );
+    result
+}
+
+#[inline]
+unsafe fn sys_getpid() -> i64 {
+    let result: i64;
+    core::arch::asm!(
+        "syscall",
+        inlateout("rax") 39i64 => result,
+        lateout("rcx") _,
+        lateout("r11") _,
+    );
+    result
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn sigaction(
+    signum: c_int,
+    act: *const sigaction,
+    oldact: *mut sigaction,
+) -> c_int {
+    let r = sys_rt_sigaction(signum, act, oldact, core::mem::size_of::<[c_ulong; 1]>());
+    if r < 0 {
+        -1
+    } else {
+        0
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn signal(signum: c_int, handler: usize) -> usize {
+    let act = sigaction {
+        sa_handler: handler,
+        sa_flags: SA_RESTORER,
+        sa_restorer: sig_restorer as usize,
+        sa_mask: [0],
+    };
+    let mut old = sigaction {
+        sa_handler: 0,
+        sa_flags: 0,
+        sa_restorer: 0,
+        sa_mask: [0],
+    };
+    if sigaction(signum, &act, &mut old) == -1 {
+        SIG_ERR
+    } else {
+        old.sa_handler
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn kill(pid: c_int, sig: c_int) -> c_int {
+    sys_kill(pid, sig) as c_int
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn getpid() -> c_int {
+    sys_getpid() as c_int
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn raise(sig: c_int) -> c_int {
+    if sys_kill(sys_getpid() as c_int, sig) < 0 {
+        -1
+    } else {
+        0
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn sigemptyset(set: *mut SigSetT) -> c_int {
+    *set = 0;
+    0
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn sigfillset(set: *mut SigSetT) -> c_int {
+    *set = !0;
+    0
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn sigaddset(set: *mut SigSetT, signum: c_int) -> c_int {
+    *set |= 1u64 << (signum - 1);
+    0
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn sigdelset(set: *mut SigSetT, signum: c_int) -> c_int {
+    *set &= !(1u64 << (signum - 1));
+    0
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn sigismember(set: *const SigSetT, signum: c_int) -> c_int {
+    ((*set & (1u64 << (signum - 1))) != 0) as c_int
+}
+
+// ============================================================
 // Syscall wrappers as public C ABI
 // ============================================================
 
