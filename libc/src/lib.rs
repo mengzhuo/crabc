@@ -1,7 +1,7 @@
 #![cfg_attr(not(test), no_std)]
 #![feature(c_variadic)]
 #![feature(linkage)]
-#![allow(dead_code)]
+#![allow(dead_code, non_camel_case_types)]
 
 use core::ffi::{c_char, c_int, c_long, c_longlong, c_uint, c_ulong, c_ulonglong, c_void, VaListImpl};
 use core::ptr::null_mut;
@@ -16,6 +16,13 @@ const EINVAL: c_int = 22;
 const EFAULT: c_int = 14;
 const ENOMEM: c_int = 12;
 const EINTR: c_int = 4;
+const EPERM: c_int = 1;
+const EAGAIN: c_int = 11;
+const EBUSY: c_int = 16;
+const EDEADLK: c_int = 35;
+const ETIMEDOUT: c_int = 110;
+const ECANCELED: c_int = 125;
+const EOVERFLOW: c_int = 75;
 
 static mut ERRNO: c_int = 0;
 
@@ -1170,6 +1177,28 @@ unsafe fn sys_tgkill(tgid: c_int, tid: c_int, sig: c_int) -> i64 {
     result
 }
 
+const CLOCK_REALTIME: c_int = 0;
+const CLOCK_MONOTONIC: c_int = 1;
+
+#[inline]
+unsafe fn sys_clock_gettime(clockid: c_int, ts: *mut timespec) -> i64 {
+    let result: i64;
+    core::arch::asm!(
+        "syscall",
+        inlateout("rax") 228i64 => result,
+        in("rdi") clockid as i64,
+        in("rsi") ts,
+        lateout("rcx") _,
+        lateout("r11") _,
+    );
+    result
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn clock_gettime(clockid: c_int, ts: *mut timespec) -> c_int {
+    if sys_clock_gettime(clockid, ts) < 0 { -1 } else { 0 }
+}
+
 #[no_mangle]
 pub unsafe extern "C" fn sigprocmask(
     how: c_int,
@@ -1923,13 +1952,72 @@ pub extern "C" fn ntohs(netshort: u16) -> u16 {
 
 pub type PthreadT = c_ulong;
 
+// pthread_attr_t: musl x86_64 layout (56 bytes = int[14])
+#[repr(C)]
+pub struct pthread_attr_t {
+    __i: [c_int; 14],
+}
+
+// pthread_mutex_t: musl x86_64 layout (40 bytes = int[10])
+// _m_type=__i[0], _m_lock=__i[1], _m_waiters=__i[2], _m_count=__i[5]
 #[repr(C)]
 pub struct pthread_mutex_t {
-    pub lock: c_int,
+    __i: [c_int; 10],
 }
 
 #[repr(C)]
-pub struct pthread_attr_t {
+pub struct pthread_mutexattr_t {
+    __attr: c_uint,
+}
+
+// pthread_cond_t: musl x86_64 layout (48 bytes = int[12])
+// _c_seq=__i[2], _c_waiters=__i[3], _c_clock=__i[4]
+#[repr(C)]
+pub struct pthread_cond_t {
+    __i: [c_int; 12],
+}
+
+#[repr(C)]
+pub struct pthread_condattr_t {
+    __attr: c_uint,
+}
+
+// pthread_rwlock_t: musl x86_64 layout (56 bytes = int[14])
+// _rw_lock=__i[0], _rw_waiters=__i[1], _rw_shared=__i[2]
+#[repr(C)]
+pub struct pthread_rwlock_t {
+    __i: [c_int; 14],
+}
+
+#[repr(C)]
+pub struct pthread_rwlockattr_t {
+    __attr: [c_uint; 2],
+}
+
+// pthread_barrier_t: musl x86_64 layout (32 bytes = int[8])
+#[repr(C)]
+pub struct pthread_barrier_t {
+    __i: [c_int; 8],
+}
+
+#[repr(C)]
+pub struct pthread_barrierattr_t {
+    __attr: c_uint,
+}
+
+pub type pthread_spinlock_t = c_int;
+pub type pthread_once_t = c_int;
+pub type pthread_key_t = c_uint;
+
+// sem_t: musl x86_64 layout (32 bytes = int[8])
+#[repr(C)]
+pub struct sem_t {
+    __val: [c_int; 8],
+}
+
+#[repr(C)]
+pub struct sched_param {
+    pub sched_priority: c_int,
 }
 
 const CLONE_VM: c_ulong = 0x00000100;
@@ -1943,6 +2031,37 @@ const CLONE_PARENT_SETTID: c_ulong = 0x00100000;
 const CLONE_CHILD_CLEARTID: c_ulong = 0x00200000;
 
 const FUTEX_WAIT: c_int = 0;
+const FUTEX_WAKE: c_int = 1;
+
+const PTHREAD_MUTEX_NORMAL: c_int = 0;
+const PTHREAD_MUTEX_DEFAULT: c_int = 0;
+const PTHREAD_MUTEX_RECURSIVE: c_int = 1;
+const PTHREAD_MUTEX_ERRORCHECK: c_int = 2;
+
+const PTHREAD_CREATE_JOINABLE: c_int = 0;
+const PTHREAD_CREATE_DETACHED: c_int = 1;
+
+const PTHREAD_CANCEL_ENABLE: c_int = 0;
+const PTHREAD_CANCEL_DISABLE: c_int = 1;
+const PTHREAD_CANCEL_DEFERRED: c_int = 0;
+const PTHREAD_CANCEL_ASYNCHRONOUS: c_int = 1;
+
+const PTHREAD_SCOPE_SYSTEM: c_int = 0;
+const PTHREAD_PROCESS_PRIVATE: c_int = 0;
+const PTHREAD_PROCESS_SHARED: c_int = 1;
+const PTHREAD_INHERIT_SCHED: c_int = 0;
+const PTHREAD_EXPLICIT_SCHED: c_int = 1;
+
+const PTHREAD_BARRIER_SERIAL_THREAD: c_int = -1;
+
+const PTHREAD_KEYS_MAX: usize = 128;
+const PTHREAD_DESTRUCTOR_ITERATIONS: usize = 4;
+const SEM_VALUE_MAX: c_int = 0x7fffffff;
+
+const DT_EXITED: c_int = 0;
+const DT_EXITING: c_int = 1;
+const DT_JOINABLE: c_int = 2;
+const DT_DETACHED: c_int = 3;
 
 // ponytail: adapted from musl x86_64 clone.s
 #[cfg(not(test))]
@@ -2040,37 +2159,150 @@ const STACK_SIZE: usize = 1024 * 1024;
 #[derive(Copy, Clone)]
 struct Thread {
     tid: c_int,
+    detach_state: c_int,
+    result: *mut c_void,
+    cancel: c_int,
+    cancel_state: c_int,
+    cancel_type: c_int,
     user_fn: usize,
     user_arg: *mut c_void,
     stack: *mut u8,
     stack_size: usize,
     fs_base: *mut u8,
+    tsd: [*mut c_void; PTHREAD_KEYS_MAX],
 }
 
 static mut THREADS: [Thread; MAX_THREADS] = [Thread {
     tid: -1,
+    detach_state: DT_JOINABLE,
+    result: core::ptr::null_mut(),
+    cancel: 0,
+    cancel_state: PTHREAD_CANCEL_ENABLE,
+    cancel_type: PTHREAD_CANCEL_DEFERRED,
     user_fn: 0,
     user_arg: core::ptr::null_mut(),
     stack: core::ptr::null_mut(),
     stack_size: 0,
     fs_base: core::ptr::null_mut(),
+    tsd: [core::ptr::null_mut(); PTHREAD_KEYS_MAX],
 }; MAX_THREADS];
 static NEXT_SLOT: AtomicUsize = AtomicUsize::new(0);
+static mut KEY_DTORS: [Option<unsafe extern "C" fn(*mut c_void)>; PTHREAD_KEYS_MAX] = [None; PTHREAD_KEYS_MAX];
+static NEXT_KEY: AtomicUsize = AtomicUsize::new(0);
+
+// ponytail: futex helpers
+unsafe fn futex_wait(addr: *mut c_int, expected: c_int) -> c_int {
+    let r = sys_futex(addr, FUTEX_WAIT, expected, null_mut(), null_mut(), 0);
+    if r < 0 { let e = (-r) as c_int; if e == EAGAIN { 0 } else { e } } else { 0 }
+}
+
+unsafe fn futex_wake(addr: *mut c_int, count: c_int) {
+    let c = if count < 0 { c_int::MAX } else { count };
+    sys_futex(addr, FUTEX_WAKE, c, null_mut(), null_mut(), 0);
+}
+
+unsafe fn futex_timedwait(addr: *mut c_int, expected: c_int, abs_timeout: *const timespec) -> c_int {
+    if abs_timeout.is_null() { return futex_wait(addr, expected); }
+    let mut now: timespec = core::mem::zeroed();
+    if sys_clock_gettime(CLOCK_REALTIME, &mut now) < 0 { return EINVAL; }
+    let mut rel: timespec = core::mem::zeroed();
+    rel.tv_sec = (*abs_timeout).tv_sec - now.tv_sec;
+    rel.tv_nsec = (*abs_timeout).tv_nsec - now.tv_nsec;
+    if rel.tv_nsec < 0 { rel.tv_sec -= 1; rel.tv_nsec += 1_000_000_000; }
+    if rel.tv_sec < 0 { return ETIMEDOUT; }
+    let r = sys_futex(addr, FUTEX_WAIT, expected, &mut rel as *mut timespec as *mut c_void, null_mut(), 0);
+    if r < 0 { let e = (-r) as c_int; if e == EAGAIN { 0 } else { e } } else { 0 }
+}
+
+// ponytail: atomic helpers wrapping AtomicI32
+unsafe fn a_cas(addr: *mut c_int, expected: c_int, desired: c_int) -> c_int {
+    let a = &*(addr as *const AtomicI32);
+    match a.compare_exchange(expected, desired, Ordering::AcqRel, Ordering::Acquire) {
+        Ok(v) | Err(v) => v,
+    }
+}
+
+unsafe fn a_store(addr: *mut c_int, val: c_int) {
+    (*(addr as *const AtomicI32)).store(val, Ordering::Release);
+}
+
+unsafe fn a_load(addr: *const c_int) -> c_int {
+    (*(addr as *const AtomicI32)).load(Ordering::Acquire)
+}
+
+unsafe fn a_swap(addr: *mut c_int, val: c_int) -> c_int {
+    (*(addr as *const AtomicI32)).swap(val, Ordering::AcqRel)
+}
+
+unsafe fn a_fetch_add(addr: *mut c_int, val: c_int) -> c_int {
+    (*(addr as *const AtomicI32)).fetch_add(val, Ordering::AcqRel)
+}
+
+unsafe fn a_fetch_sub(addr: *mut c_int, val: c_int) -> c_int {
+    (*(addr as *const AtomicI32)).fetch_sub(val, Ordering::AcqRel)
+}
+
+unsafe fn spinlock_lock(lock: *mut c_int, waiters: *mut c_int) {
+    while a_swap(lock, 1) != 0 {
+        let mut spins = 100;
+        while spins > 0 && a_load(lock) != 0 { core::hint::spin_loop(); spins -= 1; }
+        if a_load(lock) == 0 { continue; }
+        a_fetch_add(waiters, 1);
+        futex_wait(lock, 1);
+        a_fetch_sub(waiters, 1);
+    }
+}
+
+unsafe fn spinlock_unlock(lock: *mut c_int, waiters: *mut c_int) {
+    a_store(lock, 0);
+    if a_load(waiters) > 0 { futex_wake(lock, 1); }
+}
 
 unsafe fn alloc_thread_slot() -> Option<&'static mut Thread> {
     let idx = NEXT_SLOT.fetch_add(1, Ordering::SeqCst);
-    if idx >= MAX_THREADS {
-        return None;
-    }
+    if idx >= MAX_THREADS { return None; }
     Some(&mut THREADS[idx])
+}
+
+unsafe fn run_key_dtors(slot: &mut Thread) {
+    for _ in 0..PTHREAD_DESTRUCTOR_ITERATIONS {
+        let mut any = false;
+        for i in 0..PTHREAD_KEYS_MAX {
+            let val = slot.tsd[i];
+            if !val.is_null() {
+                if let Some(dtor) = KEY_DTORS[i] {
+                    slot.tsd[i] = core::ptr::null_mut();
+                    any = true;
+                    dtor(val);
+                }
+            }
+        }
+        if !any { break; }
+    }
 }
 
 unsafe extern "C" fn thread_entry(slot: *mut c_void) -> *mut c_void {
     let slot = &mut *(slot as *mut Thread);
     let user_fn: unsafe extern "C" fn(*mut c_void) -> *mut c_void =
         core::mem::transmute::<usize, _>(slot.user_fn);
-    let _ret = user_fn(slot.user_arg);
+    let ret = user_fn(slot.user_arg);
+    run_key_dtors(slot);
+    slot.result = ret;
+    a_store(&raw mut slot.detach_state, DT_EXITED);
+    futex_wake(&raw mut slot.detach_state, 1);
     _exit(0);
+}
+
+unsafe fn find_thread() -> Option<&'static mut Thread> {
+    let me = sys_gettid() as c_int;
+    let base = core::ptr::addr_of_mut!(THREADS[0]);
+    for i in 0..MAX_THREADS {
+        let slot = base.add(i);
+        if core::ptr::read_volatile(&raw const (*slot).tid) == me {
+            return Some(&mut *slot);
+        }
+    }
+    None
 }
 
 #[no_mangle]
@@ -2083,117 +2315,15 @@ pub unsafe extern "C" fn pthread_self() -> PthreadT {
             return slot as PthreadT;
         }
     }
-    0
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn pthread_create(
-    thread: *mut PthreadT,
-    _attr: *const pthread_attr_t,
-    start_routine: usize,
-    arg: *mut c_void,
-) -> c_int {
-    if start_routine == 0 || thread.is_null() {
-        return -1;
-    }
-    let Some(slot_ref) = alloc_thread_slot() else {
-        return -1;
-    };
-    let slot = slot_ref as *mut Thread;
-    let stack = sys_mmap(
-        null_mut(),
-        STACK_SIZE,
-        PROT_READ | PROT_WRITE,
-        MAP_PRIVATE | MAP_ANONYMOUS,
-        -1,
-        0,
-    );
-    if stack == MMAP_FAILED {
-        return -1;
-    }
-    let fs_base = __rc_create_thread_tls();
-    if fs_base.is_null() {
-        sys_munmap(stack, STACK_SIZE);
-        return -1;
-    }
-    (*slot).tid = 1;
-    (*slot).user_fn = start_routine;
-    (*slot).user_arg = arg;
-    (*slot).stack = stack;
-    (*slot).stack_size = STACK_SIZE;
-    (*slot).fs_base = fs_base;
-    let stack_top = stack.add(STACK_SIZE);
-    let tid_ptr = &raw mut (*slot).tid;
-    let flags = CLONE_VM
-        | CLONE_FS
-        | CLONE_FILES
-        | CLONE_SIGHAND
-        | CLONE_THREAD
-        | CLONE_SYSVSEM
-        | CLONE_PARENT_SETTID
-        | CLONE_CHILD_CLEARTID
-        | CLONE_SETTLS;
-    let tid = __rc_clone(
-        thread_entry as usize,
-        stack_top,
-        flags,
-        slot as *mut c_void,
-        tid_ptr,
-        fs_base as c_ulong,
-        tid_ptr,
-    );
-    if tid < 0 {
-        (*slot).tid = -1;
-        (*slot).user_fn = 0;
-        (*slot).user_arg = null_mut();
-        (*slot).stack = null_mut();
-        (*slot).stack_size = 0;
-        (*slot).fs_base = null_mut();
-        sys_munmap(stack, STACK_SIZE);
-        sys_munmap(fs_base.sub(__rc_tls_block_size()), __rc_tls_block_size());
-        -1
-    } else {
-        *thread = slot as PthreadT;
-        0
-    }
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn pthread_join(thread: PthreadT, _retval: *mut *mut c_void) -> c_int {
-    let slot = thread as *mut Thread;
-    if slot.is_null() {
-        return -1;
-    }
-    let tid_ptr = &mut (*slot).tid;
-    loop {
-        let tid = core::ptr::read_volatile(tid_ptr);
-        if tid == 0 {
-            break;
-        }
-        sys_futex(tid_ptr, FUTEX_WAIT, tid, null_mut(), null_mut(), 0);
-    }
-    let stack = (*slot).stack;
-    let stack_size = (*slot).stack_size;
-    let fs_base = (*slot).fs_base;
-    (*slot).tid = -1;
-    (*slot).user_fn = 0;
-    (*slot).user_arg = null_mut();
-    (*slot).stack = null_mut();
-    (*slot).stack_size = 0;
-    (*slot).fs_base = null_mut();
-    if !stack.is_null() && stack_size > 0 {
-        sys_munmap(stack, stack_size);
-    }
-    if !fs_base.is_null() {
-        let block_size = __rc_tls_block_size();
-        sys_munmap(fs_base.sub(block_size), block_size);
+    // ponytail: register main thread lazily in first free slot
+    let idx = NEXT_SLOT.fetch_add(1, Ordering::SeqCst);
+    if idx < MAX_THREADS {
+        let slot = &raw mut THREADS[idx];
+        (*slot).tid = me;
+        (*slot).detach_state = DT_JOINABLE;
+        return slot as PthreadT;
     }
     0
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn pthread_exit(_retval: *mut c_void) -> ! {
-    _exit(0);
 }
 
 #[no_mangle]
@@ -2202,34 +2332,711 @@ pub unsafe extern "C" fn pthread_equal(t1: PthreadT, t2: PthreadT) -> c_int {
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn pthread_mutex_init(mutex: *mut pthread_mutex_t, _attr: *const pthread_attr_t) -> c_int {
-    (*mutex).lock = 0;
+pub unsafe extern "C" fn pthread_create(
+    thread: *mut PthreadT,
+    attr: *const pthread_attr_t,
+    start_routine: usize,
+    arg: *mut c_void,
+) -> c_int {
+    if start_routine == 0 || thread.is_null() { return EINVAL; }
+    let Some(slot_ref) = alloc_thread_slot() else { return EAGAIN; };
+    let slot = slot_ref as *mut Thread;
+    let stack_size = if !attr.is_null() {
+        let s = *((*attr).__i.as_ptr() as *const usize);
+        if s > 0 { s } else { STACK_SIZE }
+    } else { STACK_SIZE };
+    let stack = sys_mmap(null_mut(), stack_size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if stack == MMAP_FAILED { return ENOMEM; }
+    let fs_base = __rc_create_thread_tls();
+    if fs_base.is_null() { sys_munmap(stack, stack_size); return ENOMEM; }
+    (*slot).detach_state = DT_JOINABLE;
+    (*slot).result = core::ptr::null_mut();
+    (*slot).cancel = 0;
+    (*slot).cancel_state = PTHREAD_CANCEL_ENABLE;
+    (*slot).cancel_type = PTHREAD_CANCEL_DEFERRED;
+    core::ptr::write_bytes((*slot).tsd.as_mut_ptr(), 0, PTHREAD_KEYS_MAX);
+    (*slot).tid = 1;
+    (*slot).user_fn = start_routine;
+    (*slot).user_arg = arg;
+    (*slot).stack = stack;
+    (*slot).stack_size = stack_size;
+    (*slot).fs_base = fs_base;
+    let stack_top = stack.add(stack_size);
+    let tid_ptr = &raw mut (*slot).tid;
+    let flags = CLONE_VM | CLONE_FS | CLONE_FILES | CLONE_SIGHAND | CLONE_THREAD
+        | CLONE_SYSVSEM | CLONE_PARENT_SETTID | CLONE_CHILD_CLEARTID | CLONE_SETTLS;
+    let tid = __rc_clone(thread_entry as usize, stack_top, flags, slot as *mut c_void, tid_ptr, fs_base as c_ulong, tid_ptr);
+    if tid < 0 {
+        (*slot).tid = -1;
+        sys_munmap(stack, stack_size);
+        sys_munmap(fs_base.sub(__rc_tls_block_size()), __rc_tls_block_size());
+        return EAGAIN;
+    }
+    if !attr.is_null() && (*attr).__i[6] == PTHREAD_CREATE_DETACHED {
+        (*slot).detach_state = DT_DETACHED;
+    }
+    *thread = slot as PthreadT;
     0
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn pthread_mutex_destroy(_mutex: *mut pthread_mutex_t) -> c_int {
+pub unsafe extern "C" fn pthread_join(thread: PthreadT, retval: *mut *mut c_void) -> c_int {
+    let slot = thread as *mut Thread;
+    if slot.is_null() { return EINVAL; }
+    if (*slot).detach_state == DT_DETACHED { return EINVAL; }
+    let tid_ptr = &raw mut (*slot).tid;
+    loop {
+        let tid = core::ptr::read_volatile(tid_ptr);
+        if tid == 0 { break; }
+        if tid < 0 { return EINVAL; }
+        sys_futex(tid_ptr, FUTEX_WAIT, tid, null_mut(), null_mut(), 0);
+    }
+    if !retval.is_null() { *retval = (*slot).result; }
+    let stack = (*slot).stack;
+    let stack_size = (*slot).stack_size;
+    let fs_base = (*slot).fs_base;
+    (*slot).tid = -1;
+    (*slot).detach_state = DT_JOINABLE;
+    (*slot).result = core::ptr::null_mut();
+    (*slot).stack = core::ptr::null_mut();
+    (*slot).stack_size = 0;
+    (*slot).fs_base = core::ptr::null_mut();
+    if !stack.is_null() && stack_size > 0 { sys_munmap(stack, stack_size); }
+    if !fs_base.is_null() { let bs = __rc_tls_block_size(); if bs > 0 { sys_munmap(fs_base.sub(bs), bs); } }
     0
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn pthread_mutex_lock(mutex: *mut pthread_mutex_t) -> c_int {
-    let atomic = &raw const (*mutex).lock as *mut AtomicI32;
-    while (*atomic)
-        .compare_exchange_weak(0, 1, Ordering::Acquire, Ordering::Relaxed)
-        .is_err()
-    {
-        core::hint::spin_loop();
+pub unsafe extern "C" fn pthread_detach(thread: PthreadT) -> c_int {
+    let slot = thread as *mut Thread;
+    if slot.is_null() { return EINVAL; }
+    let old = a_cas(&raw mut (*slot).detach_state, DT_JOINABLE, DT_DETACHED);
+    if old == DT_EXITED {
+        let stack = (*slot).stack;
+        let stack_size = (*slot).stack_size;
+        let fs_base = (*slot).fs_base;
+        (*slot).tid = -1;
+        (*slot).stack = core::ptr::null_mut();
+        (*slot).stack_size = 0;
+        (*slot).fs_base = core::ptr::null_mut();
+        if !stack.is_null() && stack_size > 0 { sys_munmap(stack, stack_size); }
+        if !fs_base.is_null() { let bs = __rc_tls_block_size(); sys_munmap(fs_base.sub(bs), bs); }
     }
     0
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn pthread_mutex_unlock(mutex: *mut pthread_mutex_t) -> c_int {
-    let atomic = &raw const (*mutex).lock as *mut AtomicI32;
-    (*atomic).store(0, Ordering::Release);
+pub unsafe extern "C" fn pthread_exit(retval: *mut c_void) -> ! {
+    if let Some(slot) = find_thread() {
+        run_key_dtors(slot);
+        slot.result = retval;
+        slot.detach_state = DT_EXITED;
+        futex_wake(&slot.detach_state as *const c_int as *mut c_int, 1);
+    }
+    _exit(0);
+}
+
+// --- pthread_attr_* ---
+#[no_mangle]
+pub unsafe extern "C" fn pthread_attr_init(attr: *mut pthread_attr_t) -> c_int {
+    core::ptr::write_bytes(attr, 0, 1);
+    *((*attr).__i.as_mut_ptr() as *mut usize) = STACK_SIZE;
+    *((*attr).__i.as_mut_ptr().add(2) as *mut usize) = 4096;
+    (*attr).__i[6] = PTHREAD_CREATE_JOINABLE;
+    (*attr).__i[7] = PTHREAD_INHERIT_SCHED;
     0
 }
+#[no_mangle]
+pub unsafe extern "C" fn pthread_attr_destroy(_attr: *mut pthread_attr_t) -> c_int { 0 }
+#[no_mangle]
+pub unsafe extern "C" fn pthread_attr_setdetachstate(attr: *mut pthread_attr_t, s: c_int) -> c_int {
+    if s != PTHREAD_CREATE_JOINABLE && s != PTHREAD_CREATE_DETACHED { return EINVAL; }
+    (*attr).__i[6] = s; 0
+}
+#[no_mangle]
+pub unsafe extern "C" fn pthread_attr_getdetachstate(attr: *const pthread_attr_t, s: *mut c_int) -> c_int {
+    *s = (*attr).__i[6]; 0
+}
+#[no_mangle]
+pub unsafe extern "C" fn pthread_attr_setstacksize(attr: *mut pthread_attr_t, sz: usize) -> c_int {
+    if sz < 16384 { return EINVAL; }
+    *((*attr).__i.as_mut_ptr() as *mut usize) = sz; 0
+}
+#[no_mangle]
+pub unsafe extern "C" fn pthread_attr_getstacksize(attr: *const pthread_attr_t, sz: *mut usize) -> c_int {
+    *sz = *((*attr).__i.as_ptr() as *const usize); 0
+}
+#[no_mangle]
+pub unsafe extern "C" fn pthread_attr_setstack(attr: *mut pthread_attr_t, addr: *mut c_void, sz: usize) -> c_int {
+    if sz < 16384 { return EINVAL; }
+    *((*attr).__i.as_mut_ptr() as *mut usize) = sz;
+    *((*attr).__i.as_mut_ptr().add(4) as *mut *mut c_void) = addr; 0
+}
+#[no_mangle]
+pub unsafe extern "C" fn pthread_attr_getstack(attr: *const pthread_attr_t, addr: *mut *mut c_void, sz: *mut usize) -> c_int {
+    *sz = *((*attr).__i.as_ptr() as *const usize);
+    *addr = *((*attr).__i.as_ptr().add(4) as *const *mut c_void); 0
+}
+#[no_mangle]
+pub unsafe extern "C" fn pthread_attr_setguardsize(attr: *mut pthread_attr_t, sz: usize) -> c_int {
+    *((*attr).__i.as_mut_ptr().add(2) as *mut usize) = sz; 0
+}
+#[no_mangle]
+pub unsafe extern "C" fn pthread_attr_getguardsize(attr: *const pthread_attr_t, sz: *mut usize) -> c_int {
+    *sz = *((*attr).__i.as_ptr().add(2) as *const usize); 0
+}
+#[no_mangle]
+pub unsafe extern "C" fn pthread_attr_setscope(_attr: *mut pthread_attr_t, scope: c_int) -> c_int {
+    if scope != PTHREAD_SCOPE_SYSTEM { return EINVAL; }
+    0
+}
+#[no_mangle]
+pub unsafe extern "C" fn pthread_attr_getscope(_attr: *const pthread_attr_t, scope: *mut c_int) -> c_int {
+    *scope = PTHREAD_SCOPE_SYSTEM; 0
+}
+#[no_mangle]
+pub unsafe extern "C" fn pthread_attr_setinheritsched(attr: *mut pthread_attr_t, inh: c_int) -> c_int {
+    if inh != PTHREAD_INHERIT_SCHED && inh != PTHREAD_EXPLICIT_SCHED { return EINVAL; }
+    (*attr).__i[7] = inh; 0
+}
+#[no_mangle]
+pub unsafe extern "C" fn pthread_attr_getinheritsched(attr: *const pthread_attr_t, inh: *mut c_int) -> c_int {
+    *inh = (*attr).__i[7]; 0
+}
+#[no_mangle]
+pub unsafe extern "C" fn pthread_attr_setschedpolicy(attr: *mut pthread_attr_t, p: c_int) -> c_int {
+    (*attr).__i[8] = p; 0
+}
+#[no_mangle]
+pub unsafe extern "C" fn pthread_attr_getschedpolicy(attr: *const pthread_attr_t, p: *mut c_int) -> c_int {
+    *p = (*attr).__i[8]; 0
+}
+#[no_mangle]
+pub unsafe extern "C" fn pthread_attr_setschedparam(attr: *mut pthread_attr_t, param: *const sched_param) -> c_int {
+    (*attr).__i[9] = (*param).sched_priority; 0
+}
+#[no_mangle]
+pub unsafe extern "C" fn pthread_attr_getschedparam(attr: *const pthread_attr_t, param: *mut sched_param) -> c_int {
+    (*param).sched_priority = (*attr).__i[9]; 0
+}
+
+// --- pthread_mutexattr_* ---
+#[no_mangle]
+pub unsafe extern "C" fn pthread_mutexattr_init(attr: *mut pthread_mutexattr_t) -> c_int {
+    (*attr).__attr = 0; 0
+}
+#[no_mangle]
+pub unsafe extern "C" fn pthread_mutexattr_destroy(_attr: *mut pthread_mutexattr_t) -> c_int { 0 }
+#[no_mangle]
+pub unsafe extern "C" fn pthread_mutexattr_settype(attr: *mut pthread_mutexattr_t, t: c_int) -> c_int {
+    if (t as c_uint) > 2 { return EINVAL; }
+    (*attr).__attr = ((*attr).__attr & !3) | t as c_uint; 0
+}
+#[no_mangle]
+pub unsafe extern "C" fn pthread_mutexattr_gettype(attr: *const pthread_mutexattr_t, t: *mut c_int) -> c_int {
+    *t = ((*attr).__attr & 3) as c_int; 0
+}
+#[no_mangle]
+pub unsafe extern "C" fn pthread_mutexattr_setpshared(attr: *mut pthread_mutexattr_t, p: c_int) -> c_int {
+    if (p as c_uint) > 1 { return EINVAL; }
+    (*attr).__attr = ((*attr).__attr & !128) | ((p as c_uint) << 7); 0
+}
+#[no_mangle]
+pub unsafe extern "C" fn pthread_mutexattr_getpshared(attr: *const pthread_mutexattr_t, p: *mut c_int) -> c_int {
+    *p = (((*attr).__attr >> 7) & 1) as c_int; 0
+}
+
+// --- pthread_mutex_* ---
+unsafe fn mutex_trylock(m: *mut pthread_mutex_t) -> c_int {
+    let type_ = (*m).__i[0] & 15;
+    if type_ == PTHREAD_MUTEX_NORMAL {
+        return a_cas(&raw mut (*m).__i[1], 0, EBUSY) & EBUSY;
+    }
+    let self_tid = sys_gettid() as c_int;
+    let old = a_load(&raw const (*m).__i[1]);
+    let own = old & 0x3fffffff;
+    if own == self_tid {
+        if type_ == PTHREAD_MUTEX_RECURSIVE {
+            if (*m).__i[5] >= c_int::MAX { return EAGAIN; }
+            (*m).__i[5] += 1;
+            return 0;
+        }
+        return EDEADLK;
+    }
+    if own != 0 { return EBUSY; }
+    if a_cas(&raw mut (*m).__i[1], old, self_tid) == old {
+        (*m).__i[5] = 0;
+        0
+    } else { EBUSY }
+}
+
+unsafe fn mutex_lock_internal(m: *mut pthread_mutex_t, abs_timeout: *const timespec) -> c_int {
+    let type_ = (*m).__i[0] & 15;
+    if type_ == PTHREAD_MUTEX_NORMAL && a_cas(&raw mut (*m).__i[1], 0, EBUSY) == 0 {
+        return 0;
+    }
+    let r = mutex_trylock(m);
+    if r != EBUSY { return r; }
+    let mut spins = 100;
+    while spins > 0 {
+        let r = mutex_trylock(m);
+        if r != EBUSY { return r; }
+        core::hint::spin_loop();
+        spins -= 1;
+    }
+    loop {
+        let r = mutex_trylock(m);
+        if r != EBUSY { return r; }
+        if type_ == PTHREAD_MUTEX_ERRORCHECK {
+            let self_tid = sys_gettid() as c_int;
+            if (a_load(&raw const (*m).__i[1]) & 0x3fffffff) == self_tid { return EDEADLK; }
+        }
+        a_fetch_add(&raw mut (*m).__i[2], 1);
+        let val = a_load(&raw const (*m).__i[1]);
+        a_cas(&raw mut (*m).__i[1], val, val | (1i32 << 31));
+        let e = futex_timedwait(&raw mut (*m).__i[1], val | (1i32 << 31), abs_timeout);
+        a_fetch_sub(&raw mut (*m).__i[2], 1);
+        if e != 0 && e != EINTR { return e; }
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn pthread_mutex_init(mutex: *mut pthread_mutex_t, attr: *const pthread_mutexattr_t) -> c_int {
+    core::ptr::write_bytes(mutex, 0, 1);
+    if !attr.is_null() { (*mutex).__i[0] = (*attr).__attr as c_int; }
+    0
+}
+#[no_mangle]
+pub unsafe extern "C" fn pthread_mutex_destroy(_mutex: *mut pthread_mutex_t) -> c_int { 0 }
+#[no_mangle]
+pub unsafe extern "C" fn pthread_mutex_lock(mutex: *mut pthread_mutex_t) -> c_int {
+    mutex_lock_internal(mutex, core::ptr::null())
+}
+#[no_mangle]
+pub unsafe extern "C" fn pthread_mutex_trylock(mutex: *mut pthread_mutex_t) -> c_int {
+    mutex_trylock(mutex)
+}
+#[no_mangle]
+pub unsafe extern "C" fn pthread_mutex_timedlock(mutex: *mut pthread_mutex_t, abs_timeout: *const timespec) -> c_int {
+    mutex_lock_internal(mutex, abs_timeout)
+}
+#[no_mangle]
+pub unsafe extern "C" fn pthread_mutex_unlock(mutex: *mut pthread_mutex_t) -> c_int {
+    let type_ = (*mutex).__i[0] & 15;
+    if type_ != PTHREAD_MUTEX_NORMAL {
+        let self_tid = sys_gettid() as c_int;
+        if (a_load(&raw const (*mutex).__i[1]) & 0x3fffffff) != self_tid { return EPERM; }
+        if type_ == PTHREAD_MUTEX_RECURSIVE && (*mutex).__i[5] > 0 {
+            (*mutex).__i[5] -= 1;
+            return 0;
+        }
+    }
+    let old = a_swap(&raw mut (*mutex).__i[1], 0);
+    if a_load(&raw const (*mutex).__i[2]) > 0 || old < 0 {
+        futex_wake(&raw mut (*mutex).__i[1], 1);
+    }
+    0
+}
+
+// --- pthread_condattr_* ---
+#[no_mangle]
+pub unsafe extern "C" fn pthread_condattr_init(attr: *mut pthread_condattr_t) -> c_int {
+    (*attr).__attr = 0; 0
+}
+#[no_mangle]
+pub unsafe extern "C" fn pthread_condattr_destroy(_attr: *mut pthread_condattr_t) -> c_int { 0 }
+#[no_mangle]
+pub unsafe extern "C" fn pthread_condattr_setclock(attr: *mut pthread_condattr_t, clk: c_int) -> c_int {
+    if clk != CLOCK_REALTIME && clk != CLOCK_MONOTONIC { return EINVAL; }
+    (*attr).__attr = ((*attr).__attr & 0x80000000) | clk as c_uint; 0
+}
+#[no_mangle]
+pub unsafe extern "C" fn pthread_condattr_getclock(attr: *const pthread_condattr_t, clk: *mut c_int) -> c_int {
+    *clk = ((*attr).__attr & 0x7fffffff) as c_int; 0
+}
+#[no_mangle]
+pub unsafe extern "C" fn pthread_condattr_setpshared(attr: *mut pthread_condattr_t, p: c_int) -> c_int {
+    if (p as c_uint) > 1 { return EINVAL; }
+    (*attr).__attr = ((*attr).__attr & 0x7fffffff) | ((p as c_uint) << 31); 0
+}
+#[no_mangle]
+pub unsafe extern "C" fn pthread_condattr_getpshared(attr: *const pthread_condattr_t, p: *mut c_int) -> c_int {
+    *p = ((*attr).__attr >> 31) as c_int; 0
+}
+
+// --- pthread_cond_* ---
+#[no_mangle]
+pub unsafe extern "C" fn pthread_cond_init(cond: *mut pthread_cond_t, attr: *const pthread_condattr_t) -> c_int {
+    core::ptr::write_bytes(cond, 0, 1);
+    if !attr.is_null() {
+        (*cond).__i[4] = ((*attr).__attr & 0x7fffffff) as c_int;
+    }
+    0
+}
+#[no_mangle]
+pub unsafe extern "C" fn pthread_cond_destroy(_cond: *mut pthread_cond_t) -> c_int { 0 }
+#[no_mangle]
+pub unsafe extern "C" fn pthread_cond_wait(cond: *mut pthread_cond_t, mutex: *mut pthread_mutex_t) -> c_int {
+    pthread_cond_timedwait(cond, mutex, core::ptr::null())
+}
+#[no_mangle]
+pub unsafe extern "C" fn pthread_cond_timedwait(cond: *mut pthread_cond_t, mutex: *mut pthread_mutex_t, abs_timeout: *const timespec) -> c_int {
+    let seq_ptr = &raw mut (*cond).__i[2];
+    let waiters_ptr = &raw mut (*cond).__i[3];
+    let seq = a_load(seq_ptr);
+    a_fetch_add(waiters_ptr, 1);
+    pthread_mutex_unlock(mutex);
+    let e = futex_timedwait(seq_ptr, seq, abs_timeout);
+    a_fetch_sub(waiters_ptr, 1);
+    let r = pthread_mutex_lock(mutex);
+    if r != 0 { return r; }
+    if e != 0 && e != EINTR { return e; }
+    0
+}
+#[no_mangle]
+pub unsafe extern "C" fn pthread_cond_signal(cond: *mut pthread_cond_t) -> c_int {
+    if a_load(&raw const (*cond).__i[3]) == 0 { return 0; }
+    a_fetch_add(&raw mut (*cond).__i[2], 1);
+    futex_wake(&raw mut (*cond).__i[2], 1);
+    0
+}
+#[no_mangle]
+pub unsafe extern "C" fn pthread_cond_broadcast(cond: *mut pthread_cond_t) -> c_int {
+    if a_load(&raw const (*cond).__i[3]) == 0 { return 0; }
+    a_fetch_add(&raw mut (*cond).__i[2], 1);
+    futex_wake(&raw mut (*cond).__i[2], -1);
+    0
+}
+
+// --- pthread_rwlockattr_* ---
+#[no_mangle]
+pub unsafe extern "C" fn pthread_rwlockattr_init(attr: *mut pthread_rwlockattr_t) -> c_int {
+    (*attr).__attr = [0; 2]; 0
+}
+#[no_mangle]
+pub unsafe extern "C" fn pthread_rwlockattr_destroy(_attr: *mut pthread_rwlockattr_t) -> c_int { 0 }
+#[no_mangle]
+pub unsafe extern "C" fn pthread_rwlockattr_setpshared(attr: *mut pthread_rwlockattr_t, p: c_int) -> c_int {
+    if (p as c_uint) > 1 { return EINVAL; }
+    (*attr).__attr[0] = ((*attr).__attr[0] & !128) | ((p as c_uint) << 7); 0
+}
+#[no_mangle]
+pub unsafe extern "C" fn pthread_rwlockattr_getpshared(attr: *const pthread_rwlockattr_t, p: *mut c_int) -> c_int {
+    *p = (((*attr).__attr[0] >> 7) & 1) as c_int; 0
+}
+
+// --- pthread_rwlock_* ---
+unsafe fn rwlock_tryrdlock(rw: *mut pthread_rwlock_t) -> c_int {
+    loop {
+        let val = a_load(&raw const (*rw).__i[0]);
+        let cnt = val & 0x7fffffff;
+        if cnt == 0x7fffffff { return EBUSY; }
+        if cnt == 0x7ffffffe { return EAGAIN; }
+        if a_cas(&raw mut (*rw).__i[0], val, val + 1) == val { return 0; }
+    }
+}
+unsafe fn rwlock_trywrlock(rw: *mut pthread_rwlock_t) -> c_int {
+    if a_cas(&raw mut (*rw).__i[0], 0, 0x7fffffff) == 0 { 0 } else { EBUSY }
+}
+unsafe fn rwlock_timedrdlock(rw: *mut pthread_rwlock_t, abs_timeout: *const timespec) -> c_int {
+    let r = rwlock_tryrdlock(rw);
+    if r != EBUSY { return r; }
+    let mut spins = 100;
+    while spins > 0 { let r = rwlock_tryrdlock(rw); if r != EBUSY { return r; } core::hint::spin_loop(); spins -= 1; }
+    loop {
+        let r = rwlock_tryrdlock(rw);
+        if r != EBUSY { return r; }
+        let val = a_load(&raw const (*rw).__i[0]);
+        if val & 0x7fffffff != 0x7fffffff { continue; }
+        a_fetch_add(&raw mut (*rw).__i[1], 1);
+        a_cas(&raw mut (*rw).__i[0], val, val | (1i32 << 31));
+        let e = futex_timedwait(&raw mut (*rw).__i[0], val | (1i32 << 31), abs_timeout);
+        a_fetch_sub(&raw mut (*rw).__i[1], 1);
+        if e != 0 && e != EINTR { return e; }
+    }
+}
+unsafe fn rwlock_timedwrlock(rw: *mut pthread_rwlock_t, abs_timeout: *const timespec) -> c_int {
+    let r = rwlock_trywrlock(rw);
+    if r != EBUSY { return r; }
+    let mut spins = 100;
+    while spins > 0 { let r = rwlock_trywrlock(rw); if r != EBUSY { return r; } core::hint::spin_loop(); spins -= 1; }
+    loop {
+        let r = rwlock_trywrlock(rw);
+        if r != EBUSY { return r; }
+        let val = a_load(&raw const (*rw).__i[0]);
+        if val == 0 { continue; }
+        a_fetch_add(&raw mut (*rw).__i[1], 1);
+        a_cas(&raw mut (*rw).__i[0], val, val | (1i32 << 31));
+        let e = futex_timedwait(&raw mut (*rw).__i[0], val | (1i32 << 31), abs_timeout);
+        a_fetch_sub(&raw mut (*rw).__i[1], 1);
+        if e != 0 && e != EINTR { return e; }
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn pthread_rwlock_init(rw: *mut pthread_rwlock_t, attr: *const pthread_rwlockattr_t) -> c_int {
+    core::ptr::write_bytes(rw, 0, 1);
+    if !attr.is_null() { (*rw).__i[2] = (*attr).__attr[0] as c_int & 128; }
+    0
+}
+#[no_mangle]
+pub unsafe extern "C" fn pthread_rwlock_destroy(_rw: *mut pthread_rwlock_t) -> c_int { 0 }
+#[no_mangle]
+pub unsafe extern "C" fn pthread_rwlock_rdlock(rw: *mut pthread_rwlock_t) -> c_int { rwlock_timedrdlock(rw, core::ptr::null()) }
+#[no_mangle]
+pub unsafe extern "C" fn pthread_rwlock_tryrdlock(rw: *mut pthread_rwlock_t) -> c_int { rwlock_tryrdlock(rw) }
+#[no_mangle]
+pub unsafe extern "C" fn pthread_rwlock_timedrdlock(rw: *mut pthread_rwlock_t, t: *const timespec) -> c_int { rwlock_timedrdlock(rw, t) }
+#[no_mangle]
+pub unsafe extern "C" fn pthread_rwlock_wrlock(rw: *mut pthread_rwlock_t) -> c_int { rwlock_timedwrlock(rw, core::ptr::null()) }
+#[no_mangle]
+pub unsafe extern "C" fn pthread_rwlock_trywrlock(rw: *mut pthread_rwlock_t) -> c_int { rwlock_trywrlock(rw) }
+#[no_mangle]
+pub unsafe extern "C" fn pthread_rwlock_timedwrlock(rw: *mut pthread_rwlock_t, t: *const timespec) -> c_int { rwlock_timedwrlock(rw, t) }
+#[no_mangle]
+pub unsafe extern "C" fn pthread_rwlock_unlock(rw: *mut pthread_rwlock_t) -> c_int {
+    loop {
+        let val = a_load(&raw const (*rw).__i[0]);
+        let cnt = val & 0x7fffffff;
+        let new_val = if cnt == 0x7fffffff || cnt == 1 { 0 } else { val - 1 };
+        if a_cas(&raw mut (*rw).__i[0], val, new_val) == val {
+            if new_val == 0 && (a_load(&raw const (*rw).__i[1]) > 0 || val < 0) {
+                futex_wake(&raw mut (*rw).__i[0], cnt);
+            }
+            return 0;
+        }
+    }
+}
+
+// --- pthread_barrierattr_* ---
+#[no_mangle]
+pub unsafe extern "C" fn pthread_barrierattr_init(attr: *mut pthread_barrierattr_t) -> c_int { (*attr).__attr = 0; 0 }
+#[no_mangle]
+pub unsafe extern "C" fn pthread_barrierattr_destroy(_attr: *mut pthread_barrierattr_t) -> c_int { 0 }
+#[no_mangle]
+pub unsafe extern "C" fn pthread_barrierattr_setpshared(attr: *mut pthread_barrierattr_t, p: c_int) -> c_int {
+    if (p as c_uint) > 1 { return EINVAL; }
+    (*attr).__attr = p as c_uint; 0
+}
+#[no_mangle]
+pub unsafe extern "C" fn pthread_barrierattr_getpshared(attr: *const pthread_barrierattr_t, p: *mut c_int) -> c_int {
+    *p = (*attr).__attr as c_int; 0
+}
+
+// --- pthread_barrier_* ---
+#[no_mangle]
+pub unsafe extern "C" fn pthread_barrier_init(b: *mut pthread_barrier_t, _attr: *const pthread_barrierattr_t, count: c_uint) -> c_int {
+    if count == 0 { return EINVAL; }
+    core::ptr::write_bytes(b, 0, 1);
+    (*b).__i[2] = count as c_int - 1;
+    0
+}
+#[no_mangle]
+pub unsafe extern "C" fn pthread_barrier_destroy(_b: *mut pthread_barrier_t) -> c_int { 0 }
+#[no_mangle]
+pub unsafe extern "C" fn pthread_barrier_wait(b: *mut pthread_barrier_t) -> c_int {
+    let limit = (*b).__i[2];
+    if limit == 0 { return PTHREAD_BARRIER_SERIAL_THREAD; }
+    spinlock_lock(&raw mut (*b).__i[0], &raw mut (*b).__i[1]);
+    let arrived = a_load(&raw const (*b).__i[3]) + 1;
+    a_store(&raw mut (*b).__i[3], arrived);
+    if arrived > limit {
+        a_store(&raw mut (*b).__i[3], 0);
+        let gen = a_load(&raw const (*b).__i[4]);
+        a_store(&raw mut (*b).__i[4], gen + 1);
+        spinlock_unlock(&raw mut (*b).__i[0], &raw mut (*b).__i[1]);
+        futex_wake(&raw mut (*b).__i[4], -1);
+        return PTHREAD_BARRIER_SERIAL_THREAD;
+    }
+    let gen = a_load(&raw const (*b).__i[4]);
+    spinlock_unlock(&raw mut (*b).__i[0], &raw mut (*b).__i[1]);
+    while a_load(&raw const (*b).__i[4]) == gen {
+        futex_wait(&raw mut (*b).__i[4], gen);
+    }
+    0
+}
+
+// --- pthread_spin_* ---
+#[no_mangle]
+pub unsafe extern "C" fn pthread_spin_init(s: *mut pthread_spinlock_t, _pshared: c_int) -> c_int { a_store(s, 0); 0 }
+#[no_mangle]
+pub unsafe extern "C" fn pthread_spin_destroy(_s: *mut pthread_spinlock_t) -> c_int { 0 }
+#[no_mangle]
+pub unsafe extern "C" fn pthread_spin_lock(s: *mut pthread_spinlock_t) -> c_int {
+    while a_load(s) != 0 || a_cas(s, 0, EBUSY) != 0 { core::hint::spin_loop(); }
+    0
+}
+#[no_mangle]
+pub unsafe extern "C" fn pthread_spin_trylock(s: *mut pthread_spinlock_t) -> c_int { a_cas(s, 0, EBUSY) }
+#[no_mangle]
+pub unsafe extern "C" fn pthread_spin_unlock(s: *mut pthread_spinlock_t) -> c_int { a_store(s, 0); 0 }
+
+// --- sem_* ---
+#[no_mangle]
+pub unsafe extern "C" fn sem_init(sem: *mut sem_t, pshared: c_int, value: c_uint) -> c_int {
+    if value > SEM_VALUE_MAX as c_uint { return EINVAL; }
+    (*sem).__val[0] = value as c_int;
+    (*sem).__val[1] = 0;
+    (*sem).__val[2] = if pshared != 0 { 0 } else { 128 };
+    0
+}
+#[no_mangle]
+pub unsafe extern "C" fn sem_destroy(_sem: *mut sem_t) -> c_int { 0 }
+
+unsafe fn sem_trywait_internal(sem: *mut sem_t) -> c_int {
+    loop {
+        let val = a_load(&raw const (*sem).__val[0]);
+        if val & SEM_VALUE_MAX == 0 { return EAGAIN; }
+        if a_cas(&raw mut (*sem).__val[0], val, val - 1) == val { return 0; }
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn sem_trywait(sem: *mut sem_t) -> c_int {
+    if sem_trywait_internal(sem) == 0 { 0 } else { ERRNO = EAGAIN; -1 }
+}
+#[no_mangle]
+pub unsafe extern "C" fn sem_wait(sem: *mut sem_t) -> c_int {
+    if sem_trywait_internal(sem) == 0 { return 0; }
+    let mut spins = 100;
+    while spins > 0 { if sem_trywait_internal(sem) == 0 { return 0; } core::hint::spin_loop(); spins -= 1; }
+    loop {
+        if sem_trywait_internal(sem) == 0 { return 0; }
+        let val = a_load(&raw const (*sem).__val[0]);
+        if val & SEM_VALUE_MAX != 0 { continue; }
+        a_cas(&raw mut (*sem).__val[0], val, val | (1i32 << 31));
+        a_fetch_add(&raw mut (*sem).__val[1], 1);
+        futex_wait(&raw mut (*sem).__val[0], 1i32 << 31);
+        a_fetch_sub(&raw mut (*sem).__val[1], 1);
+    }
+}
+#[no_mangle]
+pub unsafe extern "C" fn sem_timedwait(sem: *mut sem_t, abs_timeout: *const timespec) -> c_int {
+    if sem_trywait_internal(sem) == 0 { return 0; }
+    let mut spins = 100;
+    while spins > 0 { if sem_trywait_internal(sem) == 0 { return 0; } core::hint::spin_loop(); spins -= 1; }
+    loop {
+        if sem_trywait_internal(sem) == 0 { return 0; }
+        let val = a_load(&raw const (*sem).__val[0]);
+        if val & SEM_VALUE_MAX != 0 { continue; }
+        a_cas(&raw mut (*sem).__val[0], val, val | (1i32 << 31));
+        a_fetch_add(&raw mut (*sem).__val[1], 1);
+        let e = futex_timedwait(&raw mut (*sem).__val[0], 1i32 << 31, abs_timeout);
+        a_fetch_sub(&raw mut (*sem).__val[1], 1);
+        if e != 0 && e != EINTR { ERRNO = e; return -1; }
+    }
+}
+#[no_mangle]
+pub unsafe extern "C" fn sem_post(sem: *mut sem_t) -> c_int {
+    loop {
+        let val = a_load(&raw const (*sem).__val[0]);
+        if (val & SEM_VALUE_MAX) == SEM_VALUE_MAX { ERRNO = EOVERFLOW; return -1; }
+        let mut new = val + 1;
+        let waiters = a_load(&raw const (*sem).__val[1]);
+        if waiters <= 1 { new &= !(1i32 << 31); }
+        if a_cas(&raw mut (*sem).__val[0], val, new) == val {
+            if val < 0 || waiters > 0 {
+                futex_wake(&raw mut (*sem).__val[0], if waiters > 1 { 1 } else { -1 });
+            }
+            return 0;
+        }
+    }
+}
+#[no_mangle]
+pub unsafe extern "C" fn sem_getvalue(sem: *mut sem_t, sval: *mut c_int) -> c_int {
+    *sval = a_load(&raw const (*sem).__val[0]) & SEM_VALUE_MAX;
+    0
+}
+
+// --- pthread_once ---
+#[no_mangle]
+pub unsafe extern "C" fn pthread_once(control: *mut pthread_once_t, init_routine: Option<unsafe extern "C" fn()>) -> c_int {
+    if a_load(control) == 2 { return 0; }
+    loop {
+        match a_cas(control, 0, 1) {
+            0 => {
+                if let Some(f) = init_routine { f(); }
+                if a_swap(control, 2) == 3 { futex_wake(control, -1); }
+                return 0;
+            }
+            1 => { a_cas(control, 1, 3); }
+            3 => { futex_wait(control, 3); }
+            _ => { return 0; }
+        }
+    }
+}
+
+// --- pthread_key_* ---
+#[no_mangle]
+pub unsafe extern "C" fn pthread_key_create(key: *mut pthread_key_t, dtor: Option<unsafe extern "C" fn(*mut c_void)>) -> c_int {
+    let start = NEXT_KEY.load(Ordering::Relaxed);
+    let mut j = start;
+    loop {
+        if KEY_DTORS[j].is_none() {
+            KEY_DTORS[j] = dtor;
+            NEXT_KEY.store((j + 1) % PTHREAD_KEYS_MAX, Ordering::Relaxed);
+            *key = j as pthread_key_t;
+            return 0;
+        }
+        j = (j + 1) % PTHREAD_KEYS_MAX;
+        if j == start { return EAGAIN; }
+    }
+}
+#[no_mangle]
+pub unsafe extern "C" fn pthread_key_delete(key: pthread_key_t) -> c_int {
+    KEY_DTORS[key as usize] = None;
+    for i in 0..MAX_THREADS {
+        if THREADS[i].tid > 0 { THREADS[i].tsd[key as usize] = core::ptr::null_mut(); }
+    }
+    0
+}
+#[no_mangle]
+pub unsafe extern "C" fn pthread_getspecific(key: pthread_key_t) -> *mut c_void {
+    if let Some(slot) = find_thread() { slot.tsd[key as usize] } else { core::ptr::null_mut() }
+}
+#[no_mangle]
+pub unsafe extern "C" fn pthread_setspecific(key: pthread_key_t, value: *const c_void) -> c_int {
+    if let Some(slot) = find_thread() {
+        slot.tsd[key as usize] = value as *mut c_void;
+        0
+    } else { EINVAL }
+}
+
+// --- pthread_cancel/state ---
+#[no_mangle]
+pub unsafe extern "C" fn pthread_cancel(thread: PthreadT) -> c_int {
+    let slot = thread as *mut Thread;
+    if slot.is_null() { return EINVAL; }
+    a_store(&raw mut (*slot).cancel, 1);
+    0
+}
+#[no_mangle]
+pub unsafe extern "C" fn pthread_setcancelstate(state: c_int, oldstate: *mut c_int) -> c_int {
+    if state != PTHREAD_CANCEL_ENABLE && state != PTHREAD_CANCEL_DISABLE { return EINVAL; }
+    if let Some(slot) = find_thread() {
+        if !oldstate.is_null() { *oldstate = slot.cancel_state; }
+        slot.cancel_state = state;
+        0
+    } else { EINVAL }
+}
+#[no_mangle]
+pub unsafe extern "C" fn pthread_setcanceltype(type_: c_int, oldtype: *mut c_int) -> c_int {
+    if type_ != PTHREAD_CANCEL_DEFERRED && type_ != PTHREAD_CANCEL_ASYNCHRONOUS { return EINVAL; }
+    if let Some(slot) = find_thread() {
+        if !oldtype.is_null() { *oldtype = slot.cancel_type; }
+        slot.cancel_type = type_;
+        0
+    } else { EINVAL }
+}
+#[no_mangle]
+pub unsafe extern "C" fn pthread_testcancel() {
+    if let Some(slot) = find_thread() {
+        if slot.cancel != 0 && slot.cancel_state == PTHREAD_CANCEL_ENABLE {
+            _exit(0);
+        }
+    }
+}
+
 
 #[repr(C)]
 pub struct lconv {
