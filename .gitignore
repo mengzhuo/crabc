@@ -16,3 +16,5 @@
 /tests/fixtures/process_test
 /tests/fixtures/socket_test
 /tests/fixtures/pthread_test
+/tests/fixtures/locale_test
+/tests/fixtures/iconv_test

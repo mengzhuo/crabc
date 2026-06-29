@@ -1826,6 +1826,153 @@ pub unsafe extern "C" fn pthread_mutex_unlock(mutex: *mut pthread_mutex_t) -> c_
     0
 }
 
+#[repr(C)]
+pub struct lconv {
+    pub decimal_point: *mut c_char,
+    pub thousands_sep: *mut c_char,
+    pub grouping: *mut c_char,
+    pub int_curr_symbol: *mut c_char,
+    pub currency_symbol: *mut c_char,
+    pub mon_decimal_point: *mut c_char,
+    pub mon_thousands_sep: *mut c_char,
+    pub mon_grouping: *mut c_char,
+    pub positive_sign: *mut c_char,
+    pub negative_sign: *mut c_char,
+    pub int_frac_digits: c_char,
+    pub frac_digits: c_char,
+    pub p_cs_precedes: c_char,
+    pub p_sep_by_space: c_char,
+    pub n_cs_precedes: c_char,
+    pub n_sep_by_space: c_char,
+    pub p_sign_posn: c_char,
+    pub n_sign_posn: c_char,
+    pub int_p_cs_precedes: c_char,
+    pub int_p_sep_by_space: c_char,
+    pub int_n_cs_precedes: c_char,
+    pub int_n_sep_by_space: c_char,
+    pub int_p_sign_posn: c_char,
+    pub int_n_sign_posn: c_char,
+}
+
+static mut LOCALE_NAME: [c_char; 2] = [b'C' as c_char, 0];
+static mut EMPTY_STR: [c_char; 1] = [0];
+static mut DECIMAL_POINT: [c_char; 2] = [b'.' as c_char, 0];
+static mut LCONV: lconv = lconv {
+    decimal_point: core::ptr::null_mut(),
+    thousands_sep: core::ptr::null_mut(),
+    grouping: core::ptr::null_mut(),
+    int_curr_symbol: core::ptr::null_mut(),
+    currency_symbol: core::ptr::null_mut(),
+    mon_decimal_point: core::ptr::null_mut(),
+    mon_thousands_sep: core::ptr::null_mut(),
+    mon_grouping: core::ptr::null_mut(),
+    positive_sign: core::ptr::null_mut(),
+    negative_sign: core::ptr::null_mut(),
+    int_frac_digits: -1,
+    frac_digits: -1,
+    p_cs_precedes: -1,
+    p_sep_by_space: -1,
+    n_cs_precedes: -1,
+    n_sep_by_space: -1,
+    p_sign_posn: -1,
+    n_sign_posn: -1,
+    int_p_cs_precedes: -1,
+    int_p_sep_by_space: -1,
+    int_n_cs_precedes: -1,
+    int_n_sep_by_space: -1,
+    int_p_sign_posn: -1,
+    int_n_sign_posn: -1,
+};
+
+#[no_mangle]
+pub unsafe extern "C" fn setlocale(_category: c_int, locale: *const c_char) -> *mut c_char {
+    if !locale.is_null() && *locale != 0 {
+        // ponytail: ignore locale changes, stay in C locale
+    }
+    core::ptr::addr_of_mut!(LOCALE_NAME) as *mut c_char
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn localeconv() -> *mut lconv {
+    let empty = core::ptr::addr_of_mut!(EMPTY_STR) as *mut c_char;
+    let lconv = core::ptr::addr_of_mut!(LCONV);
+    (*lconv).decimal_point = core::ptr::addr_of_mut!(DECIMAL_POINT) as *mut c_char;
+    (*lconv).thousands_sep = empty;
+    (*lconv).grouping = empty;
+    (*lconv).int_curr_symbol = empty;
+    (*lconv).currency_symbol = empty;
+    (*lconv).mon_decimal_point = empty;
+    (*lconv).mon_thousands_sep = empty;
+    (*lconv).mon_grouping = empty;
+    (*lconv).positive_sign = empty;
+    (*lconv).negative_sign = empty;
+    lconv
+}
+
+pub type IconvT = *mut c_void;
+const ICONV_INVALID: IconvT = !0usize as IconvT;
+const ICONV_IDENTITY: IconvT = 1usize as IconvT;
+
+#[no_mangle]
+pub unsafe extern "C" fn iconv_open(tocode: *const c_char, fromcode: *const c_char) -> IconvT {
+    if tocode.is_null() || fromcode.is_null() {
+        return ICONV_INVALID;
+    }
+    if strcmp(tocode as *const u8, fromcode as *const u8) == 0 {
+        ICONV_IDENTITY
+    } else {
+        ICONV_INVALID
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn iconv(
+    cd: IconvT,
+    inbuf: *mut *mut c_char,
+    inbytesleft: *mut SizeT,
+    outbuf: *mut *mut c_char,
+    outbytesleft: *mut SizeT,
+) -> SizeT {
+    if cd == ICONV_INVALID {
+        return !0usize;
+    }
+    if cd != ICONV_IDENTITY {
+        return !0usize;
+    }
+    if inbuf.is_null() || outbuf.is_null() {
+        return 0;
+    }
+    let mut src = *inbuf;
+    let mut dst = *outbuf;
+    let mut src_left = *inbytesleft;
+    let mut dst_left = *outbytesleft;
+    while src_left > 0 && dst_left > 0 {
+        *dst = *src;
+        src = src.add(1);
+        dst = dst.add(1);
+        src_left -= 1;
+        dst_left -= 1;
+    }
+    *inbuf = src;
+    *outbuf = dst;
+    *inbytesleft = src_left;
+    *outbytesleft = dst_left;
+    if src_left == 0 {
+        0
+    } else {
+        !0usize
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn iconv_close(cd: IconvT) -> c_int {
+    if cd == ICONV_IDENTITY {
+        0
+    } else {
+        -1
+    }
+}
+
 // ============================================================
 // Syscall wrappers as public C ABI
 // ============================================================
