@@ -14,3 +14,4 @@
 /tests/fixtures/signal_test
 /tests/fixtures/setjmp_test
 /tests/fixtures/process_test
+/tests/fixtures/socket_test

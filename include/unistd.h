@@ -1,10 +1,13 @@
 #ifndef _UNISTD_H
 #define _UNISTD_H
 
+#include <stddef.h>
+
 #ifdef __cplusplus
 extern "C" {
 #endif
 
+typedef long ssize_t;
 typedef int pid_t;
 typedef unsigned int uid_t;
 typedef unsigned int gid_t;
@@ -20,6 +23,9 @@ gid_t getgid(void);
 uid_t geteuid(void);
 gid_t getegid(void);
 
+int close(int);
+ssize_t read(int, void *, size_t);
+ssize_t write(int, const void *, size_t);
 void _exit(int) __attribute__((noreturn));
 
 unsigned int sleep(unsigned int);
