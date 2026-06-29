@@ -1235,6 +1235,327 @@ pub unsafe extern "C" fn getegid() -> c_uint {
 }
 
 // ============================================================
+// sys/socket.h
+// ============================================================
+
+pub const AF_UNIX: c_int = 1;
+pub const AF_INET: c_int = 2;
+pub const AF_INET6: c_int = 10;
+
+pub const SOCK_STREAM: c_int = 1;
+pub const SOCK_DGRAM: c_int = 2;
+
+pub const SHUT_RD: c_int = 0;
+pub const SHUT_WR: c_int = 1;
+pub const SHUT_RDWR: c_int = 2;
+
+pub const SOL_SOCKET: c_int = 1;
+pub const SO_REUSEADDR: c_int = 2;
+
+#[repr(C)]
+pub struct sockaddr {
+    pub sa_family: u16,
+    pub sa_data: [u8; 14],
+}
+
+#[inline]
+unsafe fn sys_socket(domain: c_int, ty: c_int, protocol: c_int) -> i64 {
+    let result: i64;
+    core::arch::asm!(
+        "syscall",
+        inlateout("rax") 41i64 => result,
+        in("rdi") domain as i64,
+        in("rsi") ty as i64,
+        in("rdx") protocol as i64,
+        lateout("rcx") _,
+        lateout("r11") _,
+    );
+    result
+}
+
+#[inline]
+unsafe fn sys_socketpair(domain: c_int, ty: c_int, protocol: c_int, sv: *mut c_int) -> i64 {
+    let result: i64;
+    core::arch::asm!(
+        "syscall",
+        inlateout("rax") 53i64 => result,
+        in("rdi") domain as i64,
+        in("rsi") ty as i64,
+        in("rdx") protocol as i64,
+        in("r10") sv,
+        lateout("rcx") _,
+        lateout("r11") _,
+    );
+    result
+}
+
+#[inline]
+unsafe fn sys_bind(fd: c_int, addr: *const sockaddr, len: c_uint) -> i64 {
+    let result: i64;
+    core::arch::asm!(
+        "syscall",
+        inlateout("rax") 49i64 => result,
+        in("rdi") fd as i64,
+        in("rsi") addr,
+        in("rdx") len as i64,
+        lateout("rcx") _,
+        lateout("r11") _,
+    );
+    result
+}
+
+#[inline]
+unsafe fn sys_listen(fd: c_int, backlog: c_int) -> i64 {
+    let result: i64;
+    core::arch::asm!(
+        "syscall",
+        inlateout("rax") 50i64 => result,
+        in("rdi") fd as i64,
+        in("rsi") backlog as i64,
+        lateout("rcx") _,
+        lateout("r11") _,
+    );
+    result
+}
+
+#[inline]
+unsafe fn sys_accept(fd: c_int, addr: *mut sockaddr, len: *mut c_uint) -> i64 {
+    let result: i64;
+    core::arch::asm!(
+        "syscall",
+        inlateout("rax") 43i64 => result,
+        in("rdi") fd as i64,
+        in("rsi") addr,
+        in("rdx") len,
+        lateout("rcx") _,
+        lateout("r11") _,
+    );
+    result
+}
+
+#[inline]
+unsafe fn sys_connect(fd: c_int, addr: *const sockaddr, len: c_uint) -> i64 {
+    let result: i64;
+    core::arch::asm!(
+        "syscall",
+        inlateout("rax") 42i64 => result,
+        in("rdi") fd as i64,
+        in("rsi") addr,
+        in("rdx") len as i64,
+        lateout("rcx") _,
+        lateout("r11") _,
+    );
+    result
+}
+
+#[inline]
+unsafe fn sys_sendto(
+    fd: c_int,
+    buf: *const c_void,
+    len: usize,
+    flags: c_int,
+    addr: *const sockaddr,
+    addrlen: c_uint,
+) -> i64 {
+    let result: i64;
+    core::arch::asm!(
+        "syscall",
+        inlateout("rax") 44i64 => result,
+        in("rdi") fd as i64,
+        in("rsi") buf,
+        in("rdx") len,
+        in("r10") flags as i64,
+        in("r8") addr,
+        in("r9") addrlen as i64,
+        lateout("rcx") _,
+        lateout("r11") _,
+    );
+    result
+}
+
+#[inline]
+unsafe fn sys_recvfrom(
+    fd: c_int,
+    buf: *mut c_void,
+    len: usize,
+    flags: c_int,
+    addr: *mut sockaddr,
+    addrlen: *mut c_uint,
+) -> i64 {
+    let result: i64;
+    core::arch::asm!(
+        "syscall",
+        inlateout("rax") 45i64 => result,
+        in("rdi") fd as i64,
+        in("rsi") buf,
+        in("rdx") len,
+        in("r10") flags as i64,
+        in("r8") addr,
+        in("r9") addrlen,
+        lateout("rcx") _,
+        lateout("r11") _,
+    );
+    result
+}
+
+#[inline]
+unsafe fn sys_shutdown(fd: c_int, how: c_int) -> i64 {
+    let result: i64;
+    core::arch::asm!(
+        "syscall",
+        inlateout("rax") 48i64 => result,
+        in("rdi") fd as i64,
+        in("rsi") how as i64,
+        lateout("rcx") _,
+        lateout("r11") _,
+    );
+    result
+}
+
+#[inline]
+unsafe fn sys_setsockopt(
+    fd: c_int,
+    level: c_int,
+    optname: c_int,
+    optval: *const c_void,
+    optlen: c_uint,
+) -> i64 {
+    let result: i64;
+    core::arch::asm!(
+        "syscall",
+        inlateout("rax") 54i64 => result,
+        in("rdi") fd as i64,
+        in("rsi") level as i64,
+        in("rdx") optname as i64,
+        in("r10") optval,
+        in("r8") optlen as i64,
+        lateout("rcx") _,
+        lateout("r11") _,
+    );
+    result
+}
+
+#[inline]
+unsafe fn sys_getsockname(fd: c_int, addr: *mut sockaddr, len: *mut c_uint) -> i64 {
+    let result: i64;
+    core::arch::asm!(
+        "syscall",
+        inlateout("rax") 51i64 => result,
+        in("rdi") fd as i64,
+        in("rsi") addr,
+        in("rdx") len,
+        lateout("rcx") _,
+        lateout("r11") _,
+    );
+    result
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn socket(domain: c_int, ty: c_int, protocol: c_int) -> c_int {
+    sys_socket(domain, ty, protocol) as c_int
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn socketpair(domain: c_int, ty: c_int, protocol: c_int, sv: *mut c_int) -> c_int {
+    sys_socketpair(domain, ty, protocol, sv) as c_int
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn bind(fd: c_int, addr: *const sockaddr, len: c_uint) -> c_int {
+    sys_bind(fd, addr, len) as c_int
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn listen(fd: c_int, backlog: c_int) -> c_int {
+    sys_listen(fd, backlog) as c_int
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn accept(fd: c_int, addr: *mut sockaddr, len: *mut c_uint) -> c_int {
+    sys_accept(fd, addr, len) as c_int
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn connect(fd: c_int, addr: *const sockaddr, len: c_uint) -> c_int {
+    sys_connect(fd, addr, len) as c_int
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn send(fd: c_int, buf: *const c_void, len: usize, flags: c_int) -> isize {
+    sys_sendto(fd, buf, len, flags, core::ptr::null(), 0) as isize
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn recv(fd: c_int, buf: *mut c_void, len: usize, flags: c_int) -> isize {
+    sys_recvfrom(fd, buf, len, flags, core::ptr::null_mut(), core::ptr::null_mut()) as isize
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn sendto(
+    fd: c_int,
+    buf: *const c_void,
+    len: usize,
+    flags: c_int,
+    addr: *const sockaddr,
+    addrlen: c_uint,
+) -> isize {
+    sys_sendto(fd, buf, len, flags, addr, addrlen) as isize
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn recvfrom(
+    fd: c_int,
+    buf: *mut c_void,
+    len: usize,
+    flags: c_int,
+    addr: *mut sockaddr,
+    addrlen: *mut c_uint,
+) -> isize {
+    sys_recvfrom(fd, buf, len, flags, addr, addrlen) as isize
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn shutdown(fd: c_int, how: c_int) -> c_int {
+    sys_shutdown(fd, how) as c_int
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn setsockopt(
+    fd: c_int,
+    level: c_int,
+    optname: c_int,
+    optval: *const c_void,
+    optlen: c_uint,
+) -> c_int {
+    sys_setsockopt(fd, level, optname, optval, optlen) as c_int
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn getsockname(fd: c_int, addr: *mut sockaddr, len: *mut c_uint) -> c_int {
+    sys_getsockname(fd, addr, len) as c_int
+}
+
+#[no_mangle]
+pub extern "C" fn htonl(hostlong: c_uint) -> c_uint {
+    hostlong.to_be()
+}
+
+#[no_mangle]
+pub extern "C" fn ntohl(netlong: c_uint) -> c_uint {
+    c_uint::from_be(netlong)
+}
+
+#[no_mangle]
+pub extern "C" fn htons(hostshort: u16) -> u16 {
+    hostshort.to_be()
+}
+
+#[no_mangle]
+pub extern "C" fn ntohs(netshort: u16) -> u16 {
+    u16::from_be(netshort)
+}
+
+// ============================================================
 // Syscall wrappers as public C ABI
 // ============================================================
 
