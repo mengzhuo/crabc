@@ -29,6 +29,7 @@ const DT_STRSZ: u64 = 10;
 const DT_JMPREL: u64 = 23;
 
 const R_X86_64_64: u64 = 1;
+const R_X86_64_COPY: u64 = 5;
 const R_X86_64_GLOB_DAT: u64 = 6;
 const R_X86_64_JUMP_SLOT: u64 = 7;
 const R_X86_64_RELATIVE: u64 = 8;
@@ -275,6 +276,22 @@ fn sys_read(fd: i64, buf: *mut u8, count: usize) -> i64 {
         core::arch::asm!(
             "syscall",
             inlateout("rax") 0i64 => result,
+            in("rdi") fd,
+            in("rsi") buf,
+            in("rdx") count,
+            lateout("rcx") _,
+            lateout("r11") _,
+        );
+    }
+    result
+}
+
+fn sys_write(fd: i64, buf: *const u8, count: usize) -> i64 {
+    let result: i64;
+    unsafe {
+        core::arch::asm!(
+            "syscall",
+            inlateout("rax") 1i64 => result,
             in("rdi") fd,
             in("rsi") buf,
             in("rdx") count,
@@ -618,12 +635,21 @@ unsafe fn resolve_symbol_from_index(obj_idx: usize, sym_idx: usize) -> u64 {
 /// Search all loaded objects for a symbol with the given null-terminated name.
 /// Returns the resolved address (base + st_value) or 0 if not found.
 unsafe fn resolve_symbol(name: *const u8) -> u64 {
+    resolve_symbol_with_size(name, usize::MAX).0
+}
+
+/// Same as resolve_symbol but also returns the defining symbol's st_size.
+/// `exclude` is an object index to skip (use usize::MAX to skip nothing).
+unsafe fn resolve_symbol_with_size(name: *const u8, exclude: usize) -> (u64, usize) {
     let name_len = strlen(name);
     if name_len == 0 {
-        return 0;
+        return (0, 0);
     }
 
     for i in 0..LOADED_COUNT {
+        if i == exclude {
+            continue;
+        }
         let obj = &LOADED[i];
         if obj.symtab.is_null() || obj.strtab.is_null() {
             continue;
@@ -643,11 +669,32 @@ unsafe fn resolve_symbol(name: *const u8) -> u64 {
             }
             let sym_name = obj.strtab.add(st_name_off);
             if str_eq(name, name_len, sym_name) {
-                return obj.base + st_value;
+                let st_size = u64::from_le_bytes(core::ptr::read_unaligned(
+                    sym_entry.add(16) as *const [u8; 8],
+                ));
+                return (obj.base + st_value, st_size as usize);
             }
         }
     }
-    0
+    (0, 0)
+}
+
+unsafe fn resolve_copy_source(obj_idx: usize, sym_idx: usize) -> (u64, usize) {
+    let obj = &LOADED[obj_idx];
+    if sym_idx == 0 || obj.symtab.is_null() || obj.strtab.is_null() {
+        return (0, 0);
+    }
+    if sym_idx * SYMTAB_ENT_SIZE >= obj.sym_count * SYMTAB_ENT_SIZE {
+        return (0, 0);
+    }
+    let sym_entry = obj.symtab.add(sym_idx * SYMTAB_ENT_SIZE);
+    let st_name =
+        u32::from_le_bytes(core::ptr::read_unaligned(sym_entry as *const [u8; 4])) as usize;
+    if st_name >= obj.strsz {
+        return (0, 0);
+    }
+    let name = obj.strtab.add(st_name);
+    resolve_symbol_with_size(name, obj_idx)
 }
 
 // ============================================================
@@ -656,43 +703,57 @@ unsafe fn resolve_symbol(name: *const u8) -> u64 {
 
 /// Process all relocations for every loaded object.
 unsafe fn process_all_relocations() {
+    // First pass: non-COPY relocations so source symbols have final values.
     for i in 0..LOADED_COUNT {
-        let obj = &LOADED[i];
-        let base = obj.base;
-        let dp = obj.dyn_addr;
-        let dyn_end = dp + obj.dyn_memsz;
-
-        let mut rela_off: u64 = 0;
-        let mut rela_sz: u64 = 0;
-        let mut jmprel_off: u64 = 0;
-        let mut jmprel_sz: u64 = 0;
-
-        let mut pos = dp;
-        while pos + 16 <= dyn_end {
-            let d_tag = u64::from_le_bytes(core::ptr::read_unaligned(pos as *const [u8; 8]));
-            let d_val = u64::from_le_bytes(core::ptr::read_unaligned((pos + 8) as *const [u8; 8]));
-            if d_tag == DT_NULL {
-                break;
-            }
-            match d_tag {
-                DT_RELA => rela_off = d_val,
-                DT_RELASZ => rela_sz = d_val,
-                DT_JMPREL => jmprel_off = d_val,
-                DT_PLTRELSZ => jmprel_sz = d_val,
-                _ => {}
-            }
-            pos += 16;
-        }
-
-        // .rela.dyn
-        apply_rela_table(i, base, rela_off, rela_sz);
-        // .rela.plt
-        apply_rela_table(i, base, jmprel_off, jmprel_sz);
+        let (base, rela_off, rela_sz, jmprel_off, jmprel_sz) = relocation_info(i);
+        apply_rela_table(i, base, rela_off, rela_sz, false);
+        apply_rela_table(i, base, jmprel_off, jmprel_sz, false);
+    }
+    // Second pass: COPY relocations copy initialized data into the executable.
+    for i in 0..LOADED_COUNT {
+        let (base, rela_off, rela_sz, _, _) = relocation_info(i);
+        apply_rela_table(i, base, rela_off, rela_sz, true);
     }
 }
 
+unsafe fn relocation_info(i: usize) -> (u64, u64, u64, u64, u64) {
+    let obj = &LOADED[i];
+    let base = obj.base;
+    let dp = obj.dyn_addr;
+    let dyn_end = dp + obj.dyn_memsz;
+
+    let mut rela_off: u64 = 0;
+    let mut rela_sz: u64 = 0;
+    let mut jmprel_off: u64 = 0;
+    let mut jmprel_sz: u64 = 0;
+
+    let mut pos = dp;
+    while pos + 16 <= dyn_end {
+        let d_tag = u64::from_le_bytes(core::ptr::read_unaligned(pos as *const [u8; 8]));
+        let d_val = u64::from_le_bytes(core::ptr::read_unaligned((pos + 8) as *const [u8; 8]));
+        if d_tag == DT_NULL {
+            break;
+        }
+        match d_tag {
+            DT_RELA => rela_off = d_val,
+            DT_RELASZ => rela_sz = d_val,
+            DT_JMPREL => jmprel_off = d_val,
+            DT_PLTRELSZ => jmprel_sz = d_val,
+            _ => {}
+        }
+        pos += 16;
+    }
+    (base, rela_off, rela_sz, jmprel_off, jmprel_sz)
+}
+
 /// Apply entries from one relocation table.
-unsafe fn apply_rela_table(obj_idx: usize, base: u64, table_off: u64, table_sz: u64) {
+unsafe fn apply_rela_table(
+    obj_idx: usize,
+    base: u64,
+    table_off: u64,
+    table_sz: u64,
+    copy_only: bool,
+) {
     if table_sz == 0 {
         return;
     }
@@ -709,6 +770,21 @@ unsafe fn apply_rela_table(obj_idx: usize, base: u64, table_off: u64, table_sz: 
         let r_type = r_info & 0xffffffff;
         let r_sym_idx = (r_info >> 32) as usize;
         let slot = (base + r_offset) as *mut u64;
+
+        if r_type == R_X86_64_COPY {
+            if !copy_only {
+                continue;
+            }
+            let (src, sym_size) = resolve_copy_source(obj_idx, r_sym_idx);
+            if src != 0 && sym_size != 0 {
+                let dst = (base + r_offset) as *mut u8;
+                core::ptr::copy_nonoverlapping(src as *const u8, dst, sym_size);
+            }
+            continue;
+        }
+        if copy_only {
+            continue;
+        }
 
         match r_type {
             R_X86_64_RELATIVE => {
