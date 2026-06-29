@@ -12,3 +12,4 @@
 /tests/fixtures/stdio_input_test
 /tests/fixtures/stdio_input_test.txt
 /tests/fixtures/signal_test
+/tests/fixtures/setjmp_test
