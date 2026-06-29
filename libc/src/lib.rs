@@ -1079,6 +1079,162 @@ pub unsafe extern "C" fn longjmp(env: *const c_ulong, val: c_int) -> ! {
 }
 
 // ============================================================
+// unistd.h: process primitives
+// ============================================================
+
+#[inline]
+unsafe fn sys_fork() -> i64 {
+    let result: i64;
+    core::arch::asm!(
+        "syscall",
+        inlateout("rax") 57i64 => result,
+        lateout("rcx") _,
+        lateout("r11") _,
+    );
+    result
+}
+
+#[inline]
+unsafe fn sys_execve(path: *const c_char, argv: *const *const c_char, envp: *const *const c_char) -> i64 {
+    let result: i64;
+    core::arch::asm!(
+        "syscall",
+        inlateout("rax") 59i64 => result,
+        in("rdi") path,
+        in("rsi") argv,
+        in("rdx") envp,
+        lateout("rcx") _,
+        lateout("r11") _,
+    );
+    result
+}
+
+#[inline]
+unsafe fn sys_wait4(pid: c_int, status: *mut c_int, options: c_int, rusage: *mut c_void) -> i64 {
+    let result: i64;
+    core::arch::asm!(
+        "syscall",
+        inlateout("rax") 61i64 => result,
+        in("rdi") pid as i64,
+        in("rsi") status,
+        in("rdx") options as i64,
+        in("r10") rusage,
+        lateout("rcx") _,
+        lateout("r11") _,
+    );
+    result
+}
+
+#[inline]
+unsafe fn sys_getppid() -> i64 {
+    let result: i64;
+    core::arch::asm!(
+        "syscall",
+        inlateout("rax") 110i64 => result,
+        lateout("rcx") _,
+        lateout("r11") _,
+    );
+    result
+}
+
+#[inline]
+unsafe fn sys_getuid() -> i64 {
+    let result: i64;
+    core::arch::asm!(
+        "syscall",
+        inlateout("rax") 102i64 => result,
+        lateout("rcx") _,
+        lateout("r11") _,
+    );
+    result
+}
+
+#[inline]
+unsafe fn sys_getgid() -> i64 {
+    let result: i64;
+    core::arch::asm!(
+        "syscall",
+        inlateout("rax") 104i64 => result,
+        lateout("rcx") _,
+        lateout("r11") _,
+    );
+    result
+}
+
+#[inline]
+unsafe fn sys_geteuid() -> i64 {
+    let result: i64;
+    core::arch::asm!(
+        "syscall",
+        inlateout("rax") 107i64 => result,
+        lateout("rcx") _,
+        lateout("r11") _,
+    );
+    result
+}
+
+#[inline]
+unsafe fn sys_getegid() -> i64 {
+    let result: i64;
+    core::arch::asm!(
+        "syscall",
+        inlateout("rax") 108i64 => result,
+        lateout("rcx") _,
+        lateout("r11") _,
+    );
+    result
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn fork() -> c_int {
+    sys_fork() as c_int
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn execve(
+    path: *const c_char,
+    argv: *const *const c_char,
+    envp: *const *const c_char,
+) -> c_int {
+    sys_execve(path, argv, envp) as c_int
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn wait(status: *mut c_int) -> c_int {
+    sys_wait4(-1, status, 0, core::ptr::null_mut()) as c_int
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn waitpid(pid: c_int, status: *mut c_int, options: c_int) -> c_int {
+    sys_wait4(pid, status, options, core::ptr::null_mut()) as c_int
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn getppid() -> c_int {
+    sys_getppid() as c_int
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn getuid() -> c_uint {
+    sys_getuid() as c_uint
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn getgid() -> c_uint {
+    sys_getgid() as c_uint
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn geteuid() -> c_uint {
+    sys_geteuid() as c_uint
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn getegid() -> c_uint {
+    sys_getegid() as c_uint
+}
+
+// ============================================================
 // Syscall wrappers as public C ABI
 // ============================================================
 
