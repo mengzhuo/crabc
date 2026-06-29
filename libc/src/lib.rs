@@ -1,5 +1,6 @@
 #![cfg_attr(not(test), no_std)]
 #![feature(c_variadic)]
+#![feature(linkage)]
 #![allow(dead_code)]
 
 use core::ffi::{c_char, c_int, c_long, c_longlong, c_uint, c_ulong, c_ulonglong, c_void, VaListImpl};
@@ -1556,7 +1557,6 @@ pub extern "C" fn ntohs(netshort: u16) -> u16 {
     u16::from_be(netshort)
 }
 
-// ponytail: no full TLS per thread; enough for simple tests
 pub type PthreadT = c_ulong;
 
 #[repr(C)]
@@ -1566,7 +1566,6 @@ pub struct pthread_mutex_t {
 
 #[repr(C)]
 pub struct pthread_attr_t {
-    // ponytail: empty; attributes ignored
 }
 
 const CLONE_VM: c_ulong = 0x00000100;
@@ -1575,6 +1574,7 @@ const CLONE_FILES: c_ulong = 0x00000400;
 const CLONE_SIGHAND: c_ulong = 0x00000800;
 const CLONE_THREAD: c_ulong = 0x00010000;
 const CLONE_SYSVSEM: c_ulong = 0x00040000;
+const CLONE_SETTLS: c_ulong = 0x00080000;
 const CLONE_PARENT_SETTID: c_ulong = 0x00100000;
 const CLONE_CHILD_CLEARTID: c_ulong = 0x00200000;
 
@@ -1616,6 +1616,20 @@ extern "C" {
         tls: c_ulong,
         ctid: *mut c_int,
     ) -> i64;
+}
+
+#[inline(never)]
+#[linkage = "weak"]
+#[no_mangle]
+pub extern "C" fn __rc_create_thread_tls() -> *mut u8 {
+    core::ptr::null_mut()
+}
+
+#[inline(never)]
+#[linkage = "weak"]
+#[no_mangle]
+pub extern "C" fn __rc_tls_block_size() -> usize {
+    0
 }
 
 #[inline]
@@ -1665,6 +1679,8 @@ struct Thread {
     user_fn: usize,
     user_arg: *mut c_void,
     stack: *mut u8,
+    stack_size: usize,
+    fs_base: *mut u8,
 }
 
 static mut THREADS: [Thread; MAX_THREADS] = [Thread {
@@ -1672,6 +1688,8 @@ static mut THREADS: [Thread; MAX_THREADS] = [Thread {
     user_fn: 0,
     user_arg: core::ptr::null_mut(),
     stack: core::ptr::null_mut(),
+    stack_size: 0,
+    fs_base: core::ptr::null_mut(),
 }; MAX_THREADS];
 static NEXT_SLOT: AtomicUsize = AtomicUsize::new(0);
 
@@ -1729,10 +1747,17 @@ pub unsafe extern "C" fn pthread_create(
     if stack == MMAP_FAILED {
         return -1;
     }
+    let fs_base = __rc_create_thread_tls();
+    if fs_base.is_null() {
+        sys_munmap(stack, STACK_SIZE);
+        return -1;
+    }
     (*slot).tid = 1;
     (*slot).user_fn = start_routine;
     (*slot).user_arg = arg;
     (*slot).stack = stack;
+    (*slot).stack_size = STACK_SIZE;
+    (*slot).fs_base = fs_base;
     let stack_top = stack.add(STACK_SIZE);
     let tid_ptr = &raw mut (*slot).tid;
     let flags = CLONE_VM
@@ -1742,14 +1767,15 @@ pub unsafe extern "C" fn pthread_create(
         | CLONE_THREAD
         | CLONE_SYSVSEM
         | CLONE_PARENT_SETTID
-        | CLONE_CHILD_CLEARTID;
+        | CLONE_CHILD_CLEARTID
+        | CLONE_SETTLS;
     let tid = __rc_clone(
         thread_entry as usize,
         stack_top,
         flags,
         slot as *mut c_void,
         tid_ptr,
-        0,
+        fs_base as c_ulong,
         tid_ptr,
     );
     if tid < 0 {
@@ -1757,7 +1783,10 @@ pub unsafe extern "C" fn pthread_create(
         (*slot).user_fn = 0;
         (*slot).user_arg = null_mut();
         (*slot).stack = null_mut();
+        (*slot).stack_size = 0;
+        (*slot).fs_base = null_mut();
         sys_munmap(stack, STACK_SIZE);
+        sys_munmap(fs_base.sub(__rc_tls_block_size()), __rc_tls_block_size());
         -1
     } else {
         *thread = slot as PthreadT;
@@ -1779,10 +1808,22 @@ pub unsafe extern "C" fn pthread_join(thread: PthreadT, _retval: *mut *mut c_voi
         }
         sys_futex(tid_ptr, FUTEX_WAIT, tid, null_mut(), null_mut(), 0);
     }
+    let stack = (*slot).stack;
+    let stack_size = (*slot).stack_size;
+    let fs_base = (*slot).fs_base;
     (*slot).tid = -1;
     (*slot).user_fn = 0;
     (*slot).user_arg = null_mut();
     (*slot).stack = null_mut();
+    (*slot).stack_size = 0;
+    (*slot).fs_base = null_mut();
+    if !stack.is_null() && stack_size > 0 {
+        sys_munmap(stack, stack_size);
+    }
+    if !fs_base.is_null() {
+        let block_size = __rc_tls_block_size();
+        sys_munmap(fs_base.sub(block_size), block_size);
+    }
     0
 }
 

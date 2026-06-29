@@ -34,7 +34,8 @@ fn ldso_runs_real_printf_binary() {
             "-L",
             manifest_dir.join("target/debug").to_str().unwrap(),
             hello_src.to_str().unwrap(),
-            "-lc",
+            "-Wl,--allow-shlib-undefined",
+                        "-lc",
             "-o",
             hello_bin.to_str().unwrap(),
         ])

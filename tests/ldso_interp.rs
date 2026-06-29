@@ -25,6 +25,7 @@ fn ldso_runs_tiny_pie() {
             "-Wl,--dynamic-linker",
             ldso_path.to_str().unwrap(),
             tiny_src.to_str().unwrap(),
+            "-Wl,--allow-shlib-undefined",
             "-o",
             tiny_bin.to_str().unwrap(),
         ])
