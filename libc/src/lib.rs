@@ -7,6 +7,20 @@ use core::ffi::{c_char, c_int, c_long, c_longlong, c_uint, c_ulong, c_ulonglong,
 use core::ptr::null_mut;
 use core::sync::atomic::{AtomicI32, AtomicUsize, Ordering};
 
+// ============================================================
+// errno
+// ============================================================
+
+const EILSEQ: c_int = 84;
+const EINVAL: c_int = 22;
+
+static mut ERRNO: c_int = 0;
+
+#[no_mangle]
+pub unsafe extern "C" fn __errno_location() -> *mut c_int {
+    core::ptr::addr_of_mut!(ERRNO)
+}
+
 #[cfg(not(test))]
 #[panic_handler]
 fn panic(_: &core::panic::PanicInfo) -> ! {
@@ -867,6 +881,63 @@ pub extern "C" fn rand() -> c_int {
 }
 
 // ============================================================
+// stdlib.h: div, ldiv, lldiv
+// ============================================================
+
+#[repr(C)]
+pub struct div_t { pub quot: c_int, pub rem: c_int }
+#[repr(C)]
+pub struct ldiv_t { pub quot: c_long, pub rem: c_long }
+#[repr(C)]
+pub struct lldiv_t { pub quot: c_longlong, pub rem: c_longlong }
+
+#[no_mangle]
+pub extern "C" fn div(num: c_int, den: c_int) -> div_t {
+    div_t { quot: num / den, rem: num % den }
+}
+
+#[no_mangle]
+pub extern "C" fn ldiv(num: c_long, den: c_long) -> ldiv_t {
+    ldiv_t { quot: num / den, rem: num % den }
+}
+
+#[no_mangle]
+pub extern "C" fn lldiv(num: c_longlong, den: c_longlong) -> lldiv_t {
+    lldiv_t { quot: num / den, rem: num % den }
+}
+
+// ============================================================
+// bsearch
+// ============================================================
+
+type CmpFn = unsafe extern "C" fn(*const c_void, *const c_void) -> c_int;
+
+#[no_mangle]
+pub unsafe extern "C" fn bsearch(
+    key: *const c_void,
+    base: *const c_void,
+    nel: usize,
+    width: usize,
+    cmp: CmpFn,
+) -> *mut c_void {
+    let mut base = base as *const u8;
+    let mut nel = nel;
+    while nel > 0 {
+        let trial = base.add(width * (nel / 2));
+        let sign = cmp(key, trial as *const c_void);
+        if sign < 0 {
+            nel /= 2;
+        } else if sign > 0 {
+            base = trial.add(width);
+            nel -= nel / 2 + 1;
+        } else {
+            return trial as *mut c_void;
+        }
+    }
+    null_mut()
+}
+
+// ============================================================
 // signal.h
 // ============================================================
 
@@ -882,6 +953,12 @@ pub const SIGABRT: c_int = 6;
 pub const SIGFPE: c_int = 8;
 pub const SIGSEGV: c_int = 11;
 pub const SIGTERM: c_int = 15;
+pub const SIGQUIT: c_int = 3;
+pub const SIGCHLD: c_int = 17;
+
+pub const SIG_BLOCK: c_int = 0;
+pub const SIG_UNBLOCK: c_int = 1;
+pub const SIG_SETMASK: c_int = 2;
 
 #[repr(C)]
 pub struct sigaction {
@@ -924,6 +1001,37 @@ unsafe fn sys_rt_sigaction(
         lateout("r11") _,
     );
     result
+}
+
+#[inline]
+unsafe fn sys_rt_sigprocmask(
+    how: c_int,
+    set: *const SigSetT,
+    oldset: *mut SigSetT,
+    sigsetsize: usize,
+) -> i64 {
+    let result: i64;
+    core::arch::asm!(
+        "syscall",
+        inlateout("rax") 14i64 => result,
+        in("rdi") how as i64,
+        in("rsi") set,
+        in("rdx") oldset,
+        in("r10") sigsetsize,
+        lateout("rcx") _,
+        lateout("r11") _,
+    );
+    result
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn sigprocmask(
+    how: c_int,
+    set: *const SigSetT,
+    oldset: *mut SigSetT,
+) -> c_int {
+    let r = sys_rt_sigprocmask(how, set, oldset, core::mem::size_of::<SigSetT>());
+    if r < 0 { -1 } else { 0 }
 }
 
 #[inline]
@@ -2728,8 +2836,884 @@ pub unsafe extern "C" fn _Exit(code: c_int) -> ! {
 
 #[no_mangle]
 pub unsafe extern "C" fn exit(code: c_int) -> ! {
-    // ponytail: skip __cxa_atexit handlers and fini arrays, just flush and exit
+    __funcs_on_exit();
     _exit(code);
+}
+
+// ============================================================
+// qsort / qsort_r (smoothsort, O(1) aux, adaptive)
+// ============================================================
+
+type CmpRfn = unsafe extern "C" fn(*const c_void, *const c_void, *mut c_void) -> c_int;
+
+const AR_LEN: usize = 16 * core::mem::size_of::<usize>();
+const AR_MASK: usize = AR_LEN - 1;
+
+unsafe fn qsort_pntz(p: &[usize; 2]) -> i32 {
+    if p[0] != 1 {
+        p[0].wrapping_sub(1).trailing_zeros() as i32
+    } else if p[1] != 0 {
+        (8 * core::mem::size_of::<usize>()) as i32 + p[1].trailing_zeros() as i32
+    } else {
+        0
+    }
+}
+
+unsafe fn qsort_cycle(width: usize, ar: &mut [*mut u8; AR_LEN], n: usize) {
+    if n < 2 { return; }
+    let mut tmp = [0u8; 256];
+    ar[n] = tmp.as_mut_ptr();
+    let mut w = width;
+    while w > 0 {
+        let l = if 256 < w { 256 } else { w };
+        core::ptr::copy_nonoverlapping(ar[0], ar[n], l);
+        for i in 0..n {
+            core::ptr::copy_nonoverlapping(ar[i + 1], ar[i], l);
+            ar[i] = ar[i].add(l);
+        }
+        w -= l;
+    }
+}
+
+unsafe fn qsort_shl(p: &mut [usize; 2], n: i32) {
+    let bits = (8 * core::mem::size_of::<usize>()) as i32;
+    if n >= bits {
+        p[1] = p[0];
+        p[0] = 0;
+        let n = n - bits;
+        if n == 0 { return; }
+    }
+    p[1] = (p[1] << n) | (p[0] >> (bits - n));
+    p[0] <<= n;
+}
+
+unsafe fn qsort_shr(p: &mut [usize; 2], n: i32) {
+    let bits = (8 * core::mem::size_of::<usize>()) as i32;
+    if n >= bits {
+        p[0] = p[1];
+        p[1] = 0;
+        let n = n - bits;
+        if n == 0 { return; }
+    }
+    p[0] = (p[0] >> n) | (p[1] << (bits - n));
+    p[1] >>= n;
+}
+
+unsafe fn qsort_sift(
+    head: *mut u8, width: usize,
+    cmp: CmpRfn, arg: *mut c_void,
+    pshift: i32, lp: &[usize],
+) {
+    let mut ar: [*mut u8; AR_LEN] = [core::ptr::null_mut(); AR_LEN];
+    ar[0] = head;
+    let mut i = 1usize;
+    let mut h = head;
+    let mut ps = pshift;
+
+    while ps > 1 {
+        let rt = h.sub(width);
+        let lf = h.sub(width + lp[(ps - 2) as usize]);
+
+        if cmp(ar[0] as *const c_void, lf as *const c_void, arg) >= 0
+            && cmp(ar[0] as *const c_void, rt as *const c_void, arg) >= 0
+        {
+            break;
+        }
+        if cmp(lf as *const c_void, rt as *const c_void, arg) >= 0 {
+            ar[i & AR_MASK] = lf;
+            i += 1;
+            h = lf;
+            ps -= 1;
+        } else {
+            ar[i & AR_MASK] = rt;
+            i += 1;
+            h = rt;
+            ps -= 2;
+        }
+    }
+    qsort_cycle(width, &mut ar, i & AR_MASK);
+}
+
+unsafe fn qsort_trinkle(
+    head: *mut u8, width: usize,
+    cmp: CmpRfn, arg: *mut c_void,
+    pp: &[usize; 2], pshift: i32, trusty: i32,
+    lp: &[usize],
+) {
+    let mut ar: [*mut u8; AR_LEN] = [core::ptr::null_mut(); AR_LEN];
+    let mut p = *pp;
+    ar[0] = head;
+    let mut i = 1usize;
+    let mut h = head;
+    let mut ps = pshift;
+    let mut t = trusty;
+
+    while p[0] != 1 || p[1] != 0 {
+        let stepson = h.sub(lp[ps as usize]);
+        if cmp(stepson as *const c_void, ar[0] as *const c_void, arg) <= 0 {
+            break;
+        }
+        if t == 0 && ps > 1 {
+            let rt = h.sub(width);
+            let lf = h.sub(width + lp[(ps - 2) as usize]);
+            if cmp(rt as *const c_void, stepson as *const c_void, arg) >= 0
+                || cmp(lf as *const c_void, stepson as *const c_void, arg) >= 0
+            {
+                break;
+            }
+        }
+
+        ar[i & AR_MASK] = stepson;
+        i += 1;
+        h = stepson;
+        let trail = qsort_pntz(&p);
+        qsort_shr(&mut p, trail);
+        ps += trail;
+        t = 0;
+    }
+    if t == 0 {
+        qsort_cycle(width, &mut ar, i & AR_MASK);
+        qsort_sift(h, width, cmp, arg, ps, lp);
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn __qsort_r(
+    base: *mut c_void,
+    nel: usize,
+    width: usize,
+    cmp: CmpRfn,
+    arg: *mut c_void,
+) {
+    let size = width * nel;
+    if size == 0 { return; }
+
+    let mut lp = [0usize; 96];
+    lp[0] = width;
+    lp[1] = width;
+    let mut li = 2;
+    while {
+        lp[li] = lp[li - 2] + lp[li - 1] + width;
+        lp[li] < size
+    } {
+        li += 1;
+    }
+
+    let mut head = base as *mut u8;
+    let high = head.add(size - width);
+    let mut p: [usize; 2] = [1, 0];
+    let mut pshift: i32 = 1;
+
+    while head < high {
+        if (p[0] & 3) == 3 {
+            qsort_sift(head, width, cmp, arg, pshift, &lp);
+            qsort_shr(&mut p, 2);
+            pshift += 2;
+        } else {
+            if lp[(pshift - 1) as usize] >= (high as usize) - (head as usize) {
+                qsort_trinkle(head, width, cmp, arg, &p, pshift, 0, &lp);
+            } else {
+                qsort_sift(head, width, cmp, arg, pshift, &lp);
+            }
+
+            if pshift == 1 {
+                qsort_shl(&mut p, 1);
+                pshift = 0;
+            } else {
+                qsort_shl(&mut p, pshift - 1);
+                pshift = 1;
+            }
+        }
+
+        p[0] |= 1;
+        head = head.add(width);
+    }
+
+    qsort_trinkle(head, width, cmp, arg, &p, pshift, 0, &lp);
+
+    while pshift != 1 || p[0] != 1 || p[1] != 0 {
+        if pshift <= 1 {
+            let trail = qsort_pntz(&p);
+            qsort_shr(&mut p, trail);
+            pshift += trail;
+        } else {
+            qsort_shl(&mut p, 2);
+            pshift -= 2;
+            p[0] ^= 7;
+            qsort_shr(&mut p, 1);
+            qsort_trinkle(
+                head.sub(lp[pshift as usize] + width),
+                width, cmp, arg, &p, pshift + 1, 1, &lp,
+            );
+            qsort_shl(&mut p, 1);
+            p[0] |= 1;
+            qsort_trinkle(head.sub(width), width, cmp, arg, &p, pshift, 1, &lp);
+        }
+        head = head.sub(width);
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn qsort_r(
+    base: *mut c_void,
+    nel: usize,
+    width: usize,
+    cmp: CmpRfn,
+    arg: *mut c_void,
+) {
+    __qsort_r(base, nel, width, cmp, arg);
+}
+
+unsafe extern "C" fn qsort_wrap_cmp(
+    a: *const c_void,
+    b: *const c_void,
+    cmp_ctx: *mut c_void,
+) -> c_int {
+    let cmp: CmpFn = core::mem::transmute(cmp_ctx);
+    cmp(a, b)
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn qsort(
+    base: *mut c_void,
+    nel: usize,
+    width: usize,
+    cmp: CmpFn,
+) {
+    __qsort_r(base, nel, width, qsort_wrap_cmp, cmp as *mut c_void);
+}
+
+// ============================================================
+// atexit / __cxa_atexit / __funcs_on_exit
+// ============================================================
+
+const ATEXIT_COUNT: usize = 32;
+
+#[repr(C)]
+struct AtExitBlock {
+    next: *mut AtExitBlock,
+    f: [Option<unsafe extern "C" fn(*mut c_void)>; ATEXIT_COUNT],
+    a: [*mut c_void; ATEXIT_COUNT],
+}
+
+static mut ATEXIT_BUILTIN: AtExitBlock = AtExitBlock {
+    next: core::ptr::null_mut(),
+    f: [None; ATEXIT_COUNT],
+    a: [core::ptr::null_mut(); ATEXIT_COUNT],
+};
+static mut ATEXIT_HEAD: *mut AtExitBlock = core::ptr::null_mut();
+static mut ATEXIT_SLOT: usize = 0;
+static mut ATEXIT_FINISHED: bool = false;
+
+#[no_mangle]
+pub unsafe extern "C" fn __funcs_on_exit() {
+    while !ATEXIT_HEAD.is_null() {
+        let head = ATEXIT_HEAD;
+        while ATEXIT_SLOT > 0 {
+            ATEXIT_SLOT -= 1;
+            if let Some(f) = (*head).f[ATEXIT_SLOT] {
+                let a = (*head).a[ATEXIT_SLOT];
+                f(a);
+            }
+        }
+        ATEXIT_HEAD = (*head).next;
+        ATEXIT_SLOT = ATEXIT_COUNT;
+    }
+    ATEXIT_FINISHED = true;
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn __cxa_atexit(
+    func: unsafe extern "C" fn(*mut c_void),
+    arg: *mut c_void,
+    _dso: *mut c_void,
+) -> c_int {
+    if ATEXIT_FINISHED {
+        return -1;
+    }
+    if ATEXIT_HEAD.is_null() {
+        ATEXIT_HEAD = core::ptr::addr_of_mut!(ATEXIT_BUILTIN);
+    }
+    if ATEXIT_SLOT == ATEXIT_COUNT {
+        let new = calloc(1, core::mem::size_of::<AtExitBlock>()) as *mut AtExitBlock;
+        if new.is_null() {
+            return -1;
+        }
+        (*new).next = ATEXIT_HEAD;
+        ATEXIT_HEAD = new;
+        ATEXIT_SLOT = 0;
+    }
+    (*ATEXIT_HEAD).f[ATEXIT_SLOT] = Some(func);
+    (*ATEXIT_HEAD).a[ATEXIT_SLOT] = arg;
+    ATEXIT_SLOT += 1;
+    0
+}
+
+unsafe extern "C" fn atexit_caller(arg: *mut c_void) {
+    let func: unsafe extern "C" fn() = core::mem::transmute(arg);
+    func();
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn atexit(func: unsafe extern "C" fn()) -> c_int {
+    __cxa_atexit(atexit_caller, func as *mut c_void, core::ptr::null_mut())
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn __cxa_finalize(_dso: *mut c_void) {}
+
+// ============================================================
+// getenv / setenv / putenv / unsetenv / clearenv
+// ============================================================
+
+#[no_mangle]
+pub static mut __environ: *mut *mut c_char = core::ptr::null_mut();
+
+// ponytail: simple env tracking for allocated entries; O(n) scan
+const ENV_MAX_ALLOCED: usize = 256;
+static mut ENV_ALLOCED: [*mut c_char; ENV_MAX_ALLOCED] = [core::ptr::null_mut(); ENV_MAX_ALLOCED];
+static mut ENV_ALLOCED_N: usize = 0;
+
+unsafe fn env_rm_add(old: *mut c_char, mut new: *mut c_char) {
+    for i in 0..ENV_ALLOCED_N {
+        if ENV_ALLOCED[i] == old {
+            ENV_ALLOCED[i] = new;
+            if !old.is_null() {
+                free(old as *mut c_void);
+            }
+            return;
+        } else if ENV_ALLOCED[i].is_null() && !new.is_null() {
+            ENV_ALLOCED[i] = new;
+            new = core::ptr::null_mut();
+        }
+    }
+    if !new.is_null() && ENV_ALLOCED_N < ENV_MAX_ALLOCED {
+        ENV_ALLOCED[ENV_ALLOCED_N] = new;
+        ENV_ALLOCED_N += 1;
+    }
+}
+
+unsafe fn strchrnul(s: *const u8, c: u8) -> *const u8 {
+    let mut p = s;
+    while *p != 0 && *p != c {
+        p = p.add(1);
+    }
+    p
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn getenv(name: *const c_char) -> *mut c_char {
+    if __environ.is_null() || name.is_null() {
+        return core::ptr::null_mut();
+    }
+    let name = name as *const u8;
+    let l = strchrnul(name, b'=') as usize - name as usize;
+    if l == 0 || *name.add(l) != 0 {
+        return core::ptr::null_mut();
+    }
+    let mut e = __environ;
+    while !(*e).is_null() {
+        let entry = *e as *const u8;
+        if strncmp(entry, name, l) == 0 && *entry.add(l) == b'=' {
+            return entry.add(l + 1) as *mut c_char;
+        }
+        e = e.add(1);
+    }
+    core::ptr::null_mut()
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn setenv(
+    var: *const c_char,
+    value: *const c_char,
+    overwrite: c_int,
+) -> c_int {
+    if var.is_null() || value.is_null() {
+        ERRNO = EINVAL;
+        return -1;
+    }
+    let var = var as *const u8;
+    let l1 = strchrnul(var, b'=') as usize - var as usize;
+    if l1 == 0 || *var.add(l1) != 0 {
+        ERRNO = EINVAL;
+        return -1;
+    }
+    if overwrite == 0 && !getenv(var as *const c_char).is_null() {
+        return 0;
+    }
+    let l2 = strlen(value as *const u8);
+    let s = malloc(l1 + l2 + 2) as *mut u8;
+    if s.is_null() {
+        return -1;
+    }
+    core::ptr::copy_nonoverlapping(var, s, l1);
+    *s.add(l1) = b'=';
+    core::ptr::copy_nonoverlapping(value as *const u8, s.add(l1 + 1), l2 + 1);
+    putenv_internal(s as *mut c_char, l1, s as *mut c_char)
+}
+
+unsafe fn putenv_internal(s: *mut c_char, l: usize, r: *mut c_char) -> c_int {
+    let mut i = 0;
+    if !__environ.is_null() {
+        let mut e = __environ;
+        while !(*e).is_null() {
+            if strncmp(s as *const u8, *e as *const u8, l + 1) == 0 {
+                let tmp = *e;
+                *e = s;
+                env_rm_add(tmp, r);
+                return 0;
+            }
+            e = e.add(1);
+            i += 1;
+        }
+    }
+    let newenv = malloc(core::mem::size_of::<*mut c_char>() * (i + 2)) as *mut *mut c_char;
+    if newenv.is_null() {
+        if !r.is_null() { free(r as *mut c_void); }
+        return -1;
+    }
+    if i > 0 && !__environ.is_null() {
+        core::ptr::copy_nonoverlapping(__environ, newenv, i);
+    }
+    *newenv.add(i) = s;
+    *newenv.add(i + 1) = core::ptr::null_mut();
+    // ponytail: don't free old __environ (may not be from our malloc)
+    __environ = newenv;
+    if !r.is_null() {
+        env_rm_add(core::ptr::null_mut(), r);
+    }
+    0
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn putenv(s: *mut c_char) -> c_int {
+    if s.is_null() { return -1; }
+    let l = strchrnul(s as *const u8, b'=') as usize - s as *const u8 as usize;
+    if l == 0 || *s.add(l) as u8 == 0 {
+        return unsetenv(s);
+    }
+    putenv_internal(s, l, core::ptr::null_mut())
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn unsetenv(name: *const c_char) -> c_int {
+    if name.is_null() {
+        ERRNO = EINVAL;
+        return -1;
+    }
+    let name = name as *const u8;
+    let l = strchrnul(name, b'=') as usize - name as usize;
+    if l == 0 || *name.add(l) != 0 {
+        ERRNO = EINVAL;
+        return -1;
+    }
+    if __environ.is_null() {
+        return 0;
+    }
+    let mut e = __environ;
+    let mut eo = e;
+    while !(*e).is_null() {
+        if strncmp(name, *e as *const u8, l) == 0 && *(*e as *const u8).add(l) == b'=' {
+            env_rm_add(*e, core::ptr::null_mut());
+        } else {
+            if eo != e {
+                *eo = *e;
+            }
+            eo = eo.add(1);
+        }
+        e = e.add(1);
+    }
+    if eo != e {
+        *eo = core::ptr::null_mut();
+    }
+    0
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn clearenv() -> c_int {
+    let e = __environ;
+    __environ = core::ptr::null_mut();
+    if !e.is_null() {
+        let mut p = e;
+        while !(*p).is_null() {
+            env_rm_add(*p, core::ptr::null_mut());
+            p = p.add(1);
+        }
+    }
+    0
+}
+
+// ============================================================
+// multibyte (UTF-8, musl state machine)
+// ============================================================
+
+const SA: u8 = 0xC2;
+const SB: u8 = 0xF4;
+
+const BITTAB: [u32; 51] = [
+    0xC000_0002, 0xC000_0003, 0xC000_0004, 0xC000_0005, 0xC000_0006, 0xC000_0007,
+    0xC000_0008, 0xC000_0009, 0xC000_000A, 0xC000_000B, 0xC000_000C, 0xC000_000D,
+    0xC000_000E, 0xC000_000F, 0xC000_0010, 0xC000_0011, 0xC000_0012, 0xC000_0013,
+    0xC000_0014, 0xC000_0015, 0xC000_0016, 0xC000_0017, 0xC000_0018, 0xC000_0019,
+    0xC000_001A, 0xC000_001B, 0xC000_001C, 0xC000_001D, 0xC000_001E, 0xC000_001F,
+    0xB300_0000, 0xC300_0001, 0xC300_0002, 0xC300_0003, 0xC300_0004, 0xC300_0005,
+    0xC300_0006, 0xC300_0007, 0xC300_0008, 0xC300_0009, 0xC300_000A, 0xC300_000B,
+    0xC300_000C, 0xD300_000D, 0xC300_000E, 0xC300_000F, 0xBB0C_0000, 0xC30C_0001,
+    0xC30C_0002, 0xC30C_0003, 0xDB0C_0004,
+];
+
+#[inline]
+fn mb_oob(c: u32, b: u8) -> u32 {
+    let b3 = (b >> 3) as u32;
+    ((b3.wrapping_sub(0x10)) | (b3.wrapping_add((c as i32 >> 26) as u32))) & !7
+}
+
+static mut MB_STATE: c_uint = 0;
+
+const MB_CUR_MAX_VAL: usize = 4;
+
+#[no_mangle]
+pub extern "C" fn __ctype_get_mb_cur_max() -> usize {
+    MB_CUR_MAX_VAL
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn mbrtowc(
+    wc: *mut c_int,
+    src: *const c_char,
+    n: usize,
+    st: *mut c_uint,
+) -> usize {
+    let s = src as *const u8;
+    let n0 = n;
+    let mut dummy: c_int = 0;
+    let wc = if wc.is_null() { &mut dummy } else { &mut *wc };
+    let st: &mut c_uint = if st.is_null() { &mut *(&raw mut MB_STATE) } else { &mut *st };
+
+    let mut c: u32 = *st;
+    let mut s = s;
+    let mut n = n;
+
+    if s.is_null() {
+        if c != 0 { *st = 0; ERRNO = EILSEQ; return !0usize; }
+        return 0;
+    }
+
+    if n == 0 { return !1usize; }
+
+    if c == 0 {
+        if *s < 0x80 {
+            let r = if *s == 0 { 0 } else { 1 };
+            *wc = *s as c_int;
+            return r;
+        }
+        if (*s).wrapping_sub(SA) as u32 > (SB - SA) as u32 {
+            *st = 0; ERRNO = EILSEQ; return !0usize;
+        }
+        c = BITTAB[*s as usize - SA as usize];
+        s = s.add(1);
+        n -= 1;
+    }
+
+    if n > 0 {
+        if mb_oob(c, *s) != 0 {
+            *st = 0; ERRNO = EILSEQ; return !0usize;
+        }
+        loop {
+            c = (c << 6) | (*s as u32).wrapping_sub(0x80);
+            s = s.add(1);
+            n -= 1;
+            if c & (1u32 << 31) == 0 {
+                *st = 0;
+                *wc = c as c_int;
+                return n0 - n;
+            }
+            if n == 0 { break; }
+            if (*s).wrapping_sub(0x80) >= 0x40 {
+                *st = 0; ERRNO = EILSEQ; return !0usize;
+            }
+        }
+    }
+
+    *st = c;
+    !1usize
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn wcrtomb(
+    s: *mut c_char,
+    wc: c_int,
+    _st: *mut c_uint,
+) -> usize {
+    if s.is_null() { return 1; }
+    let wc = wc as u32;
+    if wc < 0x80 {
+        *s = wc as c_char;
+        return 1;
+    }
+    if wc < 0x800 {
+        *s = (0xC0 | (wc >> 6)) as c_char;
+        *s.add(1) = (0x80 | (wc & 0x3F)) as c_char;
+        return 2;
+    }
+    if wc < 0xD800 || wc.wrapping_sub(0xE000) < 0x2000 {
+        *s = (0xE0 | (wc >> 12)) as c_char;
+        *s.add(1) = (0x80 | ((wc >> 6) & 0x3F)) as c_char;
+        *s.add(2) = (0x80 | (wc & 0x3F)) as c_char;
+        return 3;
+    }
+    if wc.wrapping_sub(0x10000) < 0x100000 {
+        *s = (0xF0 | (wc >> 18)) as c_char;
+        *s.add(1) = (0x80 | ((wc >> 12) & 0x3F)) as c_char;
+        *s.add(2) = (0x80 | ((wc >> 6) & 0x3F)) as c_char;
+        *s.add(3) = (0x80 | (wc & 0x3F)) as c_char;
+        return 4;
+    }
+    ERRNO = EILSEQ;
+    !0usize
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn mblen(s: *const c_char, n: usize) -> c_int {
+    if s.is_null() { return 0; }
+    mbtowc(core::ptr::null_mut(), s, n)
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn mbtowc(
+    wc: *mut c_int,
+    src: *const c_char,
+    n: usize,
+) -> c_int {
+    if src.is_null() { return 0; }
+    if n == 0 { ERRNO = EILSEQ; return -1; }
+    let mut state: c_uint = 0;
+    let mut w: c_int = 0;
+    let r = mbrtowc(&mut w, src, n, &mut state);
+    if r == !0usize { return -1; }
+    if !wc.is_null() { *wc = w; }
+    r as c_int
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn wctomb(s: *mut c_char, wc: c_int) -> c_int {
+    if s.is_null() { return 0; }
+    wcrtomb(s, wc, core::ptr::null_mut()) as c_int
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn mbsrtowcs(
+    ws: *mut c_int,
+    src: *mut *const c_char,
+    wn: usize,
+    st: *mut c_uint,
+) -> usize {
+    let st: &mut c_uint = if st.is_null() { &mut *(&raw mut MB_STATE) } else { &mut *st };
+    let mut s = *src as *const u8;
+    let wn0 = wn;
+    let mut wn = wn;
+
+    if ws.is_null() {
+        while *s != 0 {
+            if *s < 0x80 {
+                s = s.add(1);
+                wn = wn.wrapping_sub(1);
+                continue;
+            }
+            let mut wc: c_int = 0;
+            let r = mbrtowc(&mut wc, s as *const c_char, 4, st);
+            if r == !0usize { return !0usize; }
+            if r == !1usize { return wn0 - wn; }
+            s = s.add(r);
+            wn = wn.wrapping_sub(1);
+        }
+        wn0 - wn
+    } else {
+        let mut w = ws;
+        while wn > 0 {
+            if *s < 0x80 {
+                let c = *s as c_int;
+                *w = c;
+                if c == 0 {
+                    *src = core::ptr::null();
+                    return wn0 - wn;
+                }
+                w = w.add(1);
+                s = s.add(1);
+                wn -= 1;
+                continue;
+            }
+            let mut wc: c_int = 0;
+            let r = mbrtowc(&mut wc, s as *const c_char, 4, st);
+            if r == !0usize {
+                *src = s as *const c_char;
+                return !0usize;
+            }
+            if r == !1usize {
+                *src = s as *const c_char;
+                return wn0 - wn;
+            }
+            *w = wc;
+            w = w.add(1);
+            s = s.add(r);
+            wn -= 1;
+        }
+        *src = s as *const c_char;
+        wn0 - wn
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn wcsrtombs(
+    s: *mut c_char,
+    ws: *mut *const c_int,
+    n: usize,
+    _st: *mut c_uint,
+) -> usize {
+    let mut w = *ws;
+    let n0 = n;
+    let mut n = n;
+
+    if s.is_null() {
+        let mut count = 0usize;
+        while *w != 0 {
+            if (*w as u32) < 0x80 {
+                count += 1;
+            } else {
+                let mut buf = [0u8; 4];
+                let r = wcrtomb(buf.as_mut_ptr() as *mut c_char, *w, core::ptr::null_mut());
+                if r == !0usize { return !0usize; }
+                count += r;
+            }
+            w = w.add(1);
+        }
+        return count;
+    }
+
+    let mut dst = s;
+    while n > 0 {
+        if (*w as u32) < 0x80 {
+            *dst = *w as c_char;
+            if *w == 0 {
+                *ws = core::ptr::null();
+                return n0 - n;
+            }
+            dst = dst.add(1);
+            n -= 1;
+        } else {
+            let r = wcrtomb(dst, *w, core::ptr::null_mut());
+            if r == !0usize {
+                *ws = w;
+                return !0usize;
+            }
+            if r > n {
+                *ws = w;
+                return n0 - n;
+            }
+            dst = dst.add(r);
+            n -= r;
+        }
+        w = w.add(1);
+    }
+    *ws = w;
+    n0
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn mbstowcs(
+    ws: *mut c_int,
+    src: *const c_char,
+    wn: usize,
+) -> usize {
+    let mut src_ptr = src;
+    mbsrtowcs(ws, &mut src_ptr, wn, core::ptr::null_mut())
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn wcstombs(
+    s: *mut c_char,
+    ws: *const c_int,
+    n: usize,
+) -> usize {
+    let mut ws_ptr = ws;
+    wcsrtombs(s, &mut ws_ptr, n, core::ptr::null_mut())
+}
+
+// ============================================================
+// system()
+// ============================================================
+
+#[no_mangle]
+pub unsafe extern "C" fn system(cmd: *const c_char) -> c_int {
+    if cmd.is_null() {
+        // ponytail: test shell availability via fork+exec
+        let pid = sys_fork();
+        if pid == 0 {
+            let sh = b"/bin/sh\0".as_ptr() as *const c_char;
+            let dash_c = b"-c\0".as_ptr() as *const c_char;
+            let exit0 = b"exit 0\0".as_ptr() as *const c_char;
+            let argv = [b"sh\0".as_ptr() as *const c_char, dash_c, exit0, core::ptr::null()];
+            sys_execve(sh, argv.as_ptr(), __environ as *const *const c_char);
+            _exit(127);
+        }
+        if pid < 0 { return -1; }
+        let mut status: c_int = 0;
+        loop {
+            let r = sys_wait4(pid as c_int, &mut status, 0, core::ptr::null_mut());
+            if r >= 0 { return status; }
+            if r != -4 { return -1; } // not EINTR
+        }
+    }
+
+    let sa_ignore = sigaction {
+        sa_handler: SIG_IGN,
+        sa_flags: SA_RESTORER,
+        sa_restorer: sig_restorer as usize,
+        sa_mask: [0],
+    };
+    let mut oldint: sigaction = core::mem::zeroed();
+    let mut oldquit: sigaction = core::mem::zeroed();
+
+    sys_rt_sigaction(SIGINT, &sa_ignore, &mut oldint, 8);
+    sys_rt_sigaction(SIGQUIT, &sa_ignore, &mut oldquit, 8);
+
+    let mut block_set: SigSetT = 0;
+    block_set |= 1u64 << (SIGCHLD - 1);
+    let mut oldmask: SigSetT = 0;
+    sys_rt_sigprocmask(SIG_BLOCK, &block_set, &mut oldmask, 8);
+
+    let pid = sys_fork();
+
+    if pid == 0 {
+        sys_rt_sigaction(SIGINT, &oldint, core::ptr::null_mut(), 8);
+        sys_rt_sigaction(SIGQUIT, &oldquit, core::ptr::null_mut(), 8);
+        sys_rt_sigprocmask(SIG_SETMASK, &oldmask, core::ptr::null_mut(), 8);
+
+        let sh = b"/bin/sh\0".as_ptr() as *const c_char;
+        let argv = [
+            b"sh\0".as_ptr() as *const c_char,
+            b"-c\0".as_ptr() as *const c_char,
+            cmd,
+            core::ptr::null(),
+        ];
+        sys_execve(sh, argv.as_ptr(), __environ as *const *const c_char);
+        _exit(127);
+    }
+
+    let mut status: c_int = -1;
+    if pid > 0 {
+        loop {
+            let r = sys_wait4(pid as c_int, &mut status, 0, core::ptr::null_mut());
+            if r >= 0 { break; }
+            if r != -4 { break; } // not EINTR
+        }
+    }
+
+    sys_rt_sigaction(SIGINT, &oldint, core::ptr::null_mut(), 8);
+    sys_rt_sigaction(SIGQUIT, &oldquit, core::ptr::null_mut(), 8);
+    sys_rt_sigprocmask(SIG_SETMASK, &oldmask, core::ptr::null_mut(), 8);
+
+    status
 }
 
 // ============================================================
@@ -2753,6 +3737,7 @@ pub unsafe extern "C" fn __libc_start_main(
     _stack_end: *const c_void,
 ) -> ! {
     let envp = argv.add((argc + 1) as usize);
+    __environ = envp as *mut *mut c_char;
 
     if !_init.is_null() {
         let init_fn: InitFn = core::mem::transmute(_init);

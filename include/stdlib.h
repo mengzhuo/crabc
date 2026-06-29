@@ -7,6 +7,20 @@
 extern "C" {
 #endif
 
+#define NULL ((void*)0)
+
+typedef struct { int quot, rem; } div_t;
+typedef struct { long quot, rem; } ldiv_t;
+typedef struct { long long quot, rem; } lldiv_t;
+
+#define EXIT_FAILURE 1
+#define EXIT_SUCCESS 0
+
+size_t __ctype_get_mb_cur_max(void);
+#define MB_CUR_MAX (__ctype_get_mb_cur_max())
+
+#define RAND_MAX (0x7fffffff)
+
 int atoi(const char *);
 long atol(const char *);
 long long atoll(const char *);
@@ -19,10 +33,44 @@ int abs(int);
 long labs(long);
 long long llabs(long long);
 
+div_t div(int, int);
+ldiv_t ldiv(long, long);
+lldiv_t lldiv(long long, long long);
+
 void srand(unsigned);
 int rand(void);
 
-#define RAND_MAX 0x7fff
+void *malloc(size_t);
+void *calloc(size_t, size_t);
+void *realloc(void *, size_t);
+void free(void *);
+
+_Noreturn void abort(void);
+int atexit(void (*)(void));
+_Noreturn void exit(int);
+_Noreturn void _Exit(int);
+
+char *getenv(const char *);
+int setenv(const char *, const char *, int);
+int putenv(char *);
+int unsetenv(const char *);
+int clearenv(void);
+
+int system(const char *);
+
+void *bsearch(const void *, const void *, size_t, size_t, int (*)(const void *, const void *));
+void qsort(void *, size_t, size_t, int (*)(const void *, const void *));
+void qsort_r(void *, size_t, size_t, int (*)(const void *, const void *, void *), void *);
+
+int mblen(const char *, size_t);
+int mbtowc(int *__restrict, const char *__restrict, size_t);
+int wctomb(char *, int);
+size_t mbstowcs(int *__restrict, const char *__restrict, size_t);
+size_t wcstombs(char *__restrict, const int *__restrict, size_t);
+size_t mbsrtowcs(int *__restrict, const char **__restrict, size_t, unsigned int *__restrict);
+size_t wcsrtombs(char *__restrict, const int **__restrict, size_t, unsigned int *__restrict);
+size_t wcrtomb(char *, int, unsigned int *);
+size_t mbrtowc(int *__restrict, const char *__restrict, size_t, unsigned int *__restrict);
 
 #ifdef __cplusplus
 }
