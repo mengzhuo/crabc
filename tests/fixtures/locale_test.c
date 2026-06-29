@@ -1,4 +1,6 @@
 #include <locale.h>
+#include <langinfo.h>
+#include <nl_types.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -11,6 +13,48 @@ int main(void) {
 
     struct lconv *lc = localeconv();
     if (strcmp(lc->decimal_point, ".") != 0) return 3;
+
+    locale_t l = newlocale(LC_ALL_MASK, "C", (locale_t)0);
+    if (l != (locale_t)0) return 4;
+    freelocale(l);
+
+    locale_t old = uselocale((locale_t)0);
+    (void)old;
+
+    locale_t dup = duplocale((locale_t)0);
+    if (dup != (locale_t)0) return 5;
+
+    char *cs = nl_langinfo(CODESET);
+    if (strcmp(cs, "UTF-8") != 0) return 6;
+
+    char *radix = nl_langinfo(RADIXCHAR);
+    if (strcmp(radix, ".") != 0) return 7;
+
+    char *day = nl_langinfo(DAY_1);
+    if (strcmp(day, "Sunday") != 0) return 8;
+
+    char *abday = nl_langinfo(ABDAY_1);
+    if (strcmp(abday, "Sun") != 0) return 9;
+
+    char *mon = nl_langinfo(MON_1);
+    if (strcmp(mon, "January") != 0) return 10;
+
+    char *abmon = nl_langinfo(ABMON_1);
+    if (strcmp(abmon, "Jan") != 0) return 11;
+
+    char *am = nl_langinfo(AM_STR);
+    if (strcmp(am, "AM") != 0) return 12;
+
+    char *dt = nl_langinfo(D_T_FMT);
+    if (dt[0] == '\0') return 13;
+
+    char *yes = nl_langinfo(YESEXPR);
+    if (yes[0] == '\0') return 14;
+
+    nl_catd cat = catopen("nonexistent", 0);
+    char *msg = catgets(cat, 1, 1, "default");
+    if (strcmp(msg, "default") != 0) return 15;
+    catclose(cat);
 
     printf("locale ok\n");
     return 0;

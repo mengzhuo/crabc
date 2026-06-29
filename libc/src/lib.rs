@@ -7,6 +7,8 @@ use core::ffi::{c_char, c_int, c_long, c_longlong, c_uint, c_ulong, c_ulonglong,
 use core::ptr::null_mut;
 use core::sync::atomic::{AtomicI32, AtomicUsize, Ordering};
 
+include!("encoding_tables.rs");
+
 // ============================================================
 // errno
 // ============================================================
@@ -14,6 +16,15 @@ use core::sync::atomic::{AtomicI32, AtomicUsize, Ordering};
 const EILSEQ: c_int = 84;
 const EINVAL: c_int = 22;
 const EFAULT: c_int = 14;
+const E2BIG: c_int = 7;
+
+const LC_CTYPE: c_int = 0;
+const LC_NUMERIC: c_int = 1;
+const LC_TIME: c_int = 2;
+const LC_COLLATE: c_int = 3;
+const LC_MONETARY: c_int = 4;
+const LC_MESSAGES: c_int = 5;
+const LC_ALL: c_int = 6;
 const ENOMEM: c_int = 12;
 const EINTR: c_int = 4;
 const EPERM: c_int = 1;
@@ -3122,20 +3133,575 @@ pub unsafe extern "C" fn localeconv() -> *mut lconv {
     lconv
 }
 
+pub type locale_t = *mut c_void;
+static mut CURRENT_LOCALE: locale_t = core::ptr::null_mut();
+
+#[no_mangle]
+pub unsafe extern "C" fn newlocale(mask: c_int, name: *const c_char, base: locale_t) -> locale_t {
+    if !name.is_null() && *name != 0 {
+        let n = name as *const u8;
+        if strcmp(n, b"C\0".as_ptr()) != 0 && strcmp(n, b"POSIX\0".as_ptr()) != 0 {
+            return core::ptr::null_mut();
+        }
+    }
+    core::ptr::null_mut()
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn freelocale(_loc: locale_t) {}
+
+#[no_mangle]
+pub unsafe extern "C" fn uselocale(loc: locale_t) -> locale_t {
+    let old = CURRENT_LOCALE;
+    if !loc.is_null() { return old; }
+    CURRENT_LOCALE = loc;
+    old
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn duplocale(_loc: locale_t) -> locale_t {
+    core::ptr::null_mut()
+}
+
+const NL_ITEM_CODESET: c_int = 14;
+const NL_ITEM_RADIXCHAR: c_int = 0x10000;
+const NL_ITEM_THOUSEP: c_int = 0x10001;
+const NL_ITEM_YESEXPR: c_int = 0x50000;
+const NL_ITEM_NOEXPR: c_int = 0x50001;
+
+const C_TIME_STRINGS: &[u8] = b"Sun\0Mon\0Tue\0Wed\0Thu\0Fri\0Sat\0\
+Sunday\0Monday\0Tuesday\0Wednesday\0Thursday\0Friday\0Saturday\0\
+Jan\0Feb\0Mar\0Apr\0May\0Jun\0Jul\0Aug\0Sep\0Oct\0Nov\0Dec\0\
+January\0February\0March\0April\0May\0June\0July\0August\0\
+September\0October\0November\0December\0\
+AM\0PM\0\
+%a %b %e %T %Y\0%m/%d/%y\0%H:%M:%S\0%I:%M:%S %p\0\
+\0\0%m/%d/%y\00123456789\0%a %b %e %T %Y\0%H:%M:%S\0";
+
+const C_NUMERIC_STRINGS: &[u8] = b".\0\0";
+const C_MESSAGES_STRINGS: &[u8] = b"^[yY]\0^[nN]\0";
+
+unsafe fn langinfo_str(table: *const u8, mut idx: c_int) -> *mut c_char {
+    let mut p = table;
+    while idx > 0 {
+        while *p != 0 { p = p.add(1); }
+        p = p.add(1);
+        idx -= 1;
+    }
+    p as *mut c_char
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn nl_langinfo(item: c_int) -> *mut c_char {
+    if item == NL_ITEM_CODESET {
+        return b"UTF-8\0".as_ptr() as *mut c_char;
+    }
+    let cat = item >> 16;
+    let idx = item & 0xFFFF;
+    match cat {
+        1 => {
+            if idx > 1 { return b"\0".as_ptr() as *mut c_char; }
+            langinfo_str(C_NUMERIC_STRINGS.as_ptr(), idx)
+        }
+        2 => {
+            if idx > 49 { return b"\0".as_ptr() as *mut c_char; }
+            langinfo_str(C_TIME_STRINGS.as_ptr(), idx)
+        }
+        5 => {
+            if idx > 1 { return b"\0".as_ptr() as *mut c_char; }
+            langinfo_str(C_MESSAGES_STRINGS.as_ptr(), idx)
+        }
+        _ => b"\0".as_ptr() as *mut c_char,
+    }
+}
+
+pub type nl_catd = *mut c_void;
+
+#[no_mangle]
+pub unsafe extern "C" fn catopen(_name: *const c_char, _oflag: c_int) -> nl_catd {
+    !0usize as nl_catd
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn catclose(_catd: nl_catd) -> c_int { 0 }
+
+#[no_mangle]
+pub unsafe extern "C" fn catgets(catd: nl_catd, _set_id: c_int, _msg_id: c_int, s: *const c_char) -> *mut c_char {
+    if catd == !0usize as nl_catd { return s as *mut c_char; }
+    s as *mut c_char
+}
+
 pub type IconvT = *mut c_void;
-const ICONV_INVALID: IconvT = !0usize as IconvT;
-const ICONV_IDENTITY: IconvT = 1usize as IconvT;
+
+const ENC_UTF8: i32 = 1;
+const ENC_UTF16LE: i32 = 2;
+const ENC_UTF16BE: i32 = 3;
+const ENC_UTF32LE: i32 = 4;
+const ENC_UTF32BE: i32 = 5;
+const ENC_WCHAR_T: i32 = 6;
+const ENC_ASCII: i32 = 7;
+const ENC_LATIN1: i32 = 8;
+const ENC_WIN1252: i32 = 9;
+const ENC_WIN1251: i32 = 10;
+const ENC_KOI8R: i32 = 11;
+const ENC_GBK: i32 = 12;
+const ENC_GB2312: i32 = 13;
+const ENC_BIG5: i32 = 14;
+const ENC_EUCJP: i32 = 15;
+const ENC_SHIFTJIS: i32 = 16;
+
+fn make_cd(from: i32, to: i32) -> IconvT {
+    ((from as usize) << 16 | (to as usize) | 1) as IconvT
+}
+fn extract_from(cd: IconvT) -> i32 {
+    ((cd as usize) >> 16) as i32
+}
+fn extract_to(cd: IconvT) -> i32 {
+    ((cd as usize) & 0xFFFF) as i32
+}
+
+unsafe fn match_name(input: *const u8, target: &[u8]) -> bool {
+    let mut i = input;
+    let mut j = 0;
+    while *i != 0 && j < target.len() {
+        let mut c = *i;
+        if !c.is_ascii_alphanumeric() { i = i.add(1); continue; }
+        c = c.to_ascii_lowercase();
+        if c != target[j] { return false; }
+        i = i.add(1);
+        j += 1;
+    }
+    while *i != 0 && !(*i).is_ascii_alphanumeric() { i = i.add(1); }
+    *i == 0 && j == target.len()
+}
+
+unsafe fn find_encoding(name: *const u8) -> i32 {
+    if name.is_null() { return -1; }
+    if match_name(name, b"utf8") || match_name(name, b"utf-8") || match_name(name, b"char") { return ENC_UTF8; }
+    if match_name(name, b"utf16le") || match_name(name, b"utf-16le") { return ENC_UTF16LE; }
+    if match_name(name, b"utf16be") || match_name(name, b"utf-16be") { return ENC_UTF16BE; }
+    if match_name(name, b"utf32le") || match_name(name, b"utf-32le") || match_name(name, b"ucs4le") { return ENC_UTF32LE; }
+    if match_name(name, b"utf32be") || match_name(name, b"utf-32be") || match_name(name, b"ucs4be") { return ENC_UTF32BE; }
+    if match_name(name, b"wchart") || match_name(name, b"wchar-t") { return ENC_WCHAR_T; }
+    if match_name(name, b"ascii") || match_name(name, b"usascii") || match_name(name, b"iso646") { return ENC_ASCII; }
+    if match_name(name, b"iso88591") || match_name(name, b"iso-8859-1") || match_name(name, b"latin1") { return ENC_LATIN1; }
+    if match_name(name, b"cp1252") || match_name(name, b"windows1252") || match_name(name, b"windows-1252") { return ENC_WIN1252; }
+    if match_name(name, b"cp1251") || match_name(name, b"windows1251") || match_name(name, b"windows-1251") { return ENC_WIN1251; }
+    if match_name(name, b"koi8r") || match_name(name, b"koi8-r") { return ENC_KOI8R; }
+    if match_name(name, b"gbk") || match_name(name, b"cp936") { return ENC_GBK; }
+    if match_name(name, b"gb2312") { return ENC_GB2312; }
+    if match_name(name, b"big5") || match_name(name, b"bigfive") || match_name(name, b"cp950") { return ENC_BIG5; }
+    if match_name(name, b"eucjp") || match_name(name, b"euc-jp") { return ENC_EUCJP; }
+    if match_name(name, b"shiftjis") || match_name(name, b"sjis") || match_name(name, b"cp932") { return ENC_SHIFTJIS; }
+    -1
+}
+
+fn uni_to_jis(c: u32) -> u16 {
+    let mut b = 0usize;
+    let mut nel = REV_JIS.len();
+    loop {
+        let i = nel / 2;
+        let j = REV_JIS[b + i] as usize;
+        let row = j / 256;
+        let col = j % 256;
+        let d = JIS0208[row * 94 + col] as u32;
+        if d == c { return (j as u16) + 0x2121; }
+        if nel == 1 { return 0; }
+        if c < d { nel /= 2; }
+        else { b += i; nel -= nel / 2; }
+    }
+}
+
+unsafe fn iconv_decode(enc: i32, src: *const u8, src_left: usize) -> (u32, usize, c_int) {
+    if src_left == 0 { return (0, 0, EINVAL); }
+    match enc {
+        ENC_UTF8 => {
+            let c = *src;
+            if c < 128 { return (c as u32, 1, 0); }
+            if c < 0xC2 { return (0, 0, EILSEQ); }
+            if c < 0xE0 {
+                if src_left < 2 || (*src.add(1) & 0xC0) != 0x80 { return (0, 0, EILSEQ); }
+                return (((c as u32 & 0x1F) << 6) | (*src.add(1) as u32 & 0x3F), 2, 0);
+            }
+            if c < 0xF0 {
+                if src_left < 3 || (*src.add(1) & 0xC0) != 0x80 || (*src.add(2) & 0xC0) != 0x80 { return (0, 0, EILSEQ); }
+                let cp = ((c as u32 & 0x0F) << 12) | ((*src.add(1) as u32 & 0x3F) << 6) | (*src.add(2) as u32 & 0x3F);
+                if cp < 0x800 { return (0, 0, EILSEQ); }
+                return (cp, 3, 0);
+            }
+            if c < 0xF8 {
+                if src_left < 4 || (*src.add(1) & 0xC0) != 0x80 || (*src.add(2) & 0xC0) != 0x80 || (*src.add(3) & 0xC0) != 0x80 { return (0, 0, EILSEQ); }
+                let cp = ((c as u32 & 0x07) << 18) | ((*src.add(1) as u32 & 0x3F) << 12) | ((*src.add(2) as u32 & 0x3F) << 6) | (*src.add(3) as u32 & 0x3F);
+                if cp < 0x10000 || cp >= 0x110000 { return (0, 0, EILSEQ); }
+                return (cp, 4, 0);
+            }
+            (0, 0, EILSEQ)
+        }
+        ENC_UTF16LE => {
+            if src_left < 2 { return (0, 0, EINVAL); }
+            let c = (*src as u32) | ((*src.add(1) as u32) << 8);
+            if c >= 0xD800 && c <= 0xDBFF {
+                if src_left < 4 { return (0, 0, EINVAL); }
+                let d = (*src.add(2) as u32) | ((*src.add(3) as u32) << 8);
+                if d < 0xDC00 || d > 0xDFFF { return (0, 0, EILSEQ); }
+                return (((c - 0xD800) << 10) + (d - 0xDC00) + 0x10000, 4, 0);
+            }
+            if c >= 0xDC00 && c <= 0xDFFF { return (0, 0, EILSEQ); }
+            (c, 2, 0)
+        }
+        ENC_UTF16BE => {
+            if src_left < 2 { return (0, 0, EINVAL); }
+            let c = ((*src as u32) << 8) | (*src.add(1) as u32);
+            if c >= 0xD800 && c <= 0xDBFF {
+                if src_left < 4 { return (0, 0, EINVAL); }
+                let d = ((*src.add(2) as u32) << 8) | (*src.add(3) as u32);
+                if d < 0xDC00 || d > 0xDFFF { return (0, 0, EILSEQ); }
+                return (((c - 0xD800) << 10) + (d - 0xDC00) + 0x10000, 4, 0);
+            }
+            if c >= 0xDC00 && c <= 0xDFFF { return (0, 0, EILSEQ); }
+            (c, 2, 0)
+        }
+        ENC_UTF32LE => {
+            if src_left < 4 { return (0, 0, EINVAL); }
+            let c = (*src as u32) | ((*src.add(1) as u32) << 8) | ((*src.add(2) as u32) << 16) | ((*src.add(3) as u32) << 24);
+            if c >= 0xD800 && c < 0xE000 { return (0, 0, EILSEQ); }
+            if c >= 0x110000 { return (0, 0, EILSEQ); }
+            (c, 4, 0)
+        }
+        ENC_UTF32BE => {
+            if src_left < 4 { return (0, 0, EINVAL); }
+            let c = ((*src as u32) << 24) | ((*src.add(1) as u32) << 16) | ((*src.add(2) as u32) << 8) | (*src.add(3) as u32);
+            if c >= 0xD800 && c < 0xE000 { return (0, 0, EILSEQ); }
+            if c >= 0x110000 { return (0, 0, EILSEQ); }
+            (c, 4, 0)
+        }
+        ENC_WCHAR_T => {
+            if src_left < 4 { return (0, 0, EINVAL); }
+            let c = *(src as *const u32);
+            if c >= 0xD800 && c < 0xE000 { return (0, 0, EILSEQ); }
+            if c >= 0x110000 { return (0, 0, EILSEQ); }
+            (c, 4, 0)
+        }
+        ENC_ASCII => {
+            let c = *src as u32;
+            if c >= 128 { return (0, 0, EILSEQ); }
+            (c, 1, 0)
+        }
+        ENC_LATIN1 => (*src as u32, 1, 0),
+        ENC_WIN1252 => {
+            let b = *src;
+            if b < 128 { return (b as u32, 1, 0); }
+            (WIN1252_TO_U[b as usize - 128], 1, 0)
+        }
+        ENC_WIN1251 => {
+            let b = *src;
+            if b < 128 { return (b as u32, 1, 0); }
+            (WIN1251_TO_U[b as usize - 128], 1, 0)
+        }
+        ENC_KOI8R => {
+            let b = *src;
+            if b < 128 { return (b as u32, 1, 0); }
+            (KOI8R_TO_U[b as usize - 128], 1, 0)
+        }
+        ENC_GBK | ENC_GB2312 => {
+            let c = *src;
+            if c < 128 { return (c as u32, 1, 0); }
+            if c == 128 { return (0x20AC, 1, 0); }
+            if src_left < 2 { return (0, 0, EINVAL); }
+            let d = *src.add(1);
+            if d < 0x40 || d == 0x7F || d > 0xFE { return (0, 0, EILSEQ); }
+            let row = (c as usize).wrapping_sub(0x81);
+            if row >= 126 { return (0, 0, EILSEQ); }
+            let mut col = (d as usize) - 0x40;
+            if col > 63 { col -= 1; }
+            let cp = GB18030_TABLE[row * 190 + col] as u32;
+            if cp == 0 { return (0, 0, EILSEQ); }
+            (cp, 2, 0)
+        }
+        ENC_BIG5 => {
+            let c = *src;
+            if c < 128 { return (c as u32, 1, 0); }
+            if src_left < 2 { return (0, 0, EINVAL); }
+            let d = *src.add(1);
+            if d < 0x40 || d == 0x7F || d > 0xFE { return (0, 0, EILSEQ); }
+            let mut col = (d as usize) - 0x40;
+            if col > 0x3E { col -= 0x22; }
+            if c >= 0xA1 && c < 0xFA {
+                let row = (c as usize) - 0xA1;
+                if row >= 89 { return (0, 0, EILSEQ); }
+                let cp = BIG5_TABLE[row * 157 + col] as u32;
+                if cp == 0 { return (0, 0, EILSEQ); }
+                return (cp, 2, 0);
+            }
+            (0, 0, EILSEQ)
+        }
+        ENC_EUCJP => {
+            let c = *src;
+            if c < 128 { return (c as u32, 1, 0); }
+            if c == 0x8E {
+                if src_left < 2 { return (0, 0, EINVAL); }
+                let d = *src.add(1);
+                if d < 0xA1 || d > 0xDF { return (0, 0, EILSEQ); }
+                return ((d as u32) + 0xFF61 - 0xA1, 2, 0);
+            }
+            if c < 0xA1 { return (0, 0, EILSEQ); }
+            if src_left < 2 { return (0, 0, EINVAL); }
+            let d = *src.add(1);
+            if d < 0xA1 || d > 0xFE { return (0, 0, EILSEQ); }
+            let row = (c as usize) - 0xA1;
+            let col = (d as usize) - 0xA1;
+            if row >= 84 || col >= 94 { return (0, 0, EILSEQ); }
+            let cp = JIS0208[row * 94 + col] as u32;
+            if cp == 0 { return (0, 0, EILSEQ); }
+            (cp, 2, 0)
+        }
+        ENC_SHIFTJIS => {
+            let c = *src;
+            if c < 128 { return (c as u32, 1, 0); }
+            if c >= 0xA1 && c <= 0xDF { return ((c as u32) + 0xFF61 - 0xA1, 1, 0); }
+            if src_left < 2 { return (0, 0, EINVAL); }
+            let d = *src.add(1);
+            if d < 0x40 || d == 0x7F || d > 0xFC { return (0, 0, EILSEQ); }
+            let row = if c >= 129 && c <= 159 { (c as usize) - 129 }
+                      else if c >= 224 && c <= 239 { (c as usize) - 193 }
+                      else { return (0, 0, EILSEQ); };
+            let (col, row_adj) = if d >= 64 && d <= 158 && d != 127 {
+                let mut dd = d as usize;
+                if dd > 127 { dd -= 1; }
+                (dd - 64, row * 2)
+            } else if d >= 159 && d <= 252 {
+                ((d as usize) - 159, row * 2 + 1)
+            } else {
+                return (0, 0, EILSEQ);
+            };
+            if row_adj >= 84 { return (0, 0, EILSEQ); }
+            let cp = JIS0208[row_adj * 94 + col] as u32;
+            if cp == 0 { return (0, 0, EILSEQ); }
+            (cp, 2, 0)
+        }
+        _ => (0, 0, EILSEQ),
+    }
+}
+
+unsafe fn iconv_encode(enc: i32, c: u32, dst: *mut u8, dst_left: usize) -> (usize, c_int) {
+    match enc {
+        ENC_UTF8 => {
+            if c < 0x80 {
+                if dst_left < 1 { return (0, E2BIG); }
+                *dst = c as u8; return (1, 0);
+            }
+            if c < 0x800 {
+                if dst_left < 2 { return (0, E2BIG); }
+                *dst = (0xC0 | (c >> 6)) as u8;
+                *dst.add(1) = (0x80 | (c & 0x3F)) as u8;
+                return (2, 0);
+            }
+            if c < 0x10000 {
+                if dst_left < 3 { return (0, E2BIG); }
+                *dst = (0xE0 | (c >> 12)) as u8;
+                *dst.add(1) = (0x80 | ((c >> 6) & 0x3F)) as u8;
+                *dst.add(2) = (0x80 | (c & 0x3F)) as u8;
+                return (3, 0);
+            }
+            if dst_left < 4 { return (0, E2BIG); }
+            *dst = (0xF0 | (c >> 18)) as u8;
+            *dst.add(1) = (0x80 | ((c >> 12) & 0x3F)) as u8;
+            *dst.add(2) = (0x80 | ((c >> 6) & 0x3F)) as u8;
+            *dst.add(3) = (0x80 | (c & 0x3F)) as u8;
+            (4, 0)
+        }
+        ENC_UTF16LE => {
+            if c < 0x10000 {
+                if dst_left < 2 { return (0, E2BIG); }
+                *dst = (c & 0xFF) as u8;
+                *dst.add(1) = (c >> 8) as u8;
+                return (2, 0);
+            }
+            if dst_left < 4 { return (0, E2BIG); }
+            let c = c - 0x10000;
+            let hi = ((c >> 10) + 0xD800) as u16;
+            let lo = ((c & 0x3FF) + 0xDC00) as u16;
+            *dst = (hi & 0xFF) as u8; *dst.add(1) = (hi >> 8) as u8;
+            *dst.add(2) = (lo & 0xFF) as u8; *dst.add(3) = (lo >> 8) as u8;
+            (4, 0)
+        }
+        ENC_UTF16BE => {
+            if c < 0x10000 {
+                if dst_left < 2 { return (0, E2BIG); }
+                *dst = (c >> 8) as u8;
+                *dst.add(1) = (c & 0xFF) as u8;
+                return (2, 0);
+            }
+            if dst_left < 4 { return (0, E2BIG); }
+            let c = c - 0x10000;
+            let hi = ((c >> 10) + 0xD800) as u16;
+            let lo = ((c & 0x3FF) + 0xDC00) as u16;
+            *dst = (hi >> 8) as u8; *dst.add(1) = (hi & 0xFF) as u8;
+            *dst.add(2) = (lo >> 8) as u8; *dst.add(3) = (lo & 0xFF) as u8;
+            (4, 0)
+        }
+        ENC_UTF32LE => {
+            if dst_left < 4 { return (0, E2BIG); }
+            *dst = (c & 0xFF) as u8; *dst.add(1) = ((c >> 8) & 0xFF) as u8;
+            *dst.add(2) = ((c >> 16) & 0xFF) as u8; *dst.add(3) = (c >> 24) as u8;
+            (4, 0)
+        }
+        ENC_UTF32BE => {
+            if dst_left < 4 { return (0, E2BIG); }
+            *dst = (c >> 24) as u8; *dst.add(1) = ((c >> 16) & 0xFF) as u8;
+            *dst.add(2) = ((c >> 8) & 0xFF) as u8; *dst.add(3) = (c & 0xFF) as u8;
+            (4, 0)
+        }
+        ENC_WCHAR_T => {
+            if dst_left < 4 { return (0, E2BIG); }
+            *(dst as *mut u32) = c;
+            (4, 0)
+        }
+        ENC_ASCII => {
+            if c < 128 {
+                if dst_left < 1 { return (0, E2BIG); }
+                *dst = c as u8; return (1, 0);
+            }
+            (0, EILSEQ)
+        }
+        ENC_LATIN1 => {
+            if c < 256 {
+                if dst_left < 1 { return (0, E2BIG); }
+                *dst = c as u8; return (1, 0);
+            }
+            (0, EILSEQ)
+        }
+        ENC_WIN1252 => {
+            if c < 128 {
+                if dst_left < 1 { return (0, E2BIG); }
+                *dst = c as u8; return (1, 0);
+            }
+            if c >= 0xA0 && c <= 0xFF && WIN1252_TO_U[c as usize - 128] == c {
+                if dst_left < 1 { return (0, E2BIG); }
+                *dst = c as u8; return (1, 0);
+            }
+            for i in 0..128usize {
+                if WIN1252_TO_U[i] == c {
+                    if dst_left < 1 { return (0, E2BIG); }
+                    *dst = (i + 128) as u8; return (1, 0);
+                }
+            }
+            (0, EILSEQ)
+        }
+        ENC_WIN1251 => {
+            if c < 128 {
+                if dst_left < 1 { return (0, E2BIG); }
+                *dst = c as u8; return (1, 0);
+            }
+            for i in 0..128usize {
+                if WIN1251_TO_U[i] == c {
+                    if dst_left < 1 { return (0, E2BIG); }
+                    *dst = (i + 128) as u8; return (1, 0);
+                }
+            }
+            (0, EILSEQ)
+        }
+        ENC_KOI8R => {
+            if c < 128 {
+                if dst_left < 1 { return (0, E2BIG); }
+                *dst = c as u8; return (1, 0);
+            }
+            for i in 0..128usize {
+                if KOI8R_TO_U[i] == c {
+                    if dst_left < 1 { return (0, E2BIG); }
+                    *dst = (i + 128) as u8; return (1, 0);
+                }
+            }
+            (0, EILSEQ)
+        }
+        ENC_GBK | ENC_GB2312 => {
+            if c < 128 {
+                if dst_left < 1 { return (0, E2BIG); }
+                *dst = c as u8; return (1, 0);
+            }
+            if c == 0x20AC {
+                if dst_left < 1 { return (0, E2BIG); }
+                *dst = 128; return (1, 0);
+            }
+            for row in 0..126usize {
+                for col in 0..190usize {
+                    if GB18030_TABLE[row * 190 + col] as u32 == c {
+                        if dst_left < 2 { return (0, E2BIG); }
+                        *dst = (row + 0x81) as u8;
+                        *dst.add(1) = if col <= 62 { (col + 0x40) as u8 } else { (col + 0x41) as u8 };
+                        return (2, 0);
+                    }
+                }
+            }
+            (0, EILSEQ)
+        }
+        ENC_BIG5 => {
+            if c < 128 {
+                if dst_left < 1 { return (0, E2BIG); }
+                *dst = c as u8; return (1, 0);
+            }
+            for row in 0..89usize {
+                for col in 0..157usize {
+                    if BIG5_TABLE[row * 157 + col] as u32 == c {
+                        if dst_left < 2 { return (0, E2BIG); }
+                        *dst = (row + 0xA1) as u8;
+                        *dst.add(1) = if col <= 0x3E { (col + 0x40) as u8 } else { (col + 0x62) as u8 };
+                        return (2, 0);
+                    }
+                }
+            }
+            (0, EILSEQ)
+        }
+        ENC_EUCJP => {
+            if c < 128 {
+                if dst_left < 1 { return (0, E2BIG); }
+                *dst = c as u8; return (1, 0);
+            }
+            if c >= 0xFF61 && c <= 0xFF9F {
+                if dst_left < 2 { return (0, E2BIG); }
+                *dst = 0x8E;
+                *dst.add(1) = (c - 0xFF61 + 0xA1) as u8;
+                return (2, 0);
+            }
+            let jis = uni_to_jis(c);
+            if jis == 0 { return (0, EILSEQ); }
+            if dst_left < 2 { return (0, E2BIG); }
+            *dst = ((jis >> 8) as u8).wrapping_add(0x80);
+            *dst.add(1) = ((jis & 0xFF) as u8).wrapping_add(0x80);
+            (2, 0)
+        }
+        ENC_SHIFTJIS => {
+            if c < 128 {
+                if dst_left < 1 { return (0, E2BIG); }
+                *dst = c as u8; return (1, 0);
+            }
+            if c >= 0xFF61 && c <= 0xFF9F {
+                if dst_left < 1 { return (0, E2BIG); }
+                *dst = (c - 0xFF61 + 0xA1) as u8;
+                return (1, 0);
+            }
+            let jis = uni_to_jis(c);
+            if jis == 0 { return (0, EILSEQ); }
+            if dst_left < 2 { return (0, E2BIG); }
+            let r = (jis >> 8) as usize;
+            let d = (jis & 0xFF) as usize;
+            *dst = ((r + 1) / 2 + if r < 95 { 112 } else { 176 }) as u8;
+            *dst.add(1) = if r % 2 == 1 { (d + 31 + d / 96) as u8 } else { (d + 126) as u8 };
+            (2, 0)
+        }
+        _ => (0, EILSEQ),
+    }
+}
 
 #[no_mangle]
 pub unsafe extern "C" fn iconv_open(tocode: *const c_char, fromcode: *const c_char) -> IconvT {
-    if tocode.is_null() || fromcode.is_null() {
-        return ICONV_INVALID;
+    let to = find_encoding(tocode as *const u8);
+    let from = find_encoding(fromcode as *const u8);
+    if to < 0 || from < 0 {
+        ERRNO = EINVAL;
+        return !0usize as IconvT;
     }
-    if strcmp(tocode as *const u8, fromcode as *const u8) == 0 {
-        ICONV_IDENTITY
-    } else {
-        ICONV_INVALID
-    }
+    make_cd(from, to)
 }
 
 #[no_mangle]
@@ -3146,45 +3712,55 @@ pub unsafe extern "C" fn iconv(
     outbuf: *mut *mut c_char,
     outbytesleft: *mut SizeT,
 ) -> SizeT {
-    if cd == ICONV_INVALID {
+    if cd == !0usize as IconvT {
+        ERRNO = EINVAL;
         return !0usize;
     }
-    if cd != ICONV_IDENTITY {
-        return !0usize;
-    }
-    if inbuf.is_null() || outbuf.is_null() {
-        return 0;
-    }
-    let mut src = *inbuf;
-    let mut dst = *outbuf;
+    if inbuf.is_null() || outbuf.is_null() { return 0; }
+    let from = extract_from(cd);
+    let to = extract_to(cd);
+    let mut src = *inbuf as *const u8;
+    let mut dst = *outbuf as *mut u8;
     let mut src_left = *inbytesleft;
     let mut dst_left = *outbytesleft;
-    while src_left > 0 && dst_left > 0 {
-        *dst = *src;
-        src = src.add(1);
-        dst = dst.add(1);
-        src_left -= 1;
-        dst_left -= 1;
+    let mut subst = 0usize;
+    while src_left > 0 {
+        let (cp, consumed, err) = iconv_decode(from, src, src_left);
+        if err != 0 {
+            if err == EINVAL { break; }
+            ERRNO = err;
+            return !0usize;
+        }
+        let (written, err) = iconv_encode(to, cp, dst, dst_left);
+        if err != 0 {
+            if err == E2BIG {
+                ERRNO = E2BIG;
+                return !0usize;
+            }
+            if dst_left < 1 {
+                ERRNO = E2BIG;
+                return !0usize;
+            }
+            *dst = b'*';
+            dst = dst.add(1);
+            dst_left -= 1;
+            subst += 1;
+        } else {
+            dst = dst.add(written);
+            dst_left -= written;
+        }
+        src = src.add(consumed);
+        src_left -= consumed;
     }
-    *inbuf = src;
-    *outbuf = dst;
+    *inbuf = src as *mut c_char;
+    *outbuf = dst as *mut c_char;
     *inbytesleft = src_left;
     *outbytesleft = dst_left;
-    if src_left == 0 {
-        0
-    } else {
-        !0usize
-    }
+    subst
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn iconv_close(cd: IconvT) -> c_int {
-    if cd == ICONV_IDENTITY {
-        0
-    } else {
-        -1
-    }
-}
+pub unsafe extern "C" fn iconv_close(_cd: IconvT) -> c_int { 0 }
 
 #[no_mangle]
 pub extern "C" fn acos(x: f64) -> f64 {
