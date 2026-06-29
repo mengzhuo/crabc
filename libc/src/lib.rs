@@ -1,16 +1,18 @@
-#![no_std]
+#![cfg_attr(not(test), no_std)]
 #![feature(c_variadic)]
 #![allow(dead_code)]
 
 use core::ffi::{c_char, c_int, c_long, c_uint, c_ulong, c_void, VaListImpl};
 use core::ptr::null_mut;
 
+#[cfg(not(test))]
 #[panic_handler]
 fn panic(_: &core::panic::PanicInfo) -> ! {
     loop {}
 }
 
 // ponytail: stub for linker; never called with panic=abort
+#[cfg(not(test))]
 #[no_mangle]
 pub extern "C" fn rust_eh_personality() {}
 
@@ -257,6 +259,152 @@ pub unsafe extern "C" fn strcpy(dst: *mut u8, src: *const u8) -> *mut u8 {
 
 type SizeT = usize;
 type SSizeT = isize;
+
+// ============================================================
+// ctype.h
+// ============================================================
+
+const CT_UPPER: u8 = 1 << 0;
+const CT_LOWER: u8 = 1 << 1;
+const CT_DIGIT: u8 = 1 << 2;
+const CT_SPACE: u8 = 1 << 3;
+const CT_PUNCT: u8 = 1 << 4;
+const CT_CNTRL: u8 = 1 << 5;
+const CT_BLANK: u8 = 1 << 6;
+const CT_XDIGIT: u8 = 1 << 7;
+
+const CT_TABLE: [u8; 128] = {
+    let mut t = [0u8; 128];
+    let mut i = 0;
+    while i < 128 {
+        let c = i as u8;
+        let mut flags = 0u8;
+        if c >= b'A' && c <= b'Z' {
+            flags |= CT_UPPER;
+        }
+        if c >= b'a' && c <= b'z' {
+            flags |= CT_LOWER;
+        }
+        if c >= b'0' && c <= b'9' {
+            flags |= CT_DIGIT;
+        }
+        if c == b' ' || c == b'\t' || c == b'\n' || c == b'\r' || c == b'\x0c' || c == b'\x0b' {
+            flags |= CT_SPACE;
+        }
+        if (c >= b'!' && c <= b'/')
+            || (c >= b':' && c <= b'@')
+            || (c >= b'[' && c <= b'`')
+            || (c >= b'{' && c <= b'~')
+        {
+            flags |= CT_PUNCT;
+        }
+        if c < 0x20 || c == 0x7f {
+            flags |= CT_CNTRL;
+        }
+        if c == b' ' || c == b'\t' {
+            flags |= CT_BLANK;
+        }
+        if (c >= b'0' && c <= b'9') || (c >= b'A' && c <= b'F') || (c >= b'a' && c <= b'f') {
+            flags |= CT_XDIGIT;
+        }
+        t[i] = flags;
+        i += 1;
+    }
+    t
+};
+
+#[inline]
+fn ct_flags(c: c_int) -> u8 {
+    if c < 0 || c > 127 {
+        0
+    } else {
+        CT_TABLE[c as usize]
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn isalnum(c: c_int) -> c_int {
+    (ct_flags(c) & (CT_UPPER | CT_LOWER | CT_DIGIT) != 0) as c_int
+}
+
+#[no_mangle]
+pub extern "C" fn isalpha(c: c_int) -> c_int {
+    (ct_flags(c) & (CT_UPPER | CT_LOWER) != 0) as c_int
+}
+
+#[no_mangle]
+pub extern "C" fn isascii(c: c_int) -> c_int {
+    ((c as u32) <= 127) as c_int
+}
+
+#[no_mangle]
+pub extern "C" fn isblank(c: c_int) -> c_int {
+    (ct_flags(c) & CT_BLANK != 0) as c_int
+}
+
+#[no_mangle]
+pub extern "C" fn iscntrl(c: c_int) -> c_int {
+    (ct_flags(c) & CT_CNTRL != 0) as c_int
+}
+
+#[no_mangle]
+pub extern "C" fn isdigit(c: c_int) -> c_int {
+    (ct_flags(c) & CT_DIGIT != 0) as c_int
+}
+
+#[no_mangle]
+pub extern "C" fn isgraph(c: c_int) -> c_int {
+    (ct_flags(c) & (CT_UPPER | CT_LOWER | CT_DIGIT | CT_PUNCT) != 0) as c_int
+}
+
+#[no_mangle]
+pub extern "C" fn islower(c: c_int) -> c_int {
+    (ct_flags(c) & CT_LOWER != 0) as c_int
+}
+
+#[no_mangle]
+pub extern "C" fn isprint(c: c_int) -> c_int {
+    let flags = ct_flags(c);
+    (flags & (CT_UPPER | CT_LOWER | CT_DIGIT | CT_PUNCT | CT_BLANK) != 0) as c_int
+}
+
+#[no_mangle]
+pub extern "C" fn ispunct(c: c_int) -> c_int {
+    (ct_flags(c) & CT_PUNCT != 0) as c_int
+}
+
+#[no_mangle]
+pub extern "C" fn isspace(c: c_int) -> c_int {
+    (ct_flags(c) & CT_SPACE != 0) as c_int
+}
+
+#[no_mangle]
+pub extern "C" fn isupper(c: c_int) -> c_int {
+    (ct_flags(c) & CT_UPPER != 0) as c_int
+}
+
+#[no_mangle]
+pub extern "C" fn isxdigit(c: c_int) -> c_int {
+    (ct_flags(c) & CT_XDIGIT != 0) as c_int
+}
+
+#[no_mangle]
+pub extern "C" fn tolower(c: c_int) -> c_int {
+    if (ct_flags(c) & CT_UPPER) != 0 {
+        c + (b'a' as c_int - b'A' as c_int)
+    } else {
+        c
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn toupper(c: c_int) -> c_int {
+    if (ct_flags(c) & CT_LOWER) != 0 {
+        c - (b'a' as c_int - b'A' as c_int)
+    } else {
+        c
+    }
+}
 
 // ============================================================
 // Syscall wrappers as public C ABI
