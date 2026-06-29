@@ -1034,6 +1034,51 @@ pub unsafe extern "C" fn sigismember(set: *const SigSetT, signum: c_int) -> c_in
 }
 
 // ============================================================
+// setjmp.h
+// ponytail: jmp_buf is unsigned long[8]: rbx, rbp, r12-r15, rsp, rip
+// ============================================================
+
+#[no_mangle]
+pub unsafe extern "C" fn setjmp(env: *mut c_ulong) -> c_int {
+    core::arch::asm!(
+        "mov rax, [rsp]",
+        "lea rcx, [rsp + 8]",
+        "mov [r8], rbx",
+        "mov [r8 + 8], rbp",
+        "mov [r8 + 16], r12",
+        "mov [r8 + 24], r13",
+        "mov [r8 + 32], r14",
+        "mov [r8 + 40], r15",
+        "mov [r8 + 48], rcx",
+        "mov [r8 + 56], rax",
+        in("r8") env,
+        lateout("rax") _,
+        lateout("rcx") _,
+        options(nostack),
+    );
+    0
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn longjmp(env: *const c_ulong, val: c_int) -> ! {
+    let ret = if val == 0 { 1 } else { val } as u32;
+    core::arch::asm!(
+        "mov rbx, [r8]",
+        "mov rbp, [r8 + 8]",
+        "mov r12, [r8 + 16]",
+        "mov r13, [r8 + 24]",
+        "mov r14, [r8 + 32]",
+        "mov r15, [r8 + 40]",
+        "mov rsp, [r8 + 48]",
+        "mov eax, edx",
+        "jmp [r8 + 56]",
+        in("r8") env,
+        in("edx") ret,
+        options(noreturn),
+    );
+}
+
+// ============================================================
 // Syscall wrappers as public C ABI
 // ============================================================
 
