@@ -86,13 +86,14 @@ unsafe fn sys_read(fd: i64, buf: *mut u8, count: usize) -> i64 {
 }
 
 #[inline]
-unsafe fn sys_open(path: *const u8, flags: i64) -> i64 {
+unsafe fn sys_open(path: *const u8, flags: i64, mode: i64) -> i64 {
     let result: i64;
     core::arch::asm!(
         "syscall",
         inlateout("rax") 2i64 => result,
         in("rdi") path,
         in("rsi") flags,
+        in("rdx") mode,
         lateout("rcx") _,
         lateout("r11") _,
     );
@@ -3426,8 +3427,8 @@ pub unsafe extern "C" fn read(fd: c_int, buf: *mut c_void, count: SizeT) -> SSiz
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn open(path: *const c_char, flags: c_int, _: c_int) -> c_int {
-    sys_open(path as *const u8, flags as i64) as c_int
+pub unsafe extern "C" fn open(path: *const c_char, flags: c_int, mode: c_int) -> c_int {
+    sys_open(path as *const u8, flags as i64, mode as i64) as c_int
 }
 
 #[no_mangle]
@@ -3442,31 +3443,223 @@ pub unsafe extern "C" fn lseek(fd: c_int, offset: i64, whence: c_int) -> i64 {
 }
 
 // ============================================================
-// FILE / stdio
+// Additional syscall wrappers for stdio
 // ============================================================
 
+const O_RDONLY: i32 = 0;
+const O_WRONLY: i32 = 1;
+const O_RDWR: i32 = 2;
+const O_CREAT: i32 = 64;
+const O_TRUNC: i32 = 512;
+const O_APPEND: i32 = 1024;
+const O_EXCL: i32 = 128;
+const O_CLOEXEC: i32 = 0x80000;
+
+const F_GETFD: i32 = 1;
+const F_SETFD: i32 = 2;
+const F_GETFL: i32 = 3;
+const F_SETFL: i32 = 4;
+const FD_CLOEXEC: i32 = 1;
+
+const AT_FDCWD: i32 = -100;
+
+const TIOCGWINSZ: u32 = 0x5413;
+
 #[repr(C)]
-pub struct FILE {
-    fd: c_int,
-    has_ungotten: c_int,
-    ungotten: c_int,
-    // ponytail: minimal FILE, one-byte pushback for ungetc
+struct winsize {
+    ws_row: u16,
+    ws_col: u16,
+    ws_xpixel: u16,
+    ws_ypixel: u16,
 }
 
+#[inline]
+unsafe fn sys_pipe2(fds: *mut c_int, flags: i32) -> i64 {
+    let result: i64;
+    core::arch::asm!(
+        "syscall",
+        inlateout("rax") 293i64 => result,
+        in("rdi") fds,
+        in("rsi") flags as i64,
+        lateout("rcx") _,
+        lateout("r11") _,
+    );
+    result
+}
+
+#[inline]
+unsafe fn sys_dup3(oldfd: i32, newfd: i32, flags: i32) -> i64 {
+    let result: i64;
+    core::arch::asm!(
+        "syscall",
+        inlateout("rax") 292i64 => result,
+        in("rdi") oldfd as i64,
+        in("rsi") newfd as i64,
+        in("rdx") flags as i64,
+        lateout("rcx") _,
+        lateout("r11") _,
+    );
+    result
+}
+
+#[inline]
+unsafe fn sys_fcntl(fd: i32, cmd: i32, arg: i64) -> i64 {
+    let result: i64;
+    core::arch::asm!(
+        "syscall",
+        inlateout("rax") 72i64 => result,
+        in("rdi") fd as i64,
+        in("rsi") cmd as i64,
+        in("rdx") arg,
+        lateout("rcx") _,
+        lateout("r11") _,
+    );
+    result
+}
+
+#[inline]
+unsafe fn sys_ioctl(fd: c_int, request: u32, arg: *mut u8) -> i64 {
+    let result: i64;
+    core::arch::asm!(
+        "syscall",
+        inlateout("rax") 16i64 => result,
+        in("rdi") fd as i64,
+        in("rsi") request as i64,
+        in("rdx") arg,
+        lateout("rcx") _,
+        lateout("r11") _,
+    );
+    result
+}
+
+#[inline]
+unsafe fn sys_unlinkat(dirfd: i32, path: *const u8, flags: i32) -> i64 {
+    let result: i64;
+    core::arch::asm!(
+        "syscall",
+        inlateout("rax") 263i64 => result,
+        in("rdi") dirfd as i64,
+        in("rsi") path,
+        in("rdx") flags as i64,
+        lateout("rcx") _,
+        lateout("r11") _,
+    );
+    result
+}
+
+#[inline]
+unsafe fn sys_renameat2(olddirfd: i32, oldpath: *const u8, newdirfd: i32, newpath: *const u8, flags: u32) -> i64 {
+    let result: i64;
+    core::arch::asm!(
+        "syscall",
+        inlateout("rax") 316i64 => result,
+        in("rdi") olddirfd as i64,
+        in("rsi") oldpath,
+        in("rdx") newdirfd as i64,
+        in("r10") newpath,
+        in("r8") flags as i64,
+        lateout("rcx") _,
+        lateout("r11") _,
+    );
+    result
+}
+
+// ============================================================
+// FILE / stdio (buffered, musl-compatible layout)
+// ============================================================
+
+const UNGET: usize = 8;
+const F_PERM: u32 = 1;
+const F_NORD: u32 = 4;
+const F_NOWR: u32 = 8;
+const F_EOF: u32 = 16;
+const F_ERR: u32 = 32;
+const F_SVB: u32 = 64;
+const F_APP: u32 = 128;
+
+const BUFSIZ: usize = 1024;
+
+const _IOFBF: c_int = 0;
+const _IOLBF: c_int = 1;
+const _IONBF: c_int = 2;
+
+const SEEK_SET: c_int = 0;
+const SEEK_CUR: c_int = 1;
+const SEEK_END: c_int = 2;
+
+// ponytail: buffered FILE, musl x86_64 layout subset
+#[repr(C)]
+pub struct FILE {
+    flags: c_uint,
+    rpos: *mut u8,
+    rend: *mut u8,
+    close: Option<unsafe extern "C" fn(*mut FILE) -> c_int>,
+    wend: *mut u8,
+    wpos: *mut u8,
+    mustbezero_1: *mut u8,
+    wbase: *mut u8,
+    buf: *mut u8,
+    buf_size: usize,
+    prev: *mut FILE,
+    next: *mut FILE,
+    fd: c_int,
+    pipe_pid: c_int,
+    lockcount: c_long,
+    mode: c_int,
+    lock: c_int,
+    lbf: c_int,
+    cookie: *mut c_void,
+    off: i64,
+    getln_buf: *mut c_char,
+    mustbezero_2: *mut c_void,
+    shend: *mut u8,
+    shlim: i64,
+    shcnt: i64,
+    ungotten: [c_int; UNGET],
+    ungotten_count: c_int,
+    _eof: c_int,
+    _err: c_int,
+}
+
+static mut STDIN_BUF: [u8; BUFSIZ] = [0; BUFSIZ];
+static mut STDOUT_BUF: [u8; BUFSIZ] = [0; BUFSIZ];
+static mut STDERR_BUF: [u8; BUFSIZ] = [0; BUFSIZ];
+
 static mut STDIN_FILE: FILE = FILE {
-    fd: 0,
-    has_ungotten: 0,
-    ungotten: 0,
+    flags: 0, rpos: core::ptr::null_mut(), rend: core::ptr::null_mut(),
+    close: None, wend: core::ptr::null_mut(), wpos: core::ptr::null_mut(),
+    mustbezero_1: core::ptr::null_mut(), wbase: core::ptr::null_mut(),
+    buf: core::ptr::null_mut(), buf_size: BUFSIZ,
+    prev: core::ptr::null_mut(), next: core::ptr::null_mut(),
+    fd: 0, pipe_pid: 0, lockcount: 0, mode: 0, lock: -1, lbf: -1,
+    cookie: core::ptr::null_mut(), off: 0,
+    getln_buf: core::ptr::null_mut(), mustbezero_2: core::ptr::null_mut(),
+    shend: core::ptr::null_mut(), shlim: 0, shcnt: 0,
+    ungotten: [0; UNGET], ungotten_count: 0, _eof: 0, _err: 0,
 };
 static mut STDOUT_FILE: FILE = FILE {
-    fd: 1,
-    has_ungotten: 0,
-    ungotten: 0,
+    flags: F_NOWR as u32 + F_SVB as u32, rpos: core::ptr::null_mut(), rend: core::ptr::null_mut(),
+    close: None, wend: core::ptr::null_mut(), wpos: core::ptr::null_mut(),
+    mustbezero_1: core::ptr::null_mut(), wbase: core::ptr::null_mut(),
+    buf: core::ptr::null_mut(), buf_size: BUFSIZ,
+    prev: core::ptr::null_mut(), next: core::ptr::null_mut(),
+    fd: 1, pipe_pid: 0, lockcount: 0, mode: 0, lock: -1, lbf: -1,
+    cookie: core::ptr::null_mut(), off: 0,
+    getln_buf: core::ptr::null_mut(), mustbezero_2: core::ptr::null_mut(),
+    shend: core::ptr::null_mut(), shlim: 0, shcnt: 0,
+    ungotten: [0; UNGET], ungotten_count: 0, _eof: 0, _err: 0,
 };
 static mut STDERR_FILE: FILE = FILE {
-    fd: 2,
-    has_ungotten: 0,
-    ungotten: 0,
+    flags: F_NOWR as u32, rpos: core::ptr::null_mut(), rend: core::ptr::null_mut(),
+    close: None, wend: core::ptr::null_mut(), wpos: core::ptr::null_mut(),
+    mustbezero_1: core::ptr::null_mut(), wbase: core::ptr::null_mut(),
+    buf: core::ptr::null_mut(), buf_size: BUFSIZ,
+    prev: core::ptr::null_mut(), next: core::ptr::null_mut(),
+    fd: 2, pipe_pid: 0, lockcount: 0, mode: 0, lock: -1, lbf: -1,
+    cookie: core::ptr::null_mut(), off: 0,
+    getln_buf: core::ptr::null_mut(), mustbezero_2: core::ptr::null_mut(),
+    shend: core::ptr::null_mut(), shlim: 0, shcnt: 0,
+    ungotten: [0; UNGET], ungotten_count: 0, _eof: 0, _err: 0,
 };
 
 #[no_mangle]
@@ -3477,64 +3670,348 @@ pub static mut stdout: *mut FILE = &raw mut STDOUT_FILE as *mut FILE;
 pub static mut stderr: *mut FILE = &raw mut STDERR_FILE as *mut FILE;
 
 // ============================================================
-// puts / fputs / fputc
+// FILE helpers
 // ============================================================
 
-unsafe fn write_str(fd: c_int, s: *const u8, len: usize) {
-    let mut written = 0usize;
-    while written < len {
-        let n = sys_write(fd as i64, s.add(written), len - written);
-        if n <= 0 {
-            break;
-        }
-        written += n as usize;
+unsafe fn __stdio_init() {
+    STDIN_FILE.buf = core::ptr::addr_of_mut!(STDIN_BUF) as *mut u8;
+    STDIN_FILE.buf_size = BUFSIZ;
+    STDOUT_FILE.buf = core::ptr::addr_of_mut!(STDOUT_BUF) as *mut u8;
+    STDOUT_FILE.buf_size = BUFSIZ;
+    STDOUT_FILE.lbf = b'\n' as c_int;
+    STDERR_FILE.buf = core::ptr::addr_of_mut!(STDERR_BUF) as *mut u8;
+    STDERR_FILE.buf_size = BUFSIZ;
+}
+
+unsafe fn buf_ptr(f: *mut FILE) -> *mut u8 {
+    (f as *mut u8).add(core::mem::size_of::<FILE>())
+}
+
+unsafe fn init_file(
+    f: *mut FILE,
+    fd: c_int,
+    mode: *const c_char,
+    close_fn: Option<unsafe extern "C" fn(*mut FILE) -> c_int>,
+    buf_area: *mut u8,
+    buf_sz: usize,
+) {
+    core::ptr::write_bytes(f as *mut u8, 0, core::mem::size_of::<FILE>());
+    (*f).fd = fd;
+    (*f).close = close_fn;
+    (*f).lock = -1;
+    (*f).lbf = -1;
+    (*f).buf = buf_area;
+    (*f).buf_size = buf_sz;
+    let m = *mode;
+    let has_plus = !strchr(mode as *const u8, b'+' as c_int).is_null();
+    if m == b'r' as c_char && !has_plus {
+        (*f).flags = F_NORD;
+    } else if !has_plus {
+        (*f).flags = F_NOWR;
     }
 }
 
-#[no_mangle]
-pub unsafe extern "C" fn puts(s: *const c_char) -> c_int {
-    let fd = (*stdout).fd;
-    let len = strlen(s as *const u8);
-    write_str(fd, s as *const u8, len);
-    write_str(fd, b"\n".as_ptr(), 1);
-    (len + 1) as c_int
+unsafe extern "C" fn __stdio_close(f: *mut FILE) -> c_int {
+    sys_close((*f).fd as i64);
+    0
 }
 
-#[no_mangle]
-pub unsafe extern "C" fn fputs(s: *const c_char, stream: *mut FILE) -> c_int {
-    let fd = (*stream).fd;
-    let len = strlen(s as *const u8);
-    write_str(fd, s as *const u8, len);
-    len as c_int
+unsafe fn fmodeflags(mode: *const c_char) -> c_int {
+    let mut flags: c_int = 0;
+    let m = *mode;
+    if !strchr(mode as *const u8, b'+' as c_int).is_null() {
+        flags = O_RDWR;
+    } else if m == b'r' as c_char {
+        flags = O_RDONLY;
+    } else {
+        flags = O_WRONLY;
+    }
+    if !strchr(mode as *const u8, b'x' as c_int).is_null() { flags |= O_EXCL; }
+    if !strchr(mode as *const u8, b'e' as c_int).is_null() { flags |= O_CLOEXEC; }
+    if m != b'r' as c_char { flags |= O_CREAT; }
+    if m == b'w' as c_char { flags |= O_TRUNC; }
+    if m == b'a' as c_char { flags |= O_APPEND; }
+    flags
 }
 
-#[no_mangle]
-pub unsafe extern "C" fn fputc(c: c_int, stream: *mut FILE) -> c_int {
-    let byte = c as u8;
-    let fd = (*stream).fd;
-    sys_write(fd as i64, &byte as *const u8, 1);
-    c
-}
+const O_ACCMODE: c_int = O_RDONLY | O_WRONLY | O_RDWR;
 
-#[no_mangle]
-pub unsafe extern "C" fn putchar(c: c_int) -> c_int {
-    fputc(c, stdout)
+unsafe fn flush_buf(f: *mut FILE) -> c_int {
+    let base = (*f).wbase;
+    let len = (*f).wpos as usize - base as usize;
+    if len == 0 {
+        (*f).wend = (*f).buf.add((*f).buf_size);
+        (*f).wpos = (*f).wbase;
+        return 0;
+    }
+    (*f).wpos = (*f).wbase;
+    let mut written = 0usize;
+    while written < len {
+        let n = sys_write((*f).fd as i64, base.add(written), len - written);
+        if n <= 0 {
+            (*f).flags |= F_ERR;
+            (*f)._err = 1;
+            (*f).wpos = core::ptr::null_mut();
+            (*f).wbase = core::ptr::null_mut();
+            (*f).wend = core::ptr::null_mut();
+            return -1;
+        }
+        written += n as usize;
+    }
+    (*f).wend = (*f).buf.add((*f).buf_size);
+    (*f).wpos = (*f).wbase;
+    0
 }
 
 // ============================================================
-// getc / fgetc / getchar / fgets / fread / ungetc
+// fopen / fdopen / freopen / fclose
+// ============================================================
+
+#[no_mangle]
+pub unsafe extern "C" fn fopen(filename: *const c_char, mode: *const c_char) -> *mut FILE {
+    if filename.is_null() || mode.is_null() { ERRNO = EINVAL; return core::ptr::null_mut(); }
+    let m = *mode;
+    if m != b'r' as c_char && m != b'w' as c_char && m != b'a' as c_char {
+        ERRNO = EINVAL; return core::ptr::null_mut();
+    }
+    let flags = fmodeflags(mode);
+    let fd = sys_open(filename as *const u8, flags as i64, 0o666);
+    if fd < 0 { ERRNO = (-fd) as c_int; return core::ptr::null_mut(); }
+    fdopen(fd as c_int, mode)
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn fdopen(fd: c_int, mode: *const c_char) -> *mut FILE {
+    if fd < 0 || mode.is_null() { ERRNO = EINVAL; return core::ptr::null_mut(); }
+    let m = *mode;
+    if m != b'r' as c_char && m != b'w' as c_char && m != b'a' as c_char {
+        ERRNO = EINVAL; return core::ptr::null_mut();
+    }
+    let f = calloc(1, core::mem::size_of::<FILE>() + UNGET + BUFSIZ) as *mut FILE;
+    if f.is_null() { ERRNO = ENOMEM; return core::ptr::null_mut(); }
+    let buf = buf_ptr(f);
+    init_file(f, fd, mode, Some(__stdio_close), buf, BUFSIZ);
+    if !strchr(mode as *const u8, b'a' as c_int).is_null() { (*f).flags |= F_APP; }
+    if !strchr(mode as *const u8, b'e' as c_int).is_null() { sys_fcntl(fd, F_SETFD, FD_CLOEXEC as i64); }
+    if (*f).flags & F_NOWR == 0 {
+        let mut ws: winsize = core::mem::zeroed();
+        if sys_ioctl(fd, TIOCGWINSZ, &mut ws as *mut winsize as *mut u8) == 0 {
+            (*f).lbf = b'\n' as c_int;
+        }
+    }
+    f
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn freopen(
+    filename: *const c_char, mode: *const c_char, f: *mut FILE,
+) -> *mut FILE {
+    fflush(f);
+    if (*f).pipe_pid > 0 { let _ = __stdio_close(f); }
+    if filename.is_null() {
+        let flags = fmodeflags(mode);
+        if flags == 0 { return core::ptr::null_mut(); }
+        let mut fl = flags & !(O_CREAT | O_EXCL | O_CLOEXEC);
+        if (*f).flags & F_APP != 0 { fl = (fl & !O_ACCMODE) | O_WRONLY | O_APPEND; }
+        if sys_fcntl((*f).fd, F_SETFL, fl as i64) < 0 { return core::ptr::null_mut(); }
+        let has_plus = !strchr(mode as *const u8, b'+' as c_int).is_null();
+        if has_plus {
+            (*f).flags &= !(F_NORD | F_NOWR);
+        } else if *mode == b'r' as c_char {
+            (*f).flags = ((*f).flags & !F_NOWR) | F_NORD;
+        } else {
+            (*f).flags = ((*f).flags & !F_NORD) | F_NOWR;
+        }
+        return f;
+    }
+    let new_f = fopen(filename, mode);
+    if new_f.is_null() { let _ = __stdio_close(f); return core::ptr::null_mut(); }
+    if (*new_f).fd == (*f).fd {
+        (*new_f).fd = -1;
+    } else {
+        sys_dup3((*new_f).fd, (*f).fd, 0);
+        let _ = __stdio_close(new_f);
+    }
+    (*f).flags = (*new_f).flags;
+    (*f).rpos = core::ptr::null_mut();
+    (*f).rend = core::ptr::null_mut();
+    (*f).wpos = core::ptr::null_mut();
+    (*f).wbase = core::ptr::null_mut();
+    (*f).wend = core::ptr::null_mut();
+    (*f).lbf = (*new_f).lbf;
+    (*f).pipe_pid = 0;
+    free(new_f as *mut c_void);
+    f
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn fclose(f: *mut FILE) -> c_int {
+    if f.is_null() { return -1; }
+    let r = fflush(f);
+    if let Some(close_fn) = (*f).close { let _ = close_fn(f); }
+    if r != 0 { -1 } else { 0 }
+}
+
+// ============================================================
+// setvbuf / setbuf / setbuffer / fflush
+// ============================================================
+
+#[no_mangle]
+pub unsafe extern "C" fn setvbuf(f: *mut FILE, buf: *mut c_char, mode: c_int, size: usize) -> c_int {
+    if mode != _IOFBF && mode != _IOLBF && mode != _IONBF { return -1; }
+    fflush(f);
+    (*f).rpos = core::ptr::null_mut();
+    (*f).rend = core::ptr::null_mut();
+    (*f).wpos = core::ptr::null_mut();
+    (*f).wbase = core::ptr::null_mut();
+    (*f).wend = core::ptr::null_mut();
+    if mode == _IONBF {
+        (*f).buf_size = 0;
+    } else if !buf.is_null() && size > 0 {
+        (*f).buf = buf as *mut u8;
+        (*f).buf_size = size;
+    }
+    (*f).lbf = if mode == _IOLBF { b'\n' as c_int } else { -1 };
+    0
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn setbuf(f: *mut FILE, buf: *mut c_char) {
+    if buf.is_null() { setvbuf(f, core::ptr::null_mut(), _IONBF, 0); }
+    else { setvbuf(f, buf, _IOFBF, BUFSIZ); }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn setbuffer(f: *mut FILE, buf: *mut c_char, size: usize) {
+    if buf.is_null() { setvbuf(f, core::ptr::null_mut(), _IONBF, 0); }
+    else { setvbuf(f, buf, _IOFBF, size); }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn fflush(f: *mut FILE) -> c_int {
+    if f.is_null() {
+        let mut r = 0;
+        if !stdout.is_null() && !(*stdout).wpos.is_null() && (*stdout).wpos != (*stdout).wbase {
+            if flush_buf(stdout) != 0 { r = -1; }
+        }
+        if !stderr.is_null() && !(*stderr).wpos.is_null() && (*stderr).wpos != (*stderr).wbase {
+            if flush_buf(stderr) != 0 { r = -1; }
+        }
+        return r;
+    }
+    if !(*f).wpos.is_null() && (*f).wpos != (*f).wbase {
+        return flush_buf(f);
+    }
+    0
+}
+
+// ============================================================
+// fwide / feof / ferror / clearerr / fileno
+// ============================================================
+
+#[no_mangle]
+pub unsafe extern "C" fn fwide(_f: *mut FILE, mode: c_int) -> c_int { mode }
+
+#[no_mangle]
+pub unsafe extern "C" fn feof(f: *mut FILE) -> c_int { if (*f)._eof != 0 { 1 } else { 0 } }
+
+#[no_mangle]
+pub unsafe extern "C" fn ferror(f: *mut FILE) -> c_int { if (*f)._err != 0 { 1 } else { 0 } }
+
+#[no_mangle]
+pub unsafe extern "C" fn clearerr(f: *mut FILE) { (*f)._eof = 0; (*f)._err = 0; }
+
+#[no_mangle]
+pub unsafe extern "C" fn fileno(f: *mut FILE) -> c_int { (*f).fd }
+
+// ============================================================
+// fseek / ftell / rewind / fseeko / ftello / fgetpos / fsetpos
+// ============================================================
+
+#[no_mangle]
+pub unsafe extern "C" fn fseek(stream: *mut FILE, offset: c_long, whence: c_int) -> c_int {
+    fseeko(stream, offset as i64, whence)
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn ftell(stream: *mut FILE) -> c_long {
+    ftello(stream) as c_long
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn rewind(stream: *mut FILE) {
+    fseek(stream, 0, SEEK_SET);
+    (*stream)._eof = 0;
+    (*stream)._err = 0;
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn fseeko(stream: *mut FILE, offset: i64, whence: c_int) -> c_int {
+    if whence != SEEK_SET && whence != SEEK_CUR && whence != SEEK_END {
+        ERRNO = EINVAL;
+        return -1;
+    }
+    let f = &mut *stream;
+    let mut adj_offset = offset;
+    if whence == SEEK_CUR && !f.rpos.is_null() {
+        adj_offset -= f.rend as i64 - f.rpos as i64;
+    }
+    if !f.wpos.is_null() && f.wpos != f.wbase {
+        if flush_buf(stream) != 0 { return -1; }
+    }
+    f.wpos = core::ptr::null_mut();
+    f.wbase = core::ptr::null_mut();
+    f.wend = core::ptr::null_mut();
+    let r = sys_lseek(f.fd as i64, adj_offset, whence as i64);
+    if r < 0 { ERRNO = (-r) as c_int; return -1; }
+    f.rpos = core::ptr::null_mut();
+    f.rend = core::ptr::null_mut();
+    f._eof = 0;
+    0
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn ftello(stream: *mut FILE) -> i64 {
+    let f = &mut *stream;
+    let r = sys_lseek(f.fd as i64, 0, SEEK_CUR as i64);
+    if r < 0 { return -1; }
+    let mut pos = r;
+    if !f.rpos.is_null() {
+        pos -= f.rend as i64 - f.rpos as i64;
+    } else if !f.wbase.is_null() {
+        pos += f.wpos as i64 - f.wbase as i64;
+    }
+    pos
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn fgetpos(stream: *mut FILE, pos: *mut i64) -> c_int {
+    let off = ftello(stream);
+    if off < 0 { return -1; }
+    *pos = off;
+    0
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn fsetpos(stream: *mut FILE, pos: *const i64) -> c_int {
+    fseeko(stream, *pos, SEEK_SET)
+}
+
+// ============================================================
+// fgetc / getc / getchar / ungetc
 // ============================================================
 
 #[no_mangle]
 pub unsafe extern "C" fn fgetc(stream: *mut FILE) -> c_int {
     let f = &mut *stream;
-    if f.has_ungotten != 0 {
-        f.has_ungotten = 0;
-        return f.ungotten;
+    if f.ungotten_count > 0 {
+        f.ungotten_count -= 1;
+        return f.ungotten[f.ungotten_count as usize];
     }
     let mut buf = [0u8; 1];
     let n = sys_read(f.fd as i64, buf.as_mut_ptr(), 1);
     if n <= 0 {
+        if n == 0 { f._eof = 1; } else { f._err = 1; }
         -1
     } else {
         buf[0] as c_int
@@ -3542,263 +4019,774 @@ pub unsafe extern "C" fn fgetc(stream: *mut FILE) -> c_int {
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn getc(stream: *mut FILE) -> c_int {
-    fgetc(stream)
-}
+pub unsafe extern "C" fn getc(stream: *mut FILE) -> c_int { fgetc(stream) }
 
 #[no_mangle]
-pub unsafe extern "C" fn getchar() -> c_int {
-    fgetc(stdin)
-}
+pub unsafe extern "C" fn getchar() -> c_int { fgetc(stdin) }
 
 #[no_mangle]
 pub unsafe extern "C" fn ungetc(c: c_int, stream: *mut FILE) -> c_int {
-    if c == -1 {
-        return -1;
-    }
+    if c == -1 { return -1; }
     let f = &mut *stream;
-    if f.has_ungotten != 0 {
-        return -1;
-    }
-    f.ungotten = c;
-    f.has_ungotten = 1;
+    if f.ungotten_count >= UNGET as c_int { return -1; }
+    f.ungotten[f.ungotten_count as usize] = c;
+    f.ungotten_count += 1;
+    f._eof = 0;
     c
 }
 
+// ============================================================
+// fgets / fread
+// ============================================================
+
 #[no_mangle]
 pub unsafe extern "C" fn fgets(s: *mut c_char, n: c_int, stream: *mut FILE) -> *mut c_char {
-    if n <= 0 {
-        return null_mut();
-    }
+    if n <= 0 { return null_mut(); }
     let max = (n - 1) as usize;
     let mut i = 0usize;
     while i < max {
         let c = fgetc(stream);
-        if c == -1 {
-            if i == 0 {
-                return null_mut();
-            }
-            break;
-        }
+        if c == -1 { if i == 0 { return null_mut(); } break; }
         *s.add(i) = c as c_char;
         i += 1;
-        if c == b'\n' as c_int {
-            break;
-        }
+        if c == b'\n' as c_int { break; }
     }
     *s.add(i) = 0;
-    s as *mut c_char
+    s
+}
+
+// ponytail: gets is dangerous, kept for POSIX compliance
+#[no_mangle]
+pub unsafe extern "C" fn gets(s: *mut c_char) -> *mut c_char {
+    let mut i = 0usize;
+    loop {
+        let c = fgetc(stdin);
+        if c == -1 { if i == 0 { return null_mut(); } break; }
+        if c == b'\n' as c_int { break; }
+        *s.add(i) = c as c_char;
+        i += 1;
+    }
+    *s.add(i) = 0;
+    s
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn fopen64(filename: *const c_char, mode: *const c_char) -> *mut FILE {
+    fopen(filename, mode)
+}
+
+// ponytail: perror - minimal, just prints "msg: errno\n"
+const PERROR_BUF_SIZE: usize = 64;
+static mut PERROR_BUF: [u8; PERROR_BUF_SIZE] = [0; PERROR_BUF_SIZE];
+
+#[no_mangle]
+pub unsafe extern "C" fn perror(msg: *const c_char) {
+    let fd = (*stderr).fd;
+    if !msg.is_null() && *msg != 0 {
+        let len = strlen(msg as *const u8);
+        write_str(fd, msg as *const u8, len);
+        write_str(fd, b": ".as_ptr(), 2);
+    }
+    let e = ERRNO;
+    // ponytail: just print errno number, not full strerror
+    if e != 0 {
+        let (buf, len) = format_i64(e as i64);
+        write_str(fd, buf.as_ptr().add(21 - len), len);
+    }
+    write_str(fd, b"\n".as_ptr(), 1);
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn fread(
-    ptr: *mut c_void,
-    size: SizeT,
-    nmemb: SizeT,
-    stream: *mut FILE,
+    ptr: *mut c_void, size: SizeT, nmemb: SizeT, stream: *mut FILE,
 ) -> SizeT {
-    if size == 0 || nmemb == 0 {
-        return 0;
-    }
+    if size == 0 || nmemb == 0 { return 0; }
     let total = size * nmemb;
-    let mut read = 0usize;
-    while read < total {
+    let mut rd = 0usize;
+    while rd < total {
         let c = fgetc(stream);
-        if c == -1 {
-            break;
-        }
-        *(ptr as *mut u8).add(read) = c as u8;
-        read += 1;
+        if c == -1 { break; }
+        *(ptr as *mut u8).add(rd) = c as u8;
+        rd += 1;
     }
-    read / size
+    rd / size
 }
 
 // ============================================================
-// printf / fprintf / vprintf
+// puts / fputs / fputc / putc / putchar / fwrite
 // ============================================================
 
-unsafe fn write_u64_hex(fd: c_int, mut val: u64, uppercase: bool) -> usize {
-    let digits = if uppercase {
-        b"0123456789ABCDEF"
-    } else {
-        b"0123456789abcdef"
-    };
-    let mut buf = [0u8; 20];
-    let mut pos = buf.len();
-    if val == 0 {
-        pos -= 1;
-        buf[pos] = b'0';
-    } else {
-        while val > 0 {
-            pos -= 1;
-            buf[pos] = digits[(val & 0xf) as usize];
-            val >>= 4;
-        }
-    }
-    let len = buf.len() - pos;
-    write_str(fd, buf.as_ptr().add(pos), len);
-    len
-}
-
-unsafe fn write_u64_dec(fd: c_int, mut val: u64) -> usize {
-    let mut buf = [0u8; 20];
-    let mut pos = buf.len();
-    if val == 0 {
-        pos -= 1;
-        buf[pos] = b'0';
-    } else {
-        while val > 0 {
-            pos -= 1;
-            buf[pos] = b'0' + (val % 10) as u8;
-            val /= 10;
-        }
-    }
-    let len = buf.len() - pos;
-    write_str(fd, buf.as_ptr().add(pos), len);
-    len
-}
-
-unsafe fn write_i64_dec(fd: c_int, val: i64) -> usize {
-    if val < 0 {
-        write_str(fd, b"-".as_ptr(), 1);
-        1 + write_u64_dec(fd, (-(val as i128)) as u64)
-    } else {
-        write_u64_dec(fd, val as u64)
+unsafe fn write_str(fd: c_int, s: *const u8, len: usize) {
+    let mut written = 0usize;
+    while written < len {
+        let n = sys_write(fd as i64, s.add(written), len - written);
+        if n <= 0 { break; }
+        written += n as usize;
     }
 }
 
-unsafe fn format_and_write(
-    fd: c_int,
-    fmt: *const c_char,
-    args: &mut VaListImpl,
-) -> c_int {
-    let mut count: usize = 0;
-    let mut i = 0usize;
-    loop {
-        let c = *fmt.add(i) as u8;
-        if c == 0 {
-            break;
+unsafe fn __overflow(f: *mut FILE, c: c_int) -> c_int {
+    if (*f).wpos.is_null() {
+        (*f).wbase = (*f).buf;
+        (*f).wpos = (*f).buf;
+        (*f).wend = (*f).buf.add((*f).buf_size);
+    }
+    if flush_buf(f) == -1 { return -1; }
+    if (*f).wpos >= (*f).wend {
+        let byte = c as u8;
+        write_str((*f).fd, &byte as *const u8, 1);
+        return c;
+    }
+    *(*f).wpos = c as u8;
+    (*f).wpos = (*f).wpos.add(1);
+    if c == (*f).lbf || (*f).wpos >= (*f).wend { let _ = flush_buf(f); }
+    c
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn puts(s: *const c_char) -> c_int {
+    let len = strlen(s as *const u8);
+    let _ = fwrite(s as *const c_void, 1, len, stdout);
+    let _ = fwrite(b"\n".as_ptr() as *const c_void, 1, 1, stdout);
+    let f = &mut *stdout;
+    if f.lbf >= 0 { let _ = flush_buf(stdout); }
+    (len + 1) as c_int
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn fputs(s: *const c_char, stream: *mut FILE) -> c_int {
+    let len = strlen(s as *const u8);
+    fwrite(s as *const c_void, 1, len, stream) as c_int
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn fputc(c: c_int, stream: *mut FILE) -> c_int {
+    let f = &mut *stream;
+    if f.wpos.is_null() || f.wpos >= f.wend {
+        if __overflow(f, c) == -1 { return -1; }
+        return c;
+    }
+    *f.wpos = c as u8;
+    f.wpos = f.wpos.add(1);
+    if c == f.lbf || f.wpos >= f.wend { let _ = flush_buf(f); }
+    c
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn putc(c: c_int, stream: *mut FILE) -> c_int { fputc(c, stream) }
+
+#[no_mangle]
+pub unsafe extern "C" fn putchar(c: c_int) -> c_int { fputc(c, stdout) }
+
+#[no_mangle]
+pub unsafe extern "C" fn fwrite(
+    ptr: *const c_void, size: SizeT, nmemb: SizeT, stream: *mut FILE,
+) -> SizeT {
+    if size == 0 || nmemb == 0 { return 0; }
+    let total = size * nmemb;
+    let f = &mut *stream;
+    if f.buf_size == 0 {
+        let mut written = 0usize;
+        let src = ptr as *const u8;
+        while written < total {
+            let n = sys_write(f.fd as i64, src.add(written), total - written);
+            if n <= 0 { f._err = 1; break; }
+            written += n as usize;
         }
-        if c != b'%' {
-            write_str(fd, &c as *const u8, 1);
-            count += 1;
-            i += 1;
+        return written / size;
+    }
+    if f.wpos.is_null() {
+        f.wbase = f.buf;
+        f.wpos = f.buf;
+        f.wend = f.buf.add(f.buf_size);
+    }
+    let mut remaining = total;
+    let mut src = ptr as *const u8;
+    while remaining > 0 {
+        let space = f.wend as usize - f.wpos as usize;
+        if space == 0 {
+            if flush_buf(f as *mut FILE) == -1 { break; }
             continue;
         }
+        let n = if remaining < space { remaining } else { space };
+        core::ptr::copy_nonoverlapping(src, f.wpos, n);
+        f.wpos = f.wpos.add(n);
+        src = src.add(n);
+        remaining -= n;
+        if f.wpos >= f.wend { let _ = flush_buf(f as *mut FILE); }
+    }
+    if f.lbf >= 0 { let _ = flush_buf(f as *mut FILE); }
+    (total - remaining) / size
+}
+
+// ============================================================
+// printf / fprintf / vprintf / vfprintf / dprintf / vdprintf
+// ============================================================
+
+macro_rules! impl_format {
+    ($fmt:expr, $args:expr, $write_char:expr, $write_str:expr) => {{
+        let fmt = $fmt;
+        let args = &mut $args;
+        let mut count: usize = 0;
+        let mut i = 0usize;
+        loop {
+            let c = *fmt.add(i) as u8;
+            if c == 0 { break; }
+            if c != b'%' {
+                ($write_char)(c);
+                count += 1; i += 1; continue;
+            }
+            i += 1;
+            let spec = *fmt.add(i) as u8;
+            match spec {
+                b's' => {
+                    let s = args.arg::<*const c_char>();
+                    if s.is_null() { ($write_str)(b"(null)".as_ptr(), 6); count += 6; }
+                    else { let len = strlen(s as *const u8); ($write_str)(s as *const u8, len); count += len; }
+                }
+                b'd' | b'i' => {
+                    let d = args.arg::<c_int>();
+                    let buf = format_i64(d as i64);
+                    ($write_str)(buf.0.as_ptr(), buf.1); count += buf.1;
+                }
+                b'u' => {
+                    let u = args.arg::<c_uint>();
+                    let buf = format_u64(u as u64);
+                    ($write_str)(buf.0.as_ptr(), buf.1); count += buf.1;
+                }
+                b'x' => {
+                    let x = args.arg::<c_uint>();
+                    let buf = format_hex(x as u64, false);
+                    ($write_str)(buf.0.as_ptr(), buf.1); count += buf.1;
+                }
+                b'X' => {
+                    let x = args.arg::<c_uint>();
+                    let buf = format_hex(x as u64, true);
+                    ($write_str)(buf.0.as_ptr(), buf.1); count += buf.1;
+                }
+                b'c' => {
+                    let ch = args.arg::<c_int>();
+                    ($write_char)(ch as u8); count += 1;
+                }
+                b'p' => {
+                    let p = args.arg::<*const c_void>();
+                    ($write_char)(b'0'); ($write_char)(b'x'); count += 2;
+                    let buf = format_hex(p as u64, false);
+                    ($write_str)(buf.0.as_ptr(), buf.1); count += buf.1;
+                }
+                b'f' => {
+                    let val = args.arg::<f64>();
+                    let buf = format_f64(val);
+                    ($write_str)(buf.0.as_ptr(), buf.1); count += buf.1;
+                }
+                b'l' => {
+                    i += 1;
+                    let sub = *fmt.add(i) as u8;
+                    match sub {
+                        b'd' => { let ld = args.arg::<c_long>(); let buf = format_i64(ld as i64); ($write_str)(buf.0.as_ptr(), buf.1); count += buf.1; }
+                        b'u' => { let lu = args.arg::<c_ulong>(); let buf = format_u64(lu as u64); ($write_str)(buf.0.as_ptr(), buf.1); count += buf.1; }
+                        b'x' => { let lx = args.arg::<c_ulong>(); let buf = format_hex(lx as u64, false); ($write_str)(buf.0.as_ptr(), buf.1); count += buf.1; }
+                        b'X' => { let lx = args.arg::<c_ulong>(); let buf = format_hex(lx as u64, true); ($write_str)(buf.0.as_ptr(), buf.1); count += buf.1; }
+                        b'f' => { let val = args.arg::<f64>(); let buf = format_f64(val); ($write_str)(buf.0.as_ptr(), buf.1); count += buf.1; }
+                        _ => { ($write_char)(b'%'); ($write_char)(sub); count += 2; }
+                    }
+                }
+                b'%' => { ($write_char)(b'%'); count += 1; }
+                b'n' => { let _ = args.arg::<*mut c_int>(); }
+                _ => { ($write_char)(b'%'); ($write_char)(spec); count += 2; }
+            }
+            i += 1;
+        }
+        count as c_int
+    }};
+}
+
+unsafe fn format_u64(mut val: u64) -> ([u8; 20], usize) {
+    let mut buf = [0u8; 20];
+    if val == 0 { buf[0] = b'0'; return (buf, 1); }
+    let mut tmp = [0u8; 20];
+    let mut pos = 20;
+    while val > 0 { pos -= 1; tmp[pos] = b'0' + (val % 10) as u8; val /= 10; }
+    let len = 20 - pos;
+    core::ptr::copy_nonoverlapping(tmp.as_ptr().add(pos), buf.as_mut_ptr(), len);
+    (buf, len)
+}
+
+unsafe fn format_i64(val: i64) -> ([u8; 21], usize) {
+    let mut buf = [0u8; 21];
+    if val < 0 {
+        buf[0] = b'-';
+        let (inner, len) = format_u64((-(val as i128)) as u64);
+        core::ptr::copy_nonoverlapping(inner.as_ptr(), buf.as_mut_ptr().add(1), len);
+        (buf, len + 1)
+    } else {
+        let (inner, len) = format_u64(val as u64);
+        core::ptr::copy_nonoverlapping(inner.as_ptr(), buf.as_mut_ptr(), len);
+        (buf, len)
+    }
+}
+
+unsafe fn format_hex(mut val: u64, uppercase: bool) -> ([u8; 16], usize) {
+    let digits = if uppercase { b"0123456789ABCDEF" } else { b"0123456789abcdef" };
+    let mut buf = [0u8; 16];
+    if val == 0 { buf[0] = b'0'; return (buf, 1); }
+    let mut tmp = [0u8; 16];
+    let mut pos = 16;
+    while val > 0 { pos -= 1; tmp[pos] = digits[(val & 0xf) as usize]; val >>= 4; }
+    let len = 16 - pos;
+    core::ptr::copy_nonoverlapping(tmp.as_ptr().add(pos), buf.as_mut_ptr(), len);
+    (buf, len)
+}
+
+unsafe fn format_f64(val: f64) -> ([u8; 64], usize) {
+    let mut buf = [0u8; 64];
+    let mut pos = 0usize;
+    let mut v = val;
+    if v.is_nan() {
+        let nan = b"nan";
+        core::ptr::copy_nonoverlapping(nan.as_ptr(), buf.as_mut_ptr(), 3);
+        return (buf, 3);
+    }
+    if v < 0.0 { buf[pos] = b'-'; pos += 1; v = -v; }
+    if v.is_infinite() {
+        let inf = b"inf";
+        core::ptr::copy_nonoverlapping(inf.as_ptr(), buf.as_mut_ptr().add(pos), 3);
+        return (buf, pos + 3);
+    }
+    let int_part = v as u64;
+    let frac = v - int_part as f64;
+    let (ibuf, ilen) = format_u64(int_part);
+    core::ptr::copy_nonoverlapping(ibuf.as_ptr().add(20 - ilen), buf.as_mut_ptr().add(pos), ilen);
+    pos += ilen;
+    buf[pos] = b'.';
+    pos += 1;
+    let mut f = frac;
+    for _ in 0..6 { f *= 10.0; let digit = f as u8; buf[pos] = b'0' + digit; pos += 1; f -= digit as f64; }
+    (buf, pos)
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn vprintf(fmt: *const c_char, mut args: VaListImpl) -> c_int {
+    impl_format!(fmt, args,
+        |c: u8| { let _ = fwrite(&c as *const u8 as *const c_void, 1, 1, stdout); },
+        |s: *const u8, len: usize| { let _ = fwrite(s as *const c_void, 1, len, stdout); }
+    )
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn vfprintf(stream: *mut FILE, fmt: *const c_char, mut args: VaListImpl) -> c_int {
+    impl_format!(fmt, args,
+        |c: u8| { let _ = fwrite(&c as *const u8 as *const c_void, 1, 1, stream); },
+        |s: *const u8, len: usize| { let _ = fwrite(s as *const c_void, 1, len, stream); }
+    )
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn printf(fmt: *const c_char, mut args: ...) -> c_int {
+    impl_format!(fmt, args,
+        |c: u8| { let _ = fwrite(&c as *const u8 as *const c_void, 1, 1, stdout); },
+        |s: *const u8, len: usize| { let _ = fwrite(s as *const c_void, 1, len, stdout); }
+    )
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn fprintf(stream: *mut FILE, fmt: *const c_char, mut args: ...) -> c_int {
+    impl_format!(fmt, args,
+        |c: u8| { let _ = fwrite(&c as *const u8 as *const c_void, 1, 1, stream); },
+        |s: *const u8, len: usize| { let _ = fwrite(s as *const c_void, 1, len, stream); }
+    )
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn dprintf(fd: c_int, fmt: *const c_char, mut args: ...) -> c_int {
+    impl_format!(fmt, args,
+        |c: u8| { write_str(fd, &c as *const u8, 1); },
+        |s: *const u8, len: usize| { write_str(fd, s, len); }
+    )
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn vdprintf(fd: c_int, fmt: *const c_char, mut args: VaListImpl) -> c_int {
+    impl_format!(fmt, args,
+        |c: u8| { write_str(fd, &c as *const u8, 1); },
+        |s: *const u8, len: usize| { write_str(fd, s, len); }
+    )
+}
+
+// ============================================================
+// sprintf / snprintf / vsprintf / vsnprintf
+// ============================================================
+
+unsafe fn format_to_buf(buf: *mut u8, cap: usize, fmt: *const c_char, args: &mut VaListImpl) -> c_int {
+    let mut pos = 0usize;
+    let mut i = 0usize;
+    let mut count = 0usize;
+    macro_rules! wc {
+        ($c:expr) => { if pos < cap { *buf.add(pos) = $c; } pos += 1; count += 1; }
+    }
+    macro_rules! ws {
+        ($s:expr, $len:expr) => {{
+            let __len = $len;
+            for k in 0..__len { if pos + k < cap { *buf.add(pos + k) = *$s.add(k); } }
+            pos += __len; count += __len;
+        }}
+    }
+    loop {
+        let c = *fmt.add(i) as u8;
+        if c == 0 { break; }
+        if c != b'%' { wc!(c); i += 1; continue; }
         i += 1;
         let spec = *fmt.add(i) as u8;
         match spec {
             b's' => {
                 let s = args.arg::<*const c_char>();
-                if s.is_null() {
-                    write_str(fd, b"(null)".as_ptr(), 6);
-                    count += 6;
-                } else {
-                    let len = strlen(s as *const u8);
-                    write_str(fd, s as *const u8, len);
-                    count += len;
-                }
+                if s.is_null() { ws!(b"(null)".as_ptr(), 6); }
+                else { let len = strlen(s as *const u8); ws!(s as *const u8, len); }
             }
-            b'd' | b'i' => {
-                let d = args.arg::<c_int>();
-                count += write_i64_dec(fd, d as i64);
-            }
-            b'u' => {
-                let u = args.arg::<c_uint>();
-                count += write_u64_dec(fd, u as u64);
-            }
-            b'x' => {
-                let x = args.arg::<c_uint>();
-                count += write_u64_hex(fd, x as u64, false);
-            }
-            b'X' => {
-                let x = args.arg::<c_uint>();
-                count += write_u64_hex(fd, x as u64, true);
-            }
-            b'c' => {
-                let c = args.arg::<c_int>();
-                let byte = c as u8;
-                write_str(fd, &byte as *const u8, 1);
-                count += 1;
-            }
-            b'p' => {
-                let p = args.arg::<*const c_void>();
-                write_str(fd, b"0x".as_ptr(), 2);
-                count += 2;
-                count += write_u64_hex(fd, p as u64, false);
-            }
+            b'd' | b'i' => { let d = args.arg::<c_int>(); let b = format_i64(d as i64); ws!(b.0.as_ptr(), b.1); }
+            b'u' => { let u = args.arg::<c_uint>(); let b = format_u64(u as u64); ws!(b.0.as_ptr(), b.1); }
+            b'x' => { let x = args.arg::<c_uint>(); let b = format_hex(x as u64, false); ws!(b.0.as_ptr(), b.1); }
+            b'X' => { let x = args.arg::<c_uint>(); let b = format_hex(x as u64, true); ws!(b.0.as_ptr(), b.1); }
+            b'c' => { let ch = args.arg::<c_int>(); wc!(ch as u8); }
+            b'p' => { wc!(b'0'); wc!(b'x'); let p = args.arg::<*const c_void>(); let b = format_hex(p as u64, false); ws!(b.0.as_ptr(), b.1); }
+            b'f' => { let val = args.arg::<f64>(); let b = format_f64(val); ws!(b.0.as_ptr(), b.1); }
             b'l' => {
-                i += 1;
-                let sub = *fmt.add(i) as u8;
+                i += 1; let sub = *fmt.add(i) as u8;
                 match sub {
-                    b'd' => {
-                        let ld = args.arg::<c_long>();
-                        count += write_i64_dec(fd, ld as i64);
-                    }
-                    b'u' => {
-                        let lu = args.arg::<c_ulong>();
-                        count += write_u64_dec(fd, lu as u64);
-                    }
-                    b'x' => {
-                        let lx = args.arg::<c_ulong>();
-                        count += write_u64_hex(fd, lx as u64, false);
-                    }
-                    b'X' => {
-                        let lx = args.arg::<c_ulong>();
-                        count += write_u64_hex(fd, lx as u64, true);
-                    }
-                    _ => {
-                        let pct = b'%';
-                        write_str(fd, &pct as *const u8, 1);
-                        write_str(fd, &sub as *const u8, 1);
-                        count += 2;
-                    }
+                    b'd' => { let ld = args.arg::<c_long>(); let b = format_i64(ld as i64); ws!(b.0.as_ptr(), b.1); }
+                    b'u' => { let lu = args.arg::<c_ulong>(); let b = format_u64(lu as u64); ws!(b.0.as_ptr(), b.1); }
+                    b'x' => { let lx = args.arg::<c_ulong>(); let b = format_hex(lx as u64, false); ws!(b.0.as_ptr(), b.1); }
+                    b'X' => { let lx = args.arg::<c_ulong>(); let b = format_hex(lx as u64, true); ws!(b.0.as_ptr(), b.1); }
+                    b'f' => { let val = args.arg::<f64>(); let b = format_f64(val); ws!(b.0.as_ptr(), b.1); }
+                    _ => { wc!(b'%'); wc!(sub); }
                 }
             }
-            b'%' => {
-                let pct = b'%';
-                write_str(fd, &pct as *const u8, 1);
-                count += 1;
-            }
-            b'n' => {
-                // ponytail: %n writes count to pointer, no-op for safety
-                let _ptr = args.arg::<*mut c_int>();
-            }
-            _ => {
-                let pct = b'%';
-                write_str(fd, &pct as *const u8, 1);
-                write_str(fd, &spec as *const u8, 1);
-                count += 2;
-            }
+            b'%' => { wc!(b'%'); }
+            b'n' => { let _ = args.arg::<*mut c_int>(); }
+            _ => { wc!(b'%'); wc!(spec); }
         }
         i += 1;
     }
+    if cap > 0 { let null_pos = if pos < cap { pos } else { cap - 1 }; *buf.add(null_pos) = 0; }
     count as c_int
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn vprintf(fmt: *const c_char, mut args: VaListImpl) -> c_int {
-    format_and_write((*stdout).fd, fmt, &mut args)
+pub unsafe extern "C" fn vsprintf(buf: *mut c_char, fmt: *const c_char, mut args: VaListImpl) -> c_int {
+    format_to_buf(buf as *mut u8, usize::MAX, fmt, &mut args)
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn vfprintf(stream: *mut FILE, fmt: *const c_char, mut args: VaListImpl) -> c_int {
-    format_and_write((*stream).fd, fmt, &mut args)
+pub unsafe extern "C" fn vsnprintf(buf: *mut c_char, size: usize, fmt: *const c_char, mut args: VaListImpl) -> c_int {
+    format_to_buf(buf as *mut u8, size, fmt, &mut args)
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn printf(fmt: *const c_char, mut args: ...) -> c_int {
-    format_and_write((*stdout).fd, fmt, &mut args)
+pub unsafe extern "C" fn sprintf(buf: *mut c_char, fmt: *const c_char, mut args: ...) -> c_int {
+    format_to_buf(buf as *mut u8, usize::MAX, fmt, &mut args)
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn fprintf(stream: *mut FILE, fmt: *const c_char, mut args: ...) -> c_int {
-    format_and_write((*stream).fd, fmt, &mut args)
+pub unsafe extern "C" fn snprintf(buf: *mut c_char, size: usize, fmt: *const c_char, mut args: ...) -> c_int {
+    format_to_buf(buf as *mut u8, size, fmt, &mut args)
+}
+
+// ============================================================
+// scanf / vscanf / fscanf / vfscanf / sscanf / vsscanf
+// ============================================================
+
+unsafe fn skip_ws(p: *const u8) -> *const u8 {
+    let mut q = p;
+    while *q == b' ' || *q == b'\t' || *q == b'\n' || *q == b'\r' { q = q.add(1); }
+    q
+}
+
+unsafe fn vsscanf_inner(buf: *const u8, fmt: *const c_char, args: &mut VaListImpl) -> c_int {
+    let mut p = buf;
+    let mut i = 0usize;
+    let mut assigned = 0i32;
+    loop {
+        let fc = *fmt.add(i) as u8;
+        if fc == 0 { break; }
+        if fc == b' ' || fc == b'\t' || fc == b'\n' || fc == b'\r' { p = skip_ws(p); i += 1; continue; }
+        if fc != b'%' { if *p != fc { break; } p = p.add(1); i += 1; continue; }
+        i += 1;
+        let spec = *fmt.add(i) as u8;
+        match spec {
+            b'd' | b'i' => {
+                p = skip_ws(p);
+                let neg = if *p == b'-' { p = p.add(1); true } else if *p == b'+' { p = p.add(1); false } else { false };
+                let mut val: u64 = 0;
+                let start = p;
+                while *p >= b'0' && *p <= b'9' { val = val.wrapping_mul(10).wrapping_add((*p - b'0') as u64); p = p.add(1); }
+                if p == start { break; }
+                let out = args.arg::<*mut c_int>();
+                if !out.is_null() { *out = if neg { -(val as i64) as c_int } else { val as c_int }; }
+                assigned += 1;
+            }
+            b'u' => {
+                p = skip_ws(p);
+                let mut val: u64 = 0;
+                let start = p;
+                while *p >= b'0' && *p <= b'9' { val = val.wrapping_mul(10).wrapping_add((*p - b'0') as u64); p = p.add(1); }
+                if p == start { break; }
+                let out = args.arg::<*mut c_uint>();
+                if !out.is_null() { *out = val as c_uint; }
+                assigned += 1;
+            }
+            b'x' => {
+                p = skip_ws(p);
+                let mut val: u64 = 0;
+                let start = p;
+                while (*p >= b'0' && *p <= b'9') || (*p >= b'a' && *p <= b'f') || (*p >= b'A' && *p <= b'F') {
+                    let d = if *p >= b'0' && *p <= b'9' { *p - b'0' }
+                    else if *p >= b'a' && *p <= b'f' { *p - b'a' + 10 }
+                    else { *p - b'A' + 10 };
+                    val = val.wrapping_mul(16).wrapping_add(d as u64);
+                    p = p.add(1);
+                }
+                if p == start { break; }
+                let out = args.arg::<*mut c_uint>();
+                if !out.is_null() { *out = val as c_uint; }
+                assigned += 1;
+            }
+            b's' => {
+                p = skip_ws(p);
+                if *p == 0 { break; }
+                let out = args.arg::<*mut c_char>();
+                let mut j = 0usize;
+                while *p != 0 && *p != b' ' && *p != b'\t' && *p != b'\n' && *p != b'\r' {
+                    if !out.is_null() { *out.add(j) = *p as c_char; }
+                    j += 1; p = p.add(1);
+                }
+                if !out.is_null() { *out.add(j) = 0; }
+                assigned += 1;
+            }
+            b'c' => {
+                if *p == 0 { break; }
+                let out = args.arg::<*mut c_char>();
+                if !out.is_null() { *out = *p as c_char; }
+                p = p.add(1);
+                assigned += 1;
+            }
+            b'n' => {
+                let out = args.arg::<*mut c_int>();
+                if !out.is_null() { *out = (p as usize - buf as usize) as c_int; }
+            }
+            b'%' => { if *p != b'%' { break; } p = p.add(1); }
+            b'[' => {
+                let mut negate = false;
+                i += 1;
+                let mut fc2 = *fmt.add(i) as u8;
+                if fc2 == b'^' { negate = true; i += 1; fc2 = *fmt.add(i) as u8; }
+                let mut charset = [0u8; 256];
+                loop { charset[fc2 as usize] = 1; i += 1; fc2 = *fmt.add(i) as u8; if fc2 == b']' || fc2 == 0 { break; } }
+                if *p == 0 { break; }
+                let out = args.arg::<*mut c_char>();
+                let mut j = 0usize;
+                loop {
+                    let c = *p; if c == 0 { break; }
+                    let in_set = charset[c as usize] != 0;
+                    if negate { if in_set { break; } } else { if !in_set { break; } }
+                    if !out.is_null() { *out.add(j) = c as c_char; }
+                    j += 1; p = p.add(1);
+                }
+                if !out.is_null() { *out.add(j) = 0; }
+                if j > 0 { assigned += 1; } else { break; }
+            }
+            _ => break,
+        }
+        i += 1;
+    }
+    assigned
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn dprintf(fd: c_int, fmt: *const c_char, mut args: ...) -> c_int {
-    format_and_write(fd, fmt, &mut args)
+pub unsafe extern "C" fn vsscanf(buf: *const c_char, fmt: *const c_char, mut args: VaListImpl) -> c_int {
+    vsscanf_inner(buf as *const u8, fmt, &mut args)
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn vfscanf(stream: *mut FILE, fmt: *const c_char, mut args: VaListImpl) -> c_int {
+    let mut line = [0u8; 4096];
+    let mut pos = 0usize;
+    loop {
+        if pos >= line.len() - 1 { break; }
+        let c = fgetc(stream);
+        if c == -1 { break; }
+        line[pos] = c as u8;
+        pos += 1;
+        if c == b'\n' as c_int { break; }
+    }
+    line[pos] = 0;
+    if pos == 0 { return 0; }
+    vsscanf_inner(line.as_ptr(), fmt, &mut args)
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn vscanf(fmt: *const c_char, args: VaListImpl) -> c_int {
+    vfscanf(stdin, fmt, args)
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn sscanf(buf: *const c_char, fmt: *const c_char, mut args: ...) -> c_int {
+    vsscanf_inner(buf as *const u8, fmt, &mut args)
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn fscanf(stream: *mut FILE, fmt: *const c_char, mut args: ...) -> c_int {
+    vfscanf(stream, fmt, args)
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn scanf(fmt: *const c_char, mut args: ...) -> c_int {
+    vfscanf(stdin, fmt, args)
+}
+
+// ============================================================
+// getdelim / getline
+// ============================================================
+
+#[no_mangle]
+pub unsafe extern "C" fn getdelim(
+    lineptr: *mut *mut c_char, n: *mut usize, delim: c_int, stream: *mut FILE,
+) -> isize {
+    if lineptr.is_null() || n.is_null() { return -1; }
+    let mut cap = *n;
+    let mut buf = *lineptr;
+    if buf.is_null() || cap == 0 {
+        cap = 128;
+        buf = realloc(buf as *mut c_void, cap) as *mut c_char;
+        if buf.is_null() { return -1; }
+        *lineptr = buf;
+        *n = cap;
+    }
+    let mut len = 0usize;
+    loop {
+        let c = fgetc(stream);
+        if c == -1 { if len == 0 { return -1; } break; }
+        if len + 1 >= cap {
+            let new_cap = cap.wrapping_mul(2);
+            let new_buf = realloc(buf as *mut c_void, new_cap) as *mut c_char;
+            if new_buf.is_null() { return -1; }
+            buf = new_buf; cap = new_cap;
+            *lineptr = buf; *n = cap;
+        }
+        *buf.add(len) = c as c_char;
+        len += 1;
+        if c == delim { break; }
+    }
+    *buf.add(len) = 0;
+    len as isize
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn getline(lineptr: *mut *mut c_char, n: *mut usize, stream: *mut FILE) -> isize {
+    getdelim(lineptr, n, b'\n' as c_int, stream)
+}
+
+// ============================================================
+// popen / pclose
+// ============================================================
+
+#[no_mangle]
+pub unsafe extern "C" fn popen(cmd: *const c_char, mode: *const c_char) -> *mut FILE {
+    if cmd.is_null() || mode.is_null() { ERRNO = EINVAL; return core::ptr::null_mut(); }
+    let m = *mode;
+    if m != b'r' as c_char && m != b'w' as c_char { ERRNO = EINVAL; return core::ptr::null_mut(); }
+    let mut p: [c_int; 2] = [0; 2];
+    if sys_pipe2(p.as_mut_ptr(), O_CLOEXEC) < 0 { return core::ptr::null_mut(); }
+    let op = if m == b'r' as c_char { 0 } else { 1 };
+    let child_fd = p[1 - op];
+    let f = fdopen(p[op], mode);
+    if f.is_null() { sys_close(p[0] as i64); sys_close(p[1] as i64); return core::ptr::null_mut(); }
+    let pid = sys_fork();
+    if pid < 0 { fclose(f); sys_close(child_fd as i64); return core::ptr::null_mut(); }
+    if pid == 0 {
+        sys_close(p[op] as i64);
+        if child_fd != (1 - op) as c_int { sys_dup3(child_fd, (1 - op) as c_int, 0); sys_close(child_fd as i64); }
+        let sh = b"/bin/sh\0".as_ptr() as *const c_char;
+        let argv = [b"sh\0".as_ptr() as *const c_char, b"-c\0".as_ptr() as *const c_char, cmd, core::ptr::null()];
+        sys_execve(sh, argv.as_ptr(), __environ as *const *const c_char);
+        _exit(127);
+    }
+    sys_close(child_fd as i64);
+    (*f).pipe_pid = pid as c_int;
+    f
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn pclose(f: *mut FILE) -> c_int {
+    let pid = (*f).pipe_pid;
+    let r = fclose(f);
+    if pid <= 0 { return -1; }
+    let mut status: c_int = 0;
+    let w = waitpid(pid, &mut status, 0);
+    if w < 0 || r != 0 { return -1; }
+    status
+}
+
+// ============================================================
+// tmpfile / tmpnam / remove / rename
+// ============================================================
+
+const L_tmpnam: usize = 20;
+static mut TMPNAM_COUNTER: c_uint = 0;
+
+unsafe fn fill_tmpname(out: *mut c_char, seed: c_uint) {
+    let prefix = b"/tmp/tmp\0";
+    let mut k = 0;
+    while k < prefix.len() - 1 { *out.add(k) = prefix[k] as c_char; k += 1; }
+    let (buf, len) = format_hex(seed as u64, false);
+    for j in 0..len.min(L_tmpnam - k - 1) { *out.add(k + j) = buf[16 - len + j] as c_char; k += 1; }
+    *out.add(k) = 0;
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn tmpfile() -> *mut FILE {
+    let mut name = [0u8; L_tmpnam];
+    let mut ctr: c_uint = 0;
+    loop {
+        ctr = ctr.wrapping_add(1);
+        let mut ts: timespec = core::mem::zeroed();
+        let _ = sys_clock_gettime(CLOCK_REALTIME, &mut ts);
+        let seed = (ts.tv_nsec as c_uint).wrapping_add(ctr);
+        fill_tmpname(name.as_mut_ptr() as *mut c_char, seed);
+        let fd = sys_open(name.as_ptr(), (O_RDWR | O_CREAT | O_EXCL) as i64, 0o600);
+        if fd >= 0 {
+            sys_unlinkat(AT_FDCWD, name.as_ptr(), 0);
+            let f = fdopen(fd as c_int, b"w+\0".as_ptr() as *const c_char);
+            if f.is_null() { sys_close(fd); }
+            return f;
+        }
+        if ctr > 100 { return core::ptr::null_mut(); }
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn tmpnam(s: *mut c_char) -> *mut c_char {
+    static mut BUF: [c_char; L_tmpnam] = [0; L_tmpnam];
+    let out = if s.is_null() { core::ptr::addr_of_mut!(BUF) as *mut c_char } else { s };
+    TMPNAM_COUNTER = TMPNAM_COUNTER.wrapping_add(1);
+    let mut ts: timespec = core::mem::zeroed();
+    let _ = sys_clock_gettime(CLOCK_REALTIME, &mut ts);
+    let seed = (ts.tv_nsec as c_uint).wrapping_add(TMPNAM_COUNTER);
+    fill_tmpname(out, seed);
+    out
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn remove(path: *const c_char) -> c_int {
+    if path.is_null() { ERRNO = EINVAL; return -1; }
+    let r = sys_unlinkat(AT_FDCWD, path as *const u8, 0);
+    if r == 0 { 0 } else { ERRNO = (-r) as c_int; -1 }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn rename(old: *const c_char, new_: *const c_char) -> c_int {
+    if old.is_null() || new_.is_null() { ERRNO = EINVAL; return -1; }
+    let r = sys_renameat2(AT_FDCWD, old as *const u8, AT_FDCWD, new_ as *const u8, 0);
+    if r == 0 { 0 } else { ERRNO = (-r) as c_int; -1 }
 }
 
 // ============================================================
@@ -3899,6 +4887,7 @@ pub unsafe extern "C" fn _Exit(code: c_int) -> ! {
 
 #[no_mangle]
 pub unsafe extern "C" fn exit(code: c_int) -> ! {
+    fflush(core::ptr::null_mut());
     __funcs_on_exit();
     _exit(code);
 }
@@ -4801,6 +5790,7 @@ pub unsafe extern "C" fn __libc_start_main(
 ) -> ! {
     let envp = argv.add((argc + 1) as usize);
     __environ = envp as *mut *mut c_char;
+    __stdio_init();
 
     if !_init.is_null() {
         let init_fn: InitFn = core::mem::transmute(_init);
