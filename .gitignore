@@ -1,0 +1,8 @@
+/target
+/tests/fixtures/hello
+/tests/fixtures/hello_static
+/tests/fixtures/libfoo.so
+/tests/fixtures/needfoo
+/tests/fixtures/tiny
+/tests/fixtures/tiny_ldso
+/tests/fixtures/tlstest
