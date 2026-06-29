@@ -1,7 +1,7 @@
 use std::process::Command;
 
 #[test]
-fn iconv_functions_under_libc_so() {
+fn dso_tls_works_in_main_and_pthread_threads() {
     let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
     let fixtures = manifest_dir.join("tests/fixtures");
     let include = manifest_dir.join("include");
@@ -23,8 +23,22 @@ fn iconv_functions_under_libc_so() {
     assert!(ldso_path.exists(), "libldso.so not found");
     assert!(libc_path.exists(), "libc.so not found");
 
-    let src = fixtures.join("iconv_test.c");
-    let bin = fixtures.join("iconv_test");
+    let libtls_src = fixtures.join("libtls.c");
+    let libtls_so = manifest_dir.join("target/debug/libtls.so");
+    let status = Command::new("musl-gcc")
+        .args([
+            "-shared",
+            "-fPIC",
+            libtls_src.to_str().unwrap(),
+            "-o",
+            libtls_so.to_str().unwrap(),
+        ])
+        .status()
+        .expect("failed to run musl-gcc for libtls.so");
+    assert!(status.success(), "musl-gcc libtls.so compilation failed");
+
+    let src = fixtures.join("dso_tls_test.c");
+    let bin = fixtures.join("dso_tls_test");
     let status = Command::new("musl-gcc")
         .args([
             "-fPIE",
@@ -37,24 +51,25 @@ fn iconv_functions_under_libc_so() {
             manifest_dir.join("target/debug").to_str().unwrap(),
             src.to_str().unwrap(),
             "-Wl,--allow-shlib-undefined",
-                        "-lc",
+            "-ltls",
+            "-lc",
             "-o",
             bin.to_str().unwrap(),
         ])
         .status()
-        .expect("failed to run musl-gcc for iconv_test");
-    assert!(status.success(), "musl-gcc iconv_test compilation failed");
+        .expect("failed to run musl-gcc for dso_tls_test");
+    assert!(status.success(), "musl-gcc dso_tls_test compilation failed");
 
     let output = Command::new(&bin)
         .env("LD_LIBRARY_PATH", manifest_dir.join("target/debug").to_str().unwrap())
         .output()
-        .expect("failed to run iconv_test");
+        .expect("failed to run dso_tls_test");
 
     assert!(
         output.status.success(),
-        "iconv_test exited with {:?}, stderr: {}",
+        "dso_tls_test exited with {:?}, stderr: {}",
         output.status.code(),
         String::from_utf8_lossy(&output.stderr)
     );
-    assert_eq!(String::from_utf8_lossy(&output.stdout), "iconv ok\n");
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "dso tls ok\n");
 }

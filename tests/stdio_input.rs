@@ -38,7 +38,8 @@ fn stdio_input_functions_under_libc_so() {
             "-L",
             manifest_dir.join("target/debug").to_str().unwrap(),
             src.to_str().unwrap(),
-            "-lc",
+            "-Wl,--allow-shlib-undefined",
+                        "-lc",
             "-o",
             bin.to_str().unwrap(),
         ])

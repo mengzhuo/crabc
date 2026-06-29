@@ -13,6 +13,7 @@ fn loader_runs_tiny_pie() {
             "-nostdlib",
             "-nostartfiles",
             tiny_src.to_str().unwrap(),
+            "-Wl,--allow-shlib-undefined",
             "-o",
             tiny_bin.to_str().unwrap(),
         ])

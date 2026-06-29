@@ -33,6 +33,9 @@ const R_X86_64_COPY: u64 = 5;
 const R_X86_64_GLOB_DAT: u64 = 6;
 const R_X86_64_JUMP_SLOT: u64 = 7;
 const R_X86_64_RELATIVE: u64 = 8;
+const R_X86_64_DTPMOD64: u64 = 16;
+const R_X86_64_DTPOFF64: u64 = 17;
+const R_X86_64_TPOFF64: u64 = 18;
 
 const AT_NULL: u64 = 0;
 const AT_PHDR: u64 = 3;
@@ -76,6 +79,10 @@ struct LoadedObject {
     strsz: usize,
     dyn_addr: usize,
     dyn_memsz: usize,
+    tls_image: *const u8,
+    tls_filesz: u64,
+    tls_memsz: u64,
+    tls_align: u64,
 }
 
 const EMPTY_OBJ: LoadedObject = LoadedObject {
@@ -86,11 +93,22 @@ const EMPTY_OBJ: LoadedObject = LoadedObject {
     strsz: 0,
     dyn_addr: 0,
     dyn_memsz: 0,
+    tls_image: core::ptr::null(),
+    tls_filesz: 0,
+    tls_memsz: 0,
+    tls_align: 0,
 };
 
 // Safety: only accessed from single-threaded _start -> run_main
 static mut LOADED: [LoadedObject; MAX_LOADED] = [EMPTY_OBJ; MAX_LOADED];
 static mut LOADED_COUNT: usize = 0;
+
+static mut TLS_TOTAL_SIZE: usize = 0;
+static mut TLS_LAYOUT_OFFSET: [usize; MAX_LOADED] = [0; MAX_LOADED];
+static mut TLS_FILESZ: [u64; MAX_LOADED] = [0; MAX_LOADED];
+static mut TLS_MEMSZ: [u64; MAX_LOADED] = [0; MAX_LOADED];
+static mut TLS_IMAGE: [*const u8; MAX_LOADED] = [core::ptr::null(); MAX_LOADED];
+static mut TLS_MODULE_COUNT: usize = 0;
 
 // ============================================================
 // _start: self-relocate ldso, then call run_main(sp)
@@ -505,10 +523,23 @@ unsafe fn load_dso_from_fd(fd: i64, base: u64) -> bool {
         return false;
     }
 
-    // Map PT_LOAD segments at base + p_vaddr
+    let mut tls_image: *const u8 = core::ptr::null();
+    let mut tls_filesz: u64 = 0;
+    let mut tls_memsz: u64 = 0;
+    let mut tls_align: u64 = 0;
+
     for i in 0..e_phnum {
         let ph = buf.as_ptr().add(e_phoff as usize + i * PHDR_SIZE);
         let p_type = u32::from_le_bytes(core::ptr::read_unaligned(ph as *const [u8; 4]));
+        if p_type == PT_TLS {
+            let _p_offset = u64::from_le_bytes(core::ptr::read_unaligned(ph.add(PH_OFFSET) as *const [u8; 8]));
+            let p_vaddr = u64::from_le_bytes(core::ptr::read_unaligned(ph.add(PH_VADDR) as *const [u8; 8]));
+            tls_filesz = u64::from_le_bytes(core::ptr::read_unaligned(ph.add(PH_FILESZ) as *const [u8; 8]));
+            tls_memsz = u64::from_le_bytes(core::ptr::read_unaligned(ph.add(PH_MEMSZ) as *const [u8; 8]));
+            tls_align = u64::from_le_bytes(core::ptr::read_unaligned(ph.add(PH_ALIGN) as *const [u8; 8]));
+            tls_image = (base + p_vaddr) as *const u8;
+            continue;
+        }
         if p_type != PT_LOAD {
             continue;
         }
@@ -603,6 +634,10 @@ unsafe fn load_dso_from_fd(fd: i64, base: u64) -> bool {
             strsz,
             dyn_addr,
             dyn_memsz: dyn_memsz as usize,
+            tls_image,
+            tls_filesz,
+            tls_memsz,
+            tls_align,
         };
         LOADED_COUNT += 1;
     }
@@ -644,6 +679,15 @@ unsafe fn resolve_symbol_with_size(name: *const u8, exclude: usize) -> (u64, usi
     let name_len = strlen(name);
     if name_len == 0 {
         return (0, 0);
+    }
+    if str_eq(name, name_len, b"__tls_get_addr\0".as_ptr()) {
+        return ((__tls_get_addr as usize) as u64, 0);
+    }
+    if str_eq(name, name_len, b"__rc_create_thread_tls\0".as_ptr()) {
+        return ((__rc_create_thread_tls as usize) as u64, 0);
+    }
+    if str_eq(name, name_len, b"__rc_tls_block_size\0".as_ptr()) {
+        return ((__rc_tls_block_size as usize) as u64, 0);
     }
 
     for i in 0..LOADED_COUNT {
@@ -695,6 +739,61 @@ unsafe fn resolve_copy_source(obj_idx: usize, sym_idx: usize) -> (u64, usize) {
     }
     let name = obj.strtab.add(st_name);
     resolve_symbol_with_size(name, obj_idx)
+}
+
+unsafe fn resolve_symbol_module(obj_idx: usize, sym_idx: usize) -> usize {
+    let obj = &LOADED[obj_idx];
+    if sym_idx == 0 || obj.symtab.is_null() || obj.strtab.is_null() {
+        return obj_idx;
+    }
+    if sym_idx * SYMTAB_ENT_SIZE >= obj.sym_count * SYMTAB_ENT_SIZE {
+        return obj_idx;
+    }
+    let sym_entry = obj.symtab.add(sym_idx * SYMTAB_ENT_SIZE);
+    let st_name =
+        u32::from_le_bytes(core::ptr::read_unaligned(sym_entry as *const [u8; 4])) as usize;
+    if st_name >= obj.strsz {
+        return obj_idx;
+    }
+    let name = obj.strtab.add(st_name);
+    let name_len = strlen(name);
+    for i in 0..LOADED_COUNT {
+        let o = &LOADED[i];
+        if o.symtab.is_null() || o.strtab.is_null() {
+            continue;
+        }
+        for j in 0..o.sym_count {
+            let se = o.symtab.add(j * SYMTAB_ENT_SIZE);
+            let s_name =
+                u32::from_le_bytes(core::ptr::read_unaligned(se as *const [u8; 4])) as usize;
+            let s_value = u64::from_le_bytes(core::ptr::read_unaligned(
+                se.add(8) as *const [u8; 8],
+            ));
+            if s_value == 0 {
+                continue;
+            }
+            if s_name >= o.strsz {
+                continue;
+            }
+            let sym_name = o.strtab.add(s_name);
+            if str_eq(name, name_len, sym_name) {
+                return i;
+            }
+        }
+    }
+    obj_idx
+}
+
+unsafe fn tls_sym_offset(obj_idx: usize, sym_idx: usize) -> u64 {
+    let obj = &LOADED[obj_idx];
+    if sym_idx == 0 || obj.symtab.is_null() {
+        return 0;
+    }
+    if sym_idx * SYMTAB_ENT_SIZE >= obj.sym_count * SYMTAB_ENT_SIZE {
+        return 0;
+    }
+    let sym_entry = obj.symtab.add(sym_idx * SYMTAB_ENT_SIZE);
+    u64::from_le_bytes(core::ptr::read_unaligned(sym_entry.add(8) as *const [u8; 8]))
 }
 
 // ============================================================
@@ -798,9 +897,117 @@ unsafe fn apply_rela_table(
                 let sym_value = resolve_symbol_from_index(obj_idx, r_sym_idx);
                 *slot = sym_value;
             }
+            R_X86_64_DTPMOD64 => {
+                let module = if r_sym_idx == 0 {
+                    obj_idx
+                } else {
+                    resolve_symbol_module(obj_idx, r_sym_idx)
+                };
+                *slot = module as u64;
+            }
+            R_X86_64_DTPOFF64 => {
+                let off = (tls_sym_offset(obj_idx, r_sym_idx) as i64 + r_addend) as u64;
+                *slot = off;
+            }
+            R_X86_64_TPOFF64 => {
+                let module = if r_sym_idx == 0 {
+                    obj_idx
+                } else {
+                    resolve_symbol_module(obj_idx, r_sym_idx)
+                };
+                let off_in_mod = tls_sym_offset(obj_idx, r_sym_idx) as i64 + r_addend;
+                let fs_off = (TLS_LAYOUT_OFFSET[module] as i64) - (TLS_TOTAL_SIZE as i64) + off_in_mod;
+                *slot = fs_off as u64;
+            }
             _ => {}
         }
     }
+}
+
+unsafe fn compute_tls_layout() {
+    let mut total: usize = 0;
+    for i in 0..LOADED_COUNT {
+        let obj = &LOADED[i];
+        let align = if obj.tls_align > 0 { obj.tls_align as usize } else { 1 };
+        let block_size = ((obj.tls_memsz as usize + align - 1) / align) * align;
+        total += block_size;
+    }
+    TLS_TOTAL_SIZE = (total + 4095) & !4095;
+
+    let mut end = TLS_TOTAL_SIZE;
+    for i in 0..LOADED_COUNT {
+        let obj = &LOADED[i];
+        let align = if obj.tls_align > 0 { obj.tls_align as usize } else { 1 };
+        let block_size = ((obj.tls_memsz as usize + align - 1) / align) * align;
+        end -= block_size;
+        TLS_LAYOUT_OFFSET[i] = end;
+        TLS_FILESZ[i] = obj.tls_filesz;
+        TLS_MEMSZ[i] = obj.tls_memsz;
+        TLS_IMAGE[i] = obj.tls_image;
+    }
+    TLS_MODULE_COUNT = LOADED_COUNT;
+}
+
+unsafe fn init_tls_block(block: *mut u8) -> *mut u8 {
+    for i in 0..TLS_MODULE_COUNT {
+        if TLS_MEMSZ[i] == 0 {
+            continue;
+        }
+        let dst = block.add(TLS_LAYOUT_OFFSET[i]);
+        let src = TLS_IMAGE[i];
+        let filesz = TLS_FILESZ[i] as usize;
+        let memsz = TLS_MEMSZ[i] as usize;
+        if filesz > 0 {
+            core::ptr::copy_nonoverlapping(src, dst, filesz);
+        }
+        if memsz > filesz {
+            core::ptr::write_bytes(dst.add(filesz), 0, memsz - filesz);
+        }
+    }
+    let tcb = block.add(TLS_TOTAL_SIZE);
+    core::ptr::write_unaligned(tcb as *mut u64, tcb as u64);
+    tcb
+}
+
+#[repr(C)]
+pub struct TlsIndex {
+    ti_module: usize,
+    ti_offset: usize,
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn __tls_get_addr(ti: *const TlsIndex) -> *mut u8 {
+    let module = (*ti).ti_module;
+    let offset = (*ti).ti_offset;
+    let fs_base: usize;
+    core::arch::asm!("mov {}, fs:[0]", out(reg) fs_base);
+    let tls_base = fs_base - TLS_TOTAL_SIZE;
+    (tls_base as *mut u8).add(TLS_LAYOUT_OFFSET[module]).add(offset) as *mut u8
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn __rc_create_thread_tls() -> *mut u8 {
+    let total = TLS_TOTAL_SIZE + TCB_SIZE;
+    if total == 0 {
+        return core::ptr::null_mut();
+    }
+    let block = sys_mmap(
+        core::ptr::null_mut(),
+        total,
+        PROT_READ | PROT_WRITE,
+        MAP_PRIVATE | MAP_ANONYMOUS,
+        -1,
+        0,
+    );
+    if block as usize == MAP_FAILED {
+        return core::ptr::null_mut();
+    }
+    init_tls_block(block)
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn __rc_tls_block_size() -> usize {
+    TLS_TOTAL_SIZE + TCB_SIZE
 }
 
 // ============================================================
@@ -871,57 +1078,20 @@ unsafe fn load_and_jump(sp: usize) -> ! {
         }
     }
 
-    // Static TLS setup for the main executable
-    {
-        let mut tls_offset: u64 = 0;
-        let mut tls_filesz: u64 = 0;
-        let mut tls_memsz: u64 = 0;
-        let mut tls_align: u64 = 0;
-        for i in 0..e_phnum as usize {
-            let ph = buf.as_ptr().add(e_phoff as usize + i * PHDR_SIZE);
-            let p_type = u32::from_le_bytes(core::ptr::read_unaligned(ph as *const [u8; 4]));
-            if p_type == PT_TLS {
-                tls_offset = u64::from_le_bytes(core::ptr::read_unaligned(ph.add(PH_OFFSET) as *const [u8; 8]));
-                tls_filesz = u64::from_le_bytes(core::ptr::read_unaligned(ph.add(PH_FILESZ) as *const [u8; 8]));
-                tls_memsz = u64::from_le_bytes(core::ptr::read_unaligned(ph.add(PH_MEMSZ) as *const [u8; 8]));
-                tls_align = u64::from_le_bytes(core::ptr::read_unaligned(ph.add(PH_ALIGN) as *const [u8; 8]));
-                break;
-            }
-        }
-        if tls_memsz > 0 {
-            let align = if tls_align > 0 { tls_align } else { 4096 };
-            let total_tls_size = ((tls_memsz + align - 1) & !(align - 1)) as usize;
-            let alloc_size = total_tls_size + TCB_SIZE;
-
-            let tls_block = sys_mmap(
-                core::ptr::null_mut(),
-                alloc_size,
-                PROT_READ | PROT_WRITE,
-                MAP_PRIVATE | MAP_ANONYMOUS,
-                -1,
-                0,
-            );
-            if tls_block as usize == MAP_FAILED {
-                sys_exit(93);
-            }
-
-            sys_lseek(fd, tls_offset as i64);
-            let n = sys_read(fd, tls_block, tls_filesz as usize);
-            if n < tls_filesz as i64 {
-                sys_exit(92);
-            }
-
-            if tls_memsz > tls_filesz {
-                let bss_start = tls_block.add(tls_filesz as usize);
-                let bss_len = (tls_memsz - tls_filesz) as usize;
-                core::ptr::write_bytes(bss_start, 0, bss_len);
-            }
-
-            let tcb_addr = tls_block.add(total_tls_size);
-            core::ptr::write_unaligned(tcb_addr as *mut u64, tcb_addr as u64);
-
-            // ARCH_SET_FS = 0x1002
-            sys_arch_prctl(0x1002, tcb_addr as u64);
+    let mut exec_tls_image: *const u8 = core::ptr::null();
+    let mut exec_tls_filesz: u64 = 0;
+    let mut exec_tls_memsz: u64 = 0;
+    let mut exec_tls_align: u64 = 0;
+    for i in 0..e_phnum as usize {
+        let ph = buf.as_ptr().add(e_phoff as usize + i * PHDR_SIZE);
+        let p_type = u32::from_le_bytes(core::ptr::read_unaligned(ph as *const [u8; 4]));
+        if p_type == PT_TLS {
+            let p_vaddr = u64::from_le_bytes(core::ptr::read_unaligned(ph.add(PH_VADDR) as *const [u8; 8]));
+            exec_tls_filesz = u64::from_le_bytes(core::ptr::read_unaligned(ph.add(PH_FILESZ) as *const [u8; 8]));
+            exec_tls_memsz = u64::from_le_bytes(core::ptr::read_unaligned(ph.add(PH_MEMSZ) as *const [u8; 8]));
+            exec_tls_align = u64::from_le_bytes(core::ptr::read_unaligned(ph.add(PH_ALIGN) as *const [u8; 8]));
+            exec_tls_image = p_vaddr as *const u8;
+            break;
         }
     }
 
@@ -996,6 +1166,10 @@ unsafe fn load_and_jump(sp: usize) -> ! {
         strsz: dt_strsz as usize,
         dyn_addr: dyn_vaddr as usize,
         dyn_memsz: dyn_memsz as usize,
+        tls_image: exec_tls_image,
+        tls_filesz: exec_tls_filesz,
+        tls_memsz: exec_tls_memsz,
+        tls_align: exec_tls_align,
     };
     LOADED_COUNT = 1;
 
@@ -1014,11 +1188,28 @@ unsafe fn load_and_jump(sp: usize) -> ! {
         sys_close(lib_fd);
     }
 
-    // 6. Process all relocations (symbolic + RELATIVE) for all objects
+    compute_tls_layout();
+
     process_all_relocations();
 
-    // 7. Compute phdr address in mapped memory and jump
-    let phdr_addr = e_phoff; // base=0 for PIE, so phdr table is at e_phoff
+    if TLS_TOTAL_SIZE > 0 {
+        let alloc_size = TLS_TOTAL_SIZE + TCB_SIZE;
+        let tls_block = sys_mmap(
+            core::ptr::null_mut(),
+            alloc_size,
+            PROT_READ | PROT_WRITE,
+            MAP_PRIVATE | MAP_ANONYMOUS,
+            -1,
+            0,
+        );
+        if tls_block as usize == MAP_FAILED {
+            sys_exit(93);
+        }
+        let tcb = init_tls_block(tls_block);
+        sys_arch_prctl(0x1002, tcb as u64);
+    }
+
+    let phdr_addr = e_phoff;
     build_and_jump(e_entry, phdr_addr, e_phnum)
 }
 

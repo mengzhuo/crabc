@@ -44,6 +44,7 @@ fn ldso_runs_pie_with_dependency() {
             "-L",
             fixtures.to_str().unwrap(),
             needfoo_src.to_str().unwrap(),
+            "-Wl,--allow-shlib-undefined",
             "-lfoo",
             "-o",
             needfoo_bin.to_str().unwrap(),

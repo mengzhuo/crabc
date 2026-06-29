@@ -19,3 +19,4 @@
 /tests/fixtures/locale_test
 /tests/fixtures/iconv_test
 /tests/fixtures/math_test
+/tests/fixtures/dso_tls_test
