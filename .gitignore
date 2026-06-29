@@ -18,3 +18,4 @@
 /tests/fixtures/pthread_test
 /tests/fixtures/locale_test
 /tests/fixtures/iconv_test
+/tests/fixtures/math_test
