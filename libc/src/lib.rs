@@ -2,7 +2,7 @@
 #![feature(c_variadic)]
 #![allow(dead_code)]
 
-use core::ffi::{c_char, c_int, c_long, c_uint, c_ulong, c_void, VaListImpl};
+use core::ffi::{c_char, c_int, c_long, c_longlong, c_uint, c_ulong, c_ulonglong, c_void, VaListImpl};
 use core::ptr::null_mut;
 
 #[cfg(not(test))]
@@ -680,6 +680,187 @@ pub extern "C" fn toupper(c: c_int) -> c_int {
         c - (b'a' as c_int - b'A' as c_int)
     } else {
         c
+    }
+}
+
+// ============================================================
+// stdlib.h: integer conversion, abs, rand
+// ============================================================
+
+unsafe fn parse_digit(c: u8, base: c_int) -> Option<u8> {
+    let d = if c >= b'0' && c <= b'9' {
+        c - b'0'
+    } else if c >= b'a' && c <= b'z' {
+        c - b'a' + 10
+    } else if c >= b'A' && c <= b'Z' {
+        c - b'A' + 10
+    } else {
+        return None;
+    };
+    if (d as c_int) < base {
+        Some(d)
+    } else {
+        None
+    }
+}
+
+unsafe fn parse_prefix(s: *const u8, base: *mut c_int) -> *const u8 {
+    let mut p = s;
+    if *base == 0 {
+        if *p == b'0' {
+            if *p.add(1) == b'x' || *p.add(1) == b'X' {
+                *base = 16;
+                p = p.add(2);
+            } else {
+                *base = 8;
+            }
+        } else {
+            *base = 10;
+        }
+    } else if *base == 16 {
+        if *p == b'0' && (*p.add(1) == b'x' || *p.add(1) == b'X') {
+            p = p.add(2);
+        }
+    }
+    p
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn strtol(s: *const c_char, endptr: *mut *mut c_char, base: c_int) -> c_long {
+    let mut p = s as *const u8;
+    while isspace(*p as c_int) != 0 {
+        p = p.add(1);
+    }
+    let mut neg = false;
+    match *p {
+        b'-' => {
+            neg = true;
+            p = p.add(1);
+        }
+        b'+' => p = p.add(1),
+        _ => {}
+    }
+    let mut base = base;
+    p = parse_prefix(p, &mut base);
+    let mut val: c_ulong = 0;
+    let mut consumed = false;
+    while let Some(d) = parse_digit(*p, base) {
+        val = val.wrapping_mul(base as c_ulong).wrapping_add(d as c_ulong);
+        p = p.add(1);
+        consumed = true;
+    }
+    if !endptr.is_null() {
+        *endptr = if consumed { p as *mut c_char } else { s as *mut c_char };
+    }
+    if neg {
+        val.wrapping_neg() as c_long
+    } else {
+        val as c_long
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn strtoul(s: *const c_char, endptr: *mut *mut c_char, base: c_int) -> c_ulong {
+    let mut p = s as *const u8;
+    while isspace(*p as c_int) != 0 {
+        p = p.add(1);
+    }
+    let mut neg = false;
+    match *p {
+        b'-' => {
+            neg = true;
+            p = p.add(1);
+        }
+        b'+' => p = p.add(1),
+        _ => {}
+    }
+    let mut base = base;
+    p = parse_prefix(p, &mut base);
+    let mut val: c_ulong = 0;
+    let mut consumed = false;
+    while let Some(d) = parse_digit(*p, base) {
+        val = val.wrapping_mul(base as c_ulong).wrapping_add(d as c_ulong);
+        p = p.add(1);
+        consumed = true;
+    }
+    if !endptr.is_null() {
+        *endptr = if consumed { p as *mut c_char } else { s as *mut c_char };
+    }
+    if neg {
+        val.wrapping_neg()
+    } else {
+        val
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn strtoll(s: *const c_char, endptr: *mut *mut c_char, base: c_int) -> c_longlong {
+    // ponytail: on x86_64 long == long long; reuse strtol
+    strtol(s, endptr, base) as c_longlong
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn strtoull(s: *const c_char, endptr: *mut *mut c_char, base: c_int) -> c_ulonglong {
+    // ponytail: on x86_64 unsigned long == unsigned long long; reuse strtoul
+    strtoul(s, endptr, base) as c_ulonglong
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn atoi(s: *const c_char) -> c_int {
+    strtol(s, core::ptr::null_mut(), 10) as c_int
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn atol(s: *const c_char) -> c_long {
+    strtol(s, core::ptr::null_mut(), 10)
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn atoll(s: *const c_char) -> c_longlong {
+    strtoll(s, core::ptr::null_mut(), 10)
+}
+
+#[no_mangle]
+pub extern "C" fn abs(n: c_int) -> c_int {
+    if n < 0 {
+        -n
+    } else {
+        n
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn labs(n: c_long) -> c_long {
+    if n < 0 {
+        -n
+    } else {
+        n
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn llabs(n: c_longlong) -> c_longlong {
+    if n < 0 {
+        -n
+    } else {
+        n
+    }
+}
+
+static mut RAND_STATE: c_uint = 1;
+
+#[no_mangle]
+pub extern "C" fn srand(seed: c_uint) {
+    unsafe {
+        RAND_STATE = seed;
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn rand() -> c_int {
+    unsafe {
+        RAND_STATE = RAND_STATE.wrapping_mul(1103515245).wrapping_add(12345);
+        ((RAND_STATE >> 16) & 0x7fff) as c_int
     }
 }
 
