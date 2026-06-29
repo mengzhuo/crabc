@@ -4,6 +4,7 @@
 
 use core::ffi::{c_char, c_int, c_long, c_longlong, c_uint, c_ulong, c_ulonglong, c_void, VaListImpl};
 use core::ptr::null_mut;
+use core::sync::atomic::{AtomicI32, AtomicUsize, Ordering};
 
 #[cfg(not(test))]
 #[panic_handler]
@@ -1553,6 +1554,276 @@ pub extern "C" fn htons(hostshort: u16) -> u16 {
 #[no_mangle]
 pub extern "C" fn ntohs(netshort: u16) -> u16 {
     u16::from_be(netshort)
+}
+
+// ponytail: no full TLS per thread; enough for simple tests
+pub type PthreadT = c_ulong;
+
+#[repr(C)]
+pub struct pthread_mutex_t {
+    pub lock: c_int,
+}
+
+#[repr(C)]
+pub struct pthread_attr_t {
+    // ponytail: empty; attributes ignored
+}
+
+const CLONE_VM: c_ulong = 0x00000100;
+const CLONE_FS: c_ulong = 0x00000200;
+const CLONE_FILES: c_ulong = 0x00000400;
+const CLONE_SIGHAND: c_ulong = 0x00000800;
+const CLONE_THREAD: c_ulong = 0x00010000;
+const CLONE_SYSVSEM: c_ulong = 0x00040000;
+const CLONE_PARENT_SETTID: c_ulong = 0x00100000;
+const CLONE_CHILD_CLEARTID: c_ulong = 0x00200000;
+
+const FUTEX_WAIT: c_int = 0;
+
+// ponytail: adapted from musl x86_64 clone.s
+#[cfg(not(test))]
+core::arch::global_asm!(
+    ".global __rc_clone",
+    ".type __rc_clone, @function",
+    "__rc_clone:",
+    "mov rax, rdi",
+    "mov rdi, rdx",
+    "mov rdx, r8",
+    "mov r10, [rsp + 8]",
+    "mov r8, r9",
+    "mov r9, rcx",
+    "and rsi, -16",
+    "sub rsi, 8",
+    "mov [rsi], r9",
+    "mov [rsi + 8], rax",
+    "mov eax, 56",
+    "syscall",
+    "test rax, rax",
+    "jnz 1f",
+    "pop rdi",
+    "ret",
+    "1:",
+    "ret",
+);
+
+extern "C" {
+    fn __rc_clone(
+        fn_: usize,
+        stack: *mut u8,
+        flags: c_ulong,
+        arg: *mut c_void,
+        ptid: *mut c_int,
+        tls: c_ulong,
+        ctid: *mut c_int,
+    ) -> i64;
+}
+
+#[inline]
+unsafe fn sys_gettid() -> i64 {
+    let result: i64;
+    core::arch::asm!(
+        "syscall",
+        inlateout("rax") 186i64 => result,
+        lateout("rcx") _,
+        lateout("r11") _,
+    );
+    result
+}
+
+#[inline]
+unsafe fn sys_futex(
+    uaddr: *mut c_int,
+    futex_op: c_int,
+    val: c_int,
+    timeout: *mut c_void,
+    uaddr2: *mut c_int,
+    val3: c_int,
+) -> i64 {
+    let result: i64;
+    core::arch::asm!(
+        "syscall",
+        inlateout("rax") 202i64 => result,
+        in("rdi") uaddr,
+        in("rsi") futex_op as i64,
+        in("rdx") val as i64,
+        in("r10") timeout,
+        in("r8") uaddr2,
+        in("r9") val3 as i64,
+        lateout("rcx") _,
+        lateout("r11") _,
+    );
+    result
+}
+
+const MAX_THREADS: usize = 64;
+const STACK_SIZE: usize = 1024 * 1024;
+
+#[repr(C)]
+#[derive(Copy, Clone)]
+struct Thread {
+    tid: c_int,
+    user_fn: usize,
+    user_arg: *mut c_void,
+    stack: *mut u8,
+}
+
+static mut THREADS: [Thread; MAX_THREADS] = [Thread {
+    tid: -1,
+    user_fn: 0,
+    user_arg: core::ptr::null_mut(),
+    stack: core::ptr::null_mut(),
+}; MAX_THREADS];
+static NEXT_SLOT: AtomicUsize = AtomicUsize::new(0);
+
+unsafe fn alloc_thread_slot() -> Option<&'static mut Thread> {
+    let idx = NEXT_SLOT.fetch_add(1, Ordering::SeqCst);
+    if idx >= MAX_THREADS {
+        return None;
+    }
+    Some(&mut THREADS[idx])
+}
+
+unsafe extern "C" fn thread_entry(slot: *mut c_void) -> *mut c_void {
+    let slot = &mut *(slot as *mut Thread);
+    let user_fn: unsafe extern "C" fn(*mut c_void) -> *mut c_void =
+        core::mem::transmute::<usize, _>(slot.user_fn);
+    let _ret = user_fn(slot.user_arg);
+    _exit(0);
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn pthread_self() -> PthreadT {
+    let me = sys_gettid() as c_int;
+    let base = core::ptr::addr_of_mut!(THREADS[0]);
+    for i in 0..MAX_THREADS {
+        let slot = base.add(i);
+        if core::ptr::read_volatile(&raw const (*slot).tid) == me {
+            return slot as PthreadT;
+        }
+    }
+    0
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn pthread_create(
+    thread: *mut PthreadT,
+    _attr: *const pthread_attr_t,
+    start_routine: usize,
+    arg: *mut c_void,
+) -> c_int {
+    if start_routine == 0 || thread.is_null() {
+        return -1;
+    }
+    let Some(slot_ref) = alloc_thread_slot() else {
+        return -1;
+    };
+    let slot = slot_ref as *mut Thread;
+    let stack = sys_mmap(
+        null_mut(),
+        STACK_SIZE,
+        PROT_READ | PROT_WRITE,
+        MAP_PRIVATE | MAP_ANONYMOUS,
+        -1,
+        0,
+    );
+    if stack == MMAP_FAILED {
+        return -1;
+    }
+    (*slot).tid = 1;
+    (*slot).user_fn = start_routine;
+    (*slot).user_arg = arg;
+    (*slot).stack = stack;
+    let stack_top = stack.add(STACK_SIZE);
+    let tid_ptr = &raw mut (*slot).tid;
+    let flags = CLONE_VM
+        | CLONE_FS
+        | CLONE_FILES
+        | CLONE_SIGHAND
+        | CLONE_THREAD
+        | CLONE_SYSVSEM
+        | CLONE_PARENT_SETTID
+        | CLONE_CHILD_CLEARTID;
+    let tid = __rc_clone(
+        thread_entry as usize,
+        stack_top,
+        flags,
+        slot as *mut c_void,
+        tid_ptr,
+        0,
+        tid_ptr,
+    );
+    if tid < 0 {
+        (*slot).tid = -1;
+        (*slot).user_fn = 0;
+        (*slot).user_arg = null_mut();
+        (*slot).stack = null_mut();
+        sys_munmap(stack, STACK_SIZE);
+        -1
+    } else {
+        *thread = slot as PthreadT;
+        0
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn pthread_join(thread: PthreadT, _retval: *mut *mut c_void) -> c_int {
+    let slot = thread as *mut Thread;
+    if slot.is_null() {
+        return -1;
+    }
+    let tid_ptr = &mut (*slot).tid;
+    loop {
+        let tid = core::ptr::read_volatile(tid_ptr);
+        if tid == 0 {
+            break;
+        }
+        sys_futex(tid_ptr, FUTEX_WAIT, tid, null_mut(), null_mut(), 0);
+    }
+    (*slot).tid = -1;
+    (*slot).user_fn = 0;
+    (*slot).user_arg = null_mut();
+    (*slot).stack = null_mut();
+    0
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn pthread_exit(_retval: *mut c_void) -> ! {
+    _exit(0);
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn pthread_equal(t1: PthreadT, t2: PthreadT) -> c_int {
+    (t1 == t2) as c_int
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn pthread_mutex_init(mutex: *mut pthread_mutex_t, _attr: *const pthread_attr_t) -> c_int {
+    (*mutex).lock = 0;
+    0
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn pthread_mutex_destroy(_mutex: *mut pthread_mutex_t) -> c_int {
+    0
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn pthread_mutex_lock(mutex: *mut pthread_mutex_t) -> c_int {
+    let atomic = &raw const (*mutex).lock as *mut AtomicI32;
+    while (*atomic)
+        .compare_exchange_weak(0, 1, Ordering::Acquire, Ordering::Relaxed)
+        .is_err()
+    {
+        core::hint::spin_loop();
+    }
+    0
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn pthread_mutex_unlock(mutex: *mut pthread_mutex_t) -> c_int {
+    let atomic = &raw const (*mutex).lock as *mut AtomicI32;
+    (*atomic).store(0, Ordering::Release);
+    0
 }
 
 // ============================================================
