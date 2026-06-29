@@ -901,12 +901,26 @@ pub unsafe extern "C" fn lseek(fd: c_int, offset: i64, whence: c_int) -> i64 {
 #[repr(C)]
 pub struct FILE {
     fd: c_int,
-    // ponytail: minimal FILE, only fd matters for write path
+    has_ungotten: c_int,
+    ungotten: c_int,
+    // ponytail: minimal FILE, one-byte pushback for ungetc
 }
 
-static mut STDIN_FILE: FILE = FILE { fd: 0 };
-static mut STDOUT_FILE: FILE = FILE { fd: 1 };
-static mut STDERR_FILE: FILE = FILE { fd: 2 };
+static mut STDIN_FILE: FILE = FILE {
+    fd: 0,
+    has_ungotten: 0,
+    ungotten: 0,
+};
+static mut STDOUT_FILE: FILE = FILE {
+    fd: 1,
+    has_ungotten: 0,
+    ungotten: 0,
+};
+static mut STDERR_FILE: FILE = FILE {
+    fd: 2,
+    has_ungotten: 0,
+    ungotten: 0,
+};
 
 #[no_mangle]
 pub static mut stdin: *mut FILE = &raw mut STDIN_FILE as *mut FILE;
@@ -958,6 +972,98 @@ pub unsafe extern "C" fn fputc(c: c_int, stream: *mut FILE) -> c_int {
 #[no_mangle]
 pub unsafe extern "C" fn putchar(c: c_int) -> c_int {
     fputc(c, stdout)
+}
+
+// ============================================================
+// getc / fgetc / getchar / fgets / fread / ungetc
+// ============================================================
+
+#[no_mangle]
+pub unsafe extern "C" fn fgetc(stream: *mut FILE) -> c_int {
+    let f = &mut *stream;
+    if f.has_ungotten != 0 {
+        f.has_ungotten = 0;
+        return f.ungotten;
+    }
+    let mut buf = [0u8; 1];
+    let n = sys_read(f.fd as i64, buf.as_mut_ptr(), 1);
+    if n <= 0 {
+        -1
+    } else {
+        buf[0] as c_int
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn getc(stream: *mut FILE) -> c_int {
+    fgetc(stream)
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn getchar() -> c_int {
+    fgetc(stdin)
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn ungetc(c: c_int, stream: *mut FILE) -> c_int {
+    if c == -1 {
+        return -1;
+    }
+    let f = &mut *stream;
+    if f.has_ungotten != 0 {
+        return -1;
+    }
+    f.ungotten = c;
+    f.has_ungotten = 1;
+    c
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn fgets(s: *mut c_char, n: c_int, stream: *mut FILE) -> *mut c_char {
+    if n <= 0 {
+        return null_mut();
+    }
+    let max = (n - 1) as usize;
+    let mut i = 0usize;
+    while i < max {
+        let c = fgetc(stream);
+        if c == -1 {
+            if i == 0 {
+                return null_mut();
+            }
+            break;
+        }
+        *s.add(i) = c as c_char;
+        i += 1;
+        if c == b'\n' as c_int {
+            break;
+        }
+    }
+    *s.add(i) = 0;
+    s as *mut c_char
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn fread(
+    ptr: *mut c_void,
+    size: SizeT,
+    nmemb: SizeT,
+    stream: *mut FILE,
+) -> SizeT {
+    if size == 0 || nmemb == 0 {
+        return 0;
+    }
+    let total = size * nmemb;
+    let mut read = 0usize;
+    while read < total {
+        let c = fgetc(stream);
+        if c == -1 {
+            break;
+        }
+        *(ptr as *mut u8).add(read) = c as u8;
+        read += 1;
+    }
+    read / size
 }
 
 // ============================================================
