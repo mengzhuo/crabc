@@ -11438,6 +11438,30 @@ unsafe fn pat_next(pat: *const u8, m: usize, flags: c_int) -> (c_int, usize) {
     (*p as c_int, step)
 }
 
+unsafe fn match_class(name: &[u8], k: u8, kfold: u8) -> bool {
+    let eq = |c: u8| k == c || kfold == c;
+    let in_range = |lo: u8, hi: u8| (k >= lo && k <= hi) || (kfold >= lo && kfold <= hi);
+    match name {
+        b"alnum" => in_range(b'0', b'9') || in_range(b'A', b'Z') || in_range(b'a', b'z'),
+        b"alpha" => in_range(b'A', b'Z') || in_range(b'a', b'z'),
+        b"blank" => eq(b' ') || eq(b'\t'),
+        b"cntrl" => k < 0x20 || k == 0x7f,
+        b"digit" => in_range(b'0', b'9'),
+        b"graph" => k >= 0x21 && k <= 0x7e,
+        b"lower" => in_range(b'a', b'z'),
+        b"print" => k >= 0x20 && k <= 0x7e,
+        b"punct" =>
+            (k >= 0x21 && k <= 0x2f) ||
+            (k >= 0x3a && k <= 0x40) ||
+            (k >= 0x5b && k <= 0x60) ||
+            (k >= 0x7b && k <= 0x7e),
+        b"space" => eq(b' ') || eq(b'\t') || eq(b'\n') || eq(b'\r') || eq(0x0c) || eq(0x0b),
+        b"upper" => in_range(b'A', b'Z'),
+        b"xdigit" => in_range(b'0', b'9') || in_range(b'A', b'F') || in_range(b'a', b'f'),
+        _ => false,
+    }
+}
+
 /// Match a bracket expression [class] against char k.
 unsafe fn match_bracket(mut p: *const u8, k: u8, kfold: u8) -> bool {
     let mut inv = false;
@@ -11464,11 +11488,22 @@ unsafe fn match_bracket(mut p: *const u8, k: u8, kfold: u8) -> bool {
             }
             p = p.add(2);
         } else if *p == b'[' && (*p.add(1) == b':' || *p.add(1) == b'.' || *p.add(1) == b'=') {
-            // skip [:class:] etc.
             let z = *p.add(1);
-            p = p.add(2);
-            while *p != 0 && (*p != z || *p.add(1) != b']') { p = p.add(1); }
-            if *p != 0 { p = p.add(2); }
+            let start = p.add(2);
+            let mut q = start;
+            while *q != 0 && (*q != z || *q.add(1) != b']') { q = q.add(1); }
+            if *q != 0 {
+                let len = (q as usize) - (start as usize);
+                if len > 0 {
+                    let inner = core::slice::from_raw_parts(start, len);
+                    let matched =
+                        if z == b':' { match_class(inner, k, kfold) }
+                        else { len == 1 && (inner[0] == k || inner[0] == kfold) };
+                    if matched { return !inv; }
+                }
+                p = q.add(2);
+                continue;
+            }
         } else {
             if *p == k || *p == kfold {
                 return !inv;
