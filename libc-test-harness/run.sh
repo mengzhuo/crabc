@@ -176,27 +176,27 @@ EOF
 
 echo "" >> "$SUMMARY_REPORT"
 
-if grep -q "^BUILDERROR" "$RAW_REPORT" 2>/dev/null; then
+if grep -qa "^BUILDERROR" "$RAW_REPORT" 2>/dev/null; then
     echo "BUILDERROR tests:" >> "$SUMMARY_REPORT"
-    grep "^BUILDERROR" "$RAW_REPORT" | sed 's/BUILDERROR /  /' >> "$SUMMARY_REPORT"
+    grep -a "^BUILDERROR" "$RAW_REPORT" | sed 's/BUILDERROR /  /' >> "$SUMMARY_REPORT"
     echo "" >> "$SUMMARY_REPORT"
 fi
 
-if grep -q "^FAIL" "$RAW_REPORT" 2>/dev/null; then
+if grep -qa "^FAIL" "$RAW_REPORT" 2>/dev/null; then
     echo "FAIL tests:" >> "$SUMMARY_REPORT"
-    grep "^FAIL" "$RAW_REPORT" | sed 's/FAIL /  /' >> "$SUMMARY_REPORT"
+    grep -a "^FAIL" "$RAW_REPORT" | sed 's/FAIL /  /' >> "$SUMMARY_REPORT"
     echo "" >> "$SUMMARY_REPORT"
 fi
 
-if grep -q "^TIMEOUT" "$RAW_REPORT" 2>/dev/null; then
+if grep -qa "^TIMEOUT" "$RAW_REPORT" 2>/dev/null; then
     echo "TIMEOUT tests:" >> "$SUMMARY_REPORT"
-    grep "^TIMEOUT" "$RAW_REPORT" | sed 's/TIMEOUT /  /' >> "$SUMMARY_REPORT"
+    grep -a "^TIMEOUT" "$RAW_REPORT" | sed 's/TIMEOUT /  /' >> "$SUMMARY_REPORT"
     echo "" >> "$SUMMARY_REPORT"
 fi
 
-if grep -q "^PASS" "$RAW_REPORT" 2>/dev/null; then
+if grep -qa "^PASS" "$RAW_REPORT" 2>/dev/null; then
     echo "PASS tests:" >> "$SUMMARY_REPORT"
-    grep "^PASS" "$RAW_REPORT" | sed 's/PASS /  /' >> "$SUMMARY_REPORT"
+    grep -a "^PASS" "$RAW_REPORT" | sed 's/PASS /  /' >> "$SUMMARY_REPORT"
 fi
 
 echo "" >> "$SUMMARY_REPORT"
