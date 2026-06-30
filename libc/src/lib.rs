@@ -2870,7 +2870,7 @@ unsafe extern "C" fn thread_entry(slot: *mut c_void) -> *mut c_void {
     slot.result = ret;
     a_store(&raw mut slot.detach_state, DT_EXITED);
     futex_wake(&raw mut slot.detach_state, 1);
-    _exit(0);
+    sys_exit_thread(0)
 }
 
 unsafe fn find_thread() -> Option<&'static mut Thread> {
@@ -3033,7 +3033,7 @@ pub unsafe extern "C" fn pthread_exit(retval: *mut c_void) -> ! {
             exit(0);
         }
     }
-    _exit(0);
+    sys_exit_thread(0);
 }
 
 // --- pthread_attr_* ---
@@ -4073,7 +4073,7 @@ unsafe fn do_cancel() -> ! {
         slot.detach_state = DT_EXITED;
         futex_wake(&raw mut slot.detach_state, 1);
     }
-    _exit(0);
+    sys_exit_thread(0);
 }
 
 extern "C" fn cancel_handler(_sig: c_int) {
@@ -7716,6 +7716,21 @@ pub unsafe extern "C" fn realloc(ptr: *mut c_void, new_size: SizeT) -> *mut c_vo
 
 #[no_mangle]
 pub unsafe extern "C" fn _exit(code: c_int) -> ! {
+    sys_exit_group(code)
+}
+
+#[inline]
+unsafe fn sys_exit_group(code: c_int) -> ! {
+    core::arch::asm!(
+        "syscall",
+        in("rax") 231i64,
+        in("rdi") code as i64,
+        options(noreturn)
+    );
+}
+
+#[inline]
+unsafe fn sys_exit_thread(code: c_int) -> ! {
     core::arch::asm!(
         "syscall",
         in("rax") 60i64,
