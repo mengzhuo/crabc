@@ -799,6 +799,7 @@ pub extern "C" fn toupper(c: c_int) -> c_int {
 // ============================================================
 
 unsafe fn parse_digit(c: u8, base: c_int) -> Option<u8> {
+    if c == 0 { return None; }
     let d = if c >= b'0' && c <= b'9' {
         c - b'0'
     } else if c >= b'a' && c <= b'z' {
@@ -819,7 +820,7 @@ unsafe fn parse_prefix(s: *const u8, base: *mut c_int) -> *const u8 {
     let mut p = s;
     if *base == 0 {
         if *p == b'0' {
-            if *p.add(1) == b'x' || *p.add(1) == b'X' {
+            if (*p.add(1) == b'x' || *p.add(1) == b'X') && parse_digit(*p.add(2), 16).is_some() {
                 *base = 16;
                 p = p.add(2);
             } else {
@@ -829,91 +830,104 @@ unsafe fn parse_prefix(s: *const u8, base: *mut c_int) -> *const u8 {
             *base = 10;
         }
     } else if *base == 16 {
-        if *p == b'0' && (*p.add(1) == b'x' || *p.add(1) == b'X') {
+        if *p == b'0' && (*p.add(1) == b'x' || *p.add(1) == b'X') && parse_digit(*p.add(2), 16).is_some() {
             p = p.add(2);
         }
     }
     p
 }
 
-#[no_mangle]
-pub unsafe extern "C" fn strtol(s: *const c_char, endptr: *mut *mut c_char, base: c_int) -> c_long {
-    let mut p = s as *const u8;
+unsafe fn strtox(
+    s: *const c_char,
+    endptr: *mut *mut c_char,
+    mut base: c_int,
+    pos_limit: u64,
+    neg_limit: u64,
+) -> (u64, bool, bool) {
+    let s0 = s as *const u8;
+    let mut p = s0;
     while isspace(*p as c_int) != 0 {
         p = p.add(1);
     }
+
+    if base < 0 || base == 1 || base > 36 {
+        if !endptr.is_null() {
+            *endptr = s as *mut c_char;
+        }
+        ERRNO = EINVAL;
+        return (0, false, false);
+    }
+
     let mut neg = false;
     match *p {
-        b'-' => {
-            neg = true;
-            p = p.add(1);
-        }
+        b'-' => { neg = true; p = p.add(1); }
         b'+' => p = p.add(1),
         _ => {}
     }
-    let mut base = base;
+
     p = parse_prefix(p, &mut base);
-    let mut val: c_ulong = 0;
-    let mut consumed = false;
+
+    let limit = if neg { neg_limit } else { pos_limit };
+    let mut val: u64 = 0;
+    let mut any = false;
     while let Some(d) = parse_digit(*p, base) {
-        val = val.wrapping_mul(base as c_ulong).wrapping_add(d as c_ulong);
+        any = true;
+        if val > (limit - d as u64) / base as u64 {
+            while parse_digit(*p, base).is_some() { p = p.add(1); }
+            if !endptr.is_null() { *endptr = p as *mut c_char; }
+            ERRNO = ERANGE_VAL;
+            return (limit, true, neg);
+        }
+        val = val * base as u64 + d as u64;
         p = p.add(1);
-        consumed = true;
     }
+
     if !endptr.is_null() {
-        *endptr = if consumed { p as *mut c_char } else { s as *mut c_char };
+        *endptr = if any { p as *mut c_char } else { s as *mut c_char };
     }
-    if neg {
-        val.wrapping_neg() as c_long
-    } else {
-        val as c_long
+    (val, false, neg)
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn strtol(s: *const c_char, endptr: *mut *mut c_char, base: c_int) -> c_long {
+    let pos_limit = c_long::MAX as u64;
+    let neg_limit = pos_limit.wrapping_add(1);
+    let (val, overflow, neg) = strtox(s, endptr, base, pos_limit, neg_limit);
+    if overflow {
+        return if neg { c_long::MIN } else { c_long::MAX };
     }
+    if neg { val.wrapping_neg() as c_long } else { val as c_long }
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn strtoul(s: *const c_char, endptr: *mut *mut c_char, base: c_int) -> c_ulong {
-    let mut p = s as *const u8;
-    while isspace(*p as c_int) != 0 {
-        p = p.add(1);
+    let limit = c_ulong::MAX as u64;
+    let (val, overflow, neg) = strtox(s, endptr, base, limit, limit);
+    if overflow {
+        return c_ulong::MAX;
     }
-    let mut neg = false;
-    match *p {
-        b'-' => {
-            neg = true;
-            p = p.add(1);
-        }
-        b'+' => p = p.add(1),
-        _ => {}
-    }
-    let mut base = base;
-    p = parse_prefix(p, &mut base);
-    let mut val: c_ulong = 0;
-    let mut consumed = false;
-    while let Some(d) = parse_digit(*p, base) {
-        val = val.wrapping_mul(base as c_ulong).wrapping_add(d as c_ulong);
-        p = p.add(1);
-        consumed = true;
-    }
-    if !endptr.is_null() {
-        *endptr = if consumed { p as *mut c_char } else { s as *mut c_char };
-    }
-    if neg {
-        val.wrapping_neg()
-    } else {
-        val
-    }
+    if neg { val.wrapping_neg() as c_ulong } else { val as c_ulong }
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn strtoll(s: *const c_char, endptr: *mut *mut c_char, base: c_int) -> c_longlong {
-    // ponytail: on x86_64 long == long long; reuse strtol
-    strtol(s, endptr, base) as c_longlong
+    let pos_limit = c_longlong::MAX as u64;
+    let neg_limit = pos_limit.wrapping_add(1);
+    let (val, overflow, neg) = strtox(s, endptr, base, pos_limit, neg_limit);
+    if overflow {
+        return if neg { c_longlong::MIN } else { c_longlong::MAX };
+    }
+    if neg { val.wrapping_neg() as c_longlong } else { val as c_longlong }
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn strtoull(s: *const c_char, endptr: *mut *mut c_char, base: c_int) -> c_ulonglong {
-    // ponytail: on x86_64 unsigned long == unsigned long long; reuse strtoul
-    strtoul(s, endptr, base) as c_ulonglong
+    let limit = c_ulonglong::MAX as u64;
+    let (val, overflow, neg) = strtox(s, endptr, base, limit, limit);
+    if overflow {
+        return c_ulonglong::MAX;
+    }
+    if neg { val.wrapping_neg() as c_ulonglong } else { val as c_ulonglong }
 }
 
 #[no_mangle]
