@@ -34,6 +34,8 @@ const EDEADLK: c_int = 35;
 const ETIMEDOUT: c_int = 110;
 const ECANCELED: c_int = 125;
 const EOVERFLOW: c_int = 75;
+const EOWNERDEAD: c_int = 130;
+const ENOTRECOVERABLE: c_int = 131;
 
 static mut ERRNO: c_int = 0;
 
@@ -2337,6 +2339,12 @@ const CLONE_CHILD_CLEARTID: c_ulong = 0x00200000;
 
 const FUTEX_WAIT: c_int = 0;
 const FUTEX_WAKE: c_int = 1;
+const FUTEX_LOCK_PI: c_int = 6;
+const FUTEX_UNLOCK_PI: c_int = 7;
+const FUTEX_TRYLOCK_PI: c_int = 8;
+
+// ponytail: SIGCANCEL (32) is musl's internal cancel signal
+const SIGCANCEL: c_int = 32;
 
 const PTHREAD_MUTEX_NORMAL: c_int = 0;
 const PTHREAD_MUTEX_DEFAULT: c_int = 0;
@@ -2367,6 +2375,30 @@ const DT_EXITED: c_int = 0;
 const DT_EXITING: c_int = 1;
 const DT_JOINABLE: c_int = 2;
 const DT_DETACHED: c_int = 3;
+
+// ponytail: musl __ptcb cleanup handler node
+#[repr(C)]
+#[derive(Copy, Clone)]
+pub struct __ptcb {
+    __f: Option<unsafe extern "C" fn(*mut c_void)>,
+    __x: *mut c_void,
+    __next: *mut __ptcb,
+}
+
+// ponytail: robust_list_head for kernel robust mutex support
+#[repr(C)]
+#[derive(Copy, Clone)]
+struct robust_list {
+    next: *mut robust_list,
+}
+
+#[repr(C)]
+#[derive(Copy, Clone)]
+struct robust_list_head {
+    list: robust_list,
+    futex_offset: c_long,
+    pending: *mut robust_list,
+}
 
 // ponytail: adapted from musl x86_64 clone.s
 #[cfg(not(test))]
@@ -2475,6 +2507,8 @@ struct Thread {
     stack_size: usize,
     fs_base: *mut u8,
     tsd: [*mut c_void; PTHREAD_KEYS_MAX],
+    cancelbuf: *mut __ptcb,
+    robust_list: robust_list_head,
 }
 
 static mut THREADS: [Thread; MAX_THREADS] = [Thread {
@@ -2490,6 +2524,12 @@ static mut THREADS: [Thread; MAX_THREADS] = [Thread {
     stack_size: 0,
     fs_base: core::ptr::null_mut(),
     tsd: [core::ptr::null_mut(); PTHREAD_KEYS_MAX],
+    cancelbuf: core::ptr::null_mut(),
+    robust_list: robust_list_head {
+        list: robust_list { next: core::ptr::null_mut() },
+        futex_offset: 0,
+        pending: core::ptr::null_mut(),
+    },
 }; MAX_THREADS];
 static NEXT_SLOT: AtomicUsize = AtomicUsize::new(0);
 static mut KEY_DTORS: [Option<unsafe extern "C" fn(*mut c_void)>; PTHREAD_KEYS_MAX] = [None; PTHREAD_KEYS_MAX];
@@ -2504,6 +2544,31 @@ unsafe fn futex_wait(addr: *mut c_int, expected: c_int) -> c_int {
 unsafe fn futex_wake(addr: *mut c_int, count: c_int) {
     let c = if count < 0 { c_int::MAX } else { count };
     sys_futex(addr, FUTEX_WAKE, c, null_mut(), null_mut(), 0);
+}
+
+unsafe fn futex_lock_pi(addr: *mut c_int, abs_timeout: *const timespec) -> c_int {
+    let timeout_ptr = if abs_timeout.is_null() { null_mut() } else { abs_timeout as *mut c_void };
+    let r = sys_futex(addr, FUTEX_LOCK_PI, 0, timeout_ptr, null_mut(), 0);
+    if r < 0 { (-r) as c_int } else { 0 }
+}
+
+unsafe fn futex_unlock_pi(addr: *mut c_int) -> c_int {
+    let r = sys_futex(addr, FUTEX_UNLOCK_PI, 0, null_mut(), null_mut(), 0);
+    if r < 0 { (-r) as c_int } else { 0 }
+}
+
+#[inline]
+unsafe fn sys_set_robust_list(head: *mut robust_list_head, len: usize) -> i64 {
+    let result: i64;
+    core::arch::asm!(
+        "syscall",
+        inlateout("rax") 273i64 => result,
+        in("rdi") head,
+        in("rsi") len,
+        lateout("rcx") _,
+        lateout("r11") _,
+    );
+    result
 }
 
 unsafe fn futex_timedwait(addr: *mut c_int, expected: c_int, abs_timeout: *const timespec) -> c_int {
@@ -2733,6 +2798,7 @@ pub unsafe extern "C" fn pthread_detach(thread: PthreadT) -> c_int {
 #[no_mangle]
 pub unsafe extern "C" fn pthread_exit(retval: *mut c_void) -> ! {
     if let Some(slot) = find_thread() {
+        run_cleanup_handlers(slot);
         run_key_dtors(slot);
         slot.result = retval;
         slot.detach_state = DT_EXITED;
@@ -2851,37 +2917,147 @@ pub unsafe extern "C" fn pthread_mutexattr_getpshared(attr: *const pthread_mutex
     *p = (((*attr).__attr >> 7) & 1) as c_int; 0
 }
 
+#[no_mangle]
+pub unsafe extern "C" fn pthread_mutexattr_setprotocol(attr: *mut pthread_mutexattr_t, protocol: c_int) -> c_int {
+    match protocol {
+        0 => { (*attr).__attr &= !(MUTEX_PI as c_uint); 0 }
+        1 => {
+            let mut lk: c_int = 0;
+            let r = sys_futex(&raw mut lk, FUTEX_LOCK_PI, 0, null_mut(), null_mut(), 0);
+            if r < 0 { return (-r) as c_int; }
+            sys_futex(&raw mut lk, FUTEX_UNLOCK_PI, 0, null_mut(), null_mut(), 0);
+            (*attr).__attr |= MUTEX_PI as c_uint;
+            0
+        }
+        2 => ENOTSUP,
+        _ => EINVAL,
+    }
+}
+#[no_mangle]
+pub unsafe extern "C" fn pthread_mutexattr_getprotocol(attr: *const pthread_mutexattr_t, protocol: *mut c_int) -> c_int {
+    *protocol = (((*attr).__attr >> 3) & 3) as c_int; 0
+}
+
+const ENOTSUP: c_int = 95;
+
+#[no_mangle]
+pub unsafe extern "C" fn pthread_mutexattr_setrobust(attr: *mut pthread_mutexattr_t, robust: c_int) -> c_int {
+    if (robust as c_uint) > 1 { return EINVAL; }
+    if robust != 0 {
+        (*attr).__attr |= MUTEX_ROBUST as c_uint;
+    } else {
+        (*attr).__attr &= !(MUTEX_ROBUST as c_uint);
+    }
+    0
+}
+#[no_mangle]
+pub unsafe extern "C" fn pthread_mutexattr_getrobust(attr: *const pthread_mutexattr_t, robust: *mut c_int) -> c_int {
+    *robust = (((*attr).__attr >> 2) & 1) as c_int; 0
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn pthread_mutex_consistent(m: *mut pthread_mutex_t) -> c_int {
+    let old = a_load(&raw const (*m).__i[1]);
+    let own = old & 0x3fffffff;
+    if ((*m).__i[0] & MUTEX_ROBUST) == 0 || own == 0 || (old & 0x40000000) == 0 {
+        return EINVAL;
+    }
+    let self_tid = sys_gettid() as c_int;
+    if own != self_tid { return EPERM; }
+    a_and(&raw mut (*m).__i[1], !(0x40000000i32));
+    0
+}
+
+unsafe fn a_and(addr: *mut c_int, val: c_int) {
+    let a = &*(addr as *const AtomicI32);
+    a.fetch_and(val, Ordering::AcqRel);
+}
+
 // --- pthread_mutex_* ---
+const MUTEX_TYPE_MASK: c_int = 3;
+const MUTEX_ROBUST: c_int = 4;
+const MUTEX_PI: c_int = 8;
+const MUTEX_PSHARED: c_int = 128;
+
+unsafe fn ensure_robust_list(slot: &mut Thread) {
+    if slot.robust_list.futex_offset == 0 {
+        slot.robust_list.futex_offset = -28;
+        slot.robust_list.pending = core::ptr::null_mut();
+        sys_set_robust_list(&mut slot.robust_list, 24);
+    }
+}
+
 unsafe fn mutex_trylock(m: *mut pthread_mutex_t) -> c_int {
-    let type_ = (*m).__i[0] & 15;
-    if type_ == PTHREAD_MUTEX_NORMAL {
+    let type_ = (*m).__i[0];
+    // Fast path: plain NORMAL only (no PI, no robust, no pshared)
+    if (type_ & 0x8f) == PTHREAD_MUTEX_NORMAL {
         return a_cas(&raw mut (*m).__i[1], 0, EBUSY) & EBUSY;
     }
+    let base_type = type_ & MUTEX_TYPE_MASK;
     let self_tid = sys_gettid() as c_int;
     let old = a_load(&raw const (*m).__i[1]);
     let own = old & 0x3fffffff;
     if own == self_tid {
-        if type_ == PTHREAD_MUTEX_RECURSIVE {
+        if base_type == PTHREAD_MUTEX_RECURSIVE {
             if (*m).__i[5] >= c_int::MAX { return EAGAIN; }
             (*m).__i[5] += 1;
             return 0;
         }
-        return EDEADLK;
+        if base_type == PTHREAD_MUTEX_ERRORCHECK { return EDEADLK; }
+        return EBUSY;
     }
-    if own != 0 { return EBUSY; }
-    if a_cas(&raw mut (*m).__i[1], old, self_tid) == old {
+    if own == 0x3fffffff { return ENOTRECOVERABLE; }
+    if own != 0 || (old != 0 && (type_ & MUTEX_ROBUST) == 0) { return EBUSY; }
+    let mut newtid = self_tid;
+    if (type_ & MUTEX_ROBUST) != 0 {
+        if (*m).__i[2] != 0 { newtid |= 1i32 << 31; }
+        newtid |= old & 0x40000000;
+    }
+    if a_cas(&raw mut (*m).__i[1], old, newtid) == old {
         (*m).__i[5] = 0;
+        if (type_ & MUTEX_ROBUST) != 0 {
+            if let Some(slot) = find_thread() {
+                ensure_robust_list(slot);
+                let m_next = &raw mut (*m).__i[8] as *mut robust_list;
+                let head = &mut slot.robust_list.list;
+                (*m_next).next = head.next;
+                head.next = m_next;
+            }
+        }
+        if old != 0 { return EOWNERDEAD; }
         0
     } else { EBUSY }
 }
 
 unsafe fn mutex_lock_internal(m: *mut pthread_mutex_t, abs_timeout: *const timespec) -> c_int {
-    let type_ = (*m).__i[0] & 15;
-    if type_ == PTHREAD_MUTEX_NORMAL && a_cas(&raw mut (*m).__i[1], 0, EBUSY) == 0 {
+    let type_ = (*m).__i[0];
+    if (type_ & 0x8f) == PTHREAD_MUTEX_NORMAL && a_cas(&raw mut (*m).__i[1], 0, EBUSY) == 0 {
         return 0;
     }
     let r = mutex_trylock(m);
     if r != EBUSY { return r; }
+    if (type_ & MUTEX_PI) != 0 {
+        let timeout_ptr = if abs_timeout.is_null() { core::ptr::null() } else { abs_timeout };
+        loop {
+            let e = futex_lock_pi(&raw mut (*m).__i[1], timeout_ptr);
+            match e {
+                0 => {
+                    if (type_ & MUTEX_ROBUST) == 0 && (((*m).__i[1] & 0x40000000) != 0 || (*m).__i[2] != 0) {
+                        (*m).__i[2] = -1;
+                        futex_unlock_pi(&raw mut (*m).__i[1]);
+                        return EBUSY;
+                    }
+                    (*m).__i[5] = -1;
+                    let r2 = mutex_trylock(m);
+                    if r2 == 0 { return 0; }
+                    return r2;
+                }
+                ETIMEDOUT => return e,
+                EINTR => continue,
+                _ => return e,
+            }
+        }
+    }
     let mut spins = 100;
     while spins > 0 {
         let r = mutex_trylock(m);
@@ -2892,7 +3068,7 @@ unsafe fn mutex_lock_internal(m: *mut pthread_mutex_t, abs_timeout: *const times
     loop {
         let r = mutex_trylock(m);
         if r != EBUSY { return r; }
-        if type_ == PTHREAD_MUTEX_ERRORCHECK {
+        if (type_ & MUTEX_TYPE_MASK) == PTHREAD_MUTEX_ERRORCHECK {
             let self_tid = sys_gettid() as c_int;
             if (a_load(&raw const (*m).__i[1]) & 0x3fffffff) == self_tid { return EDEADLK; }
         }
@@ -2927,14 +3103,19 @@ pub unsafe extern "C" fn pthread_mutex_timedlock(mutex: *mut pthread_mutex_t, ab
 }
 #[no_mangle]
 pub unsafe extern "C" fn pthread_mutex_unlock(mutex: *mut pthread_mutex_t) -> c_int {
-    let type_ = (*mutex).__i[0] & 15;
-    if type_ != PTHREAD_MUTEX_NORMAL {
+    let type_ = (*mutex).__i[0];
+    let base_type = type_ & MUTEX_TYPE_MASK;
+    if base_type != PTHREAD_MUTEX_NORMAL {
         let self_tid = sys_gettid() as c_int;
         if (a_load(&raw const (*mutex).__i[1]) & 0x3fffffff) != self_tid { return EPERM; }
-        if type_ == PTHREAD_MUTEX_RECURSIVE && (*mutex).__i[5] > 0 {
+        if base_type == PTHREAD_MUTEX_RECURSIVE && (*mutex).__i[5] > 0 {
             (*mutex).__i[5] -= 1;
             return 0;
         }
+    }
+    if (type_ & MUTEX_PI) != 0 {
+        a_store(&raw mut (*mutex).__i[1], 0);
+        return futex_unlock_pi(&raw mut (*mutex).__i[1]);
     }
     let old = a_swap(&raw mut (*mutex).__i[1], 0);
     if a_load(&raw const (*mutex).__i[2]) > 0 || old < 0 {
@@ -3634,11 +3815,64 @@ pub unsafe extern "C" fn pthread_setspecific(key: pthread_key_t, value: *const c
 }
 
 // --- pthread_cancel/state ---
+unsafe fn run_cleanup_handlers(slot: &mut Thread) {
+    let mut cb = slot.cancelbuf;
+    while !cb.is_null() {
+        let cur = &*cb;
+        let f = cur.__f;
+        let x = cur.__x;
+        cb = cur.__next;
+        if let Some(func) = f {
+            func(x);
+        }
+    }
+    slot.cancelbuf = core::ptr::null_mut();
+}
+
+unsafe fn do_cancel() -> ! {
+    if let Some(slot) = find_thread() {
+        run_cleanup_handlers(slot);
+        slot.result = !0usize as *mut c_void; // PTHREAD_CANCELED
+        slot.detach_state = DT_EXITED;
+        futex_wake(&raw mut slot.detach_state, 1);
+    }
+    _exit(0);
+}
+
+extern "C" fn cancel_handler(_sig: c_int) {
+    unsafe {
+        if let Some(slot) = find_thread() {
+            if slot.cancel != 0 && slot.cancel_state == PTHREAD_CANCEL_ENABLE {
+                do_cancel();
+            }
+        }
+    }
+}
+
+static CANCEL_INIT: AtomicI32 = AtomicI32::new(0);
+
+unsafe fn ensure_cancel_handler() {
+    if CANCEL_INIT.swap(1, Ordering::AcqRel) == 0 {
+        let act = sigaction {
+            sa_handler: cancel_handler as usize,
+            sa_flags: SA_RESTORER,
+            sa_restorer: sig_restorer as usize,
+            sa_mask: [!0u64],
+        };
+        sys_rt_sigaction(SIGCANCEL, &act as *const sigaction, core::ptr::null_mut(), 8);
+    }
+}
+
 #[no_mangle]
 pub unsafe extern "C" fn pthread_cancel(thread: PthreadT) -> c_int {
     let slot = thread as *mut Thread;
     if slot.is_null() { return EINVAL; }
+    ensure_cancel_handler();
     a_store(&raw mut (*slot).cancel, 1);
+    let tid = (*slot).tid;
+    if tid > 0 {
+        sys_tgkill(sys_getpid() as c_int, tid, SIGCANCEL);
+    }
     0
 }
 #[no_mangle]
@@ -3663,9 +3897,47 @@ pub unsafe extern "C" fn pthread_setcanceltype(type_: c_int, oldtype: *mut c_int
 pub unsafe extern "C" fn pthread_testcancel() {
     if let Some(slot) = find_thread() {
         if slot.cancel != 0 && slot.cancel_state == PTHREAD_CANCEL_ENABLE {
-            _exit(0);
+            do_cancel();
         }
     }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn _pthread_cleanup_push(cb: *mut __ptcb, f: Option<unsafe extern "C" fn(*mut c_void)>, x: *mut c_void) {
+    (*cb).__f = f;
+    (*cb).__x = x;
+    if let Some(slot) = find_thread() {
+        (*cb).__next = slot.cancelbuf;
+        slot.cancelbuf = cb;
+    } else {
+        (*cb).__next = core::ptr::null_mut();
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn _pthread_cleanup_pop(cb: *mut __ptcb, run: c_int) {
+    if let Some(slot) = find_thread() {
+        slot.cancelbuf = (*cb).__next;
+    }
+    if run != 0 {
+        if let Some(f) = (*cb).__f {
+            f((*cb).__x);
+        }
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn pthread_kill(thread: PthreadT, sig: c_int) -> c_int {
+    let slot = thread as *mut Thread;
+    if slot.is_null() { return EINVAL; }
+    let tid = (*slot).tid;
+    if tid <= 0 { return EINVAL; }
+    if sys_tgkill(sys_getpid() as c_int, tid, sig) < 0 { -1 } else { 0 }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn pthread_sigmask(how: c_int, set: *const SigSetT, oldset: *mut SigSetT) -> c_int {
+    sigprocmask(how, set, oldset)
 }
 
 
