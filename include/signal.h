@@ -73,7 +73,10 @@ typedef void (*sighandler_t)(int);
 #define SI_USER   0
 #define SI_TKILL  (-6)
 
+#ifndef _SIGSET_T_DEFINED
+#define _SIGSET_T_DEFINED
 typedef unsigned long sigset_t;
+#endif
 
 struct sigaction {
     void (*sa_handler)(int);

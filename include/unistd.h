@@ -8,7 +8,10 @@ extern "C" {
 #endif
 
 typedef long ssize_t;
+#ifndef _PID_T_DEFINED
+#define _PID_T_DEFINED
 typedef int pid_t;
+#endif
 typedef unsigned int uid_t;
 typedef unsigned int gid_t;
 
