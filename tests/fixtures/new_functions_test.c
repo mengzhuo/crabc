@@ -5,6 +5,12 @@
 #include <search.h>
 #include <fnmatch.h>
 #include <mntent.h>
+#include <math.h>
+#include <sys/stat.h>
+#include <sys/resource.h>
+#include <unistd.h>
+#include <errno.h>
+#include <time.h>
 
 static int cmp(const void *a, const void *b) {
     return strcmp((const char *)a, (const char *)b);
@@ -154,6 +160,104 @@ static void test_mntent(void) {
     endmntent(f);
 }
 
+static void test_strlcpy_strlcat(void) {
+    char buf[32];
+    size_t r;
+    r = strlcpy(buf, "hello", sizeof(buf));
+    if (r != 5 || strcmp(buf, "hello") != 0) { puts("strlcpy fail"); exit(1); }
+    r = strlcpy(buf, "longer string that exceeds", 8);
+    if (r != 26 || strcmp(buf, "longer ") != 0) { puts("strlcpy trunc fail"); exit(1); }
+    r = strlcpy(buf, "", sizeof(buf));
+    if (r != 0 || buf[0] != 0) { puts("strlcpy empty fail"); exit(1); }
+    strcpy(buf, "hi");
+    r = strlcat(buf, " there", sizeof(buf));
+    if (r != 8 || strcmp(buf, "hi there") != 0) { puts("strlcat fail"); exit(1); }
+    strcpy(buf, "abc");
+    r = strlcat(buf, "def", 5);
+    if (r != 6 || strcmp(buf, "abcd") != 0) { puts("strlcat trunc fail"); exit(1); }
+}
+
+static void test_memmem(void) {
+    char haystack[] = "hello world foo bar";
+    char *r;
+    r = (char*)memmem(haystack, strlen(haystack), "world", 5);
+    if (!r || strcmp(r, "world foo bar") != 0) { puts("memmem fail"); exit(1); }
+    r = (char*)memmem(haystack, strlen(haystack), "xyz", 3);
+    if (r) { puts("memmem miss fail"); exit(1); }
+    r = (char*)memmem(haystack, strlen(haystack), "", 0);
+    if (r != haystack) { puts("memmem empty needle fail"); exit(1); }
+    r = (char*)memmem(haystack, 3, "hello", 5);
+    if (r) { puts("memmem short haystack fail"); exit(1); }
+}
+
+static void test_random_funcs(void) {
+    srandom(42);
+    long a = random();
+    long b = random();
+    if (a == b) { puts("random same consec fail"); exit(1); }
+    srandom(42);
+    long c = random();
+    if (a != c) { puts("random deterministic fail"); exit(1); }
+    char state[256];
+    char *old = initstate(123, state, sizeof(state));
+    if (!old) { puts("initstate fail"); exit(1); }
+    long d = random();
+    (void)d;
+    char *old2 = setstate(old);
+    if (!old2) { puts("setstate fail"); exit(1); }
+}
+
+static void test_stat_funcs(void) {
+    struct stat st;
+    if (stat(".", &st) != 0) { puts("stat . fail"); exit(1); }
+    if (!S_ISDIR(st.st_mode)) { puts("stat S_ISDIR fail"); exit(1); }
+    if (st.st_nlink == 0) { puts("stat nlink fail"); exit(1); }
+    if (stat("/dev/null", &st) != 0) { puts("stat /dev/null fail"); exit(1); }
+    if (!S_ISCHR(st.st_mode)) { puts("stat S_ISCHR fail"); exit(1); }
+    FILE *f = tmpfile();
+    if (f) {
+        fputs("test", f);
+        fflush(f);
+        if (fstat(fileno(f), &st) != 0) { puts("fstat fail"); exit(1); }
+        if (st.st_size != 4) { puts("fstat size fail"); exit(1); }
+        fclose(f);
+    }
+}
+
+static void test_utimensat_futimens(void) {
+    char tmp[] = "/tmp/utime_test_XXXXXX";
+    int fd = mkstemp(tmp);
+    if (fd < 0) { puts("mkstemp fail"); exit(1); }
+    write(fd, "x", 1);
+    struct timespec ts[2] = {{1000000, 0}, {2000000, 0}};
+    if (futimens(fd, ts) != 0) { puts("futimens fail"); exit(1); }
+    struct stat st;
+    if (fstat(fd, &st) != 0) { puts("fstat after futimens fail"); exit(1); }
+    if (st.st_atim.tv_sec != 1000000) { puts("futimens atime fail"); exit(1); }
+    if (st.st_mtim.tv_sec != 2000000) { puts("futimens mtime fail"); exit(1); }
+    close(fd);
+    unlink(tmp);
+}
+
+static void test_rlimit(void) {
+    struct rlimit rl;
+    if (getrlimit(RLIMIT_NOFILE, &rl) != 0) { puts("getrlimit fail"); exit(1); }
+    if (rl.rlim_cur == 0) { puts("getrlimit rlim_cur=0 fail"); exit(1); }
+}
+
+static void test_lrint_funcs(void) {
+    long r;
+    r = lrint(1.6);
+    if (r != 2) { puts("lrint(1.6) fail"); exit(1); }
+    r = lrint(-1.6);
+    if (r != -2) { puts("lrint(-1.6) fail"); exit(1); }
+    r = lrintf(2.5f);
+    if (r != 2) { puts("lrintf(2.5f) fail"); exit(1); }
+    long long lr;
+    lr = llrint(3.7);
+    if (lr != 4) { puts("llrint(3.7) fail"); exit(1); }
+}
+
 int main(void) {
     test_hsearch();
     test_insque();
@@ -161,6 +265,13 @@ int main(void) {
     test_tsearch();
     test_fnmatch();
     test_mntent();
+    test_strlcpy_strlcat();
+    test_memmem();
+    test_random_funcs();
+    test_stat_funcs();
+    test_utimensat_futimens();
+    test_rlimit();
+    test_lrint_funcs();
     puts("new_functions ok");
     return 0;
 }

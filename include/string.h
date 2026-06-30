@@ -31,6 +31,10 @@ char *strpbrk(const char *, const char *);
 char *strstr(const char *, const char *);
 char *strtok(char *, const char *);
 
+size_t strlcpy(char *, const char *, size_t);
+size_t strlcat(char *, const char *, size_t);
+void *memmem(const void *, size_t, const void *, size_t);
+
 char *strerror(int);
 int strerror_r(int, char *, size_t);
 

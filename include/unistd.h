@@ -13,7 +13,9 @@ typedef unsigned int uid_t;
 typedef unsigned int gid_t;
 
 int fork(void);
+pid_t vfork(void);
 int execve(const char *, char *const [], char *const []);
+int execl(const char *, const char *, ...);
 int wait(int *);
 int waitpid(int, int *, int);
 pid_t getpid(void);
