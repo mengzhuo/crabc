@@ -20,3 +20,6 @@
 /tests/fixtures/iconv_test
 /tests/fixtures/math_test
 /tests/fixtures/dso_tls_test
+/tests/fixtures/pthread_full_test
+/tests/fixtures/stdio_full_test
+/tests/fixtures/new_functions_test
