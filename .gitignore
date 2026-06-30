@@ -23,3 +23,4 @@
 /tests/fixtures/pthread_full_test
 /tests/fixtures/stdio_full_test
 /tests/fixtures/new_functions_test
+tests/fixtures/startup_argv_env
