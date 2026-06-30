@@ -4,6 +4,8 @@
 #include <stddef.h>
 #include <time.h>
 
+typedef unsigned long sigset_t;
+
 typedef unsigned long pthread_t;
 
 struct sched_param {
@@ -50,6 +52,12 @@ typedef struct { int __i[14]; } pthread_attr_t;
 
 #define PTHREAD_CANCELED ((void *)-1)
 
+#define PTHREAD_MUTEX_ROBUST 1
+
+#define PTHREAD_PRIO_NONE 0
+#define PTHREAD_PRIO_INHERIT 1
+#define PTHREAD_PRIO_PROTECT 2
+
 #define PTHREAD_BARRIER_SERIAL_THREAD (-1)
 
 #define PTHREAD_ONCE_INIT 0
@@ -79,6 +87,11 @@ int pthread_mutexattr_settype(pthread_mutexattr_t *attr, int type);
 int pthread_mutexattr_gettype(const pthread_mutexattr_t *attr, int *type);
 int pthread_mutexattr_setpshared(pthread_mutexattr_t *attr, int pshared);
 int pthread_mutexattr_getpshared(const pthread_mutexattr_t *attr, int *pshared);
+int pthread_mutexattr_setprotocol(pthread_mutexattr_t *attr, int protocol);
+int pthread_mutexattr_getprotocol(const pthread_mutexattr_t *attr, int *protocol);
+int pthread_mutexattr_setrobust(pthread_mutexattr_t *attr, int robust);
+int pthread_mutexattr_getrobust(const pthread_mutexattr_t *attr, int *robust);
+int pthread_mutex_consistent(pthread_mutex_t *mutex);
 
 int pthread_mutex_init(pthread_mutex_t *mutex, const pthread_mutexattr_t *attr);
 int pthread_mutex_destroy(pthread_mutex_t *mutex);
@@ -155,5 +168,20 @@ int pthread_attr_setschedpolicy(pthread_attr_t *attr, int policy);
 int pthread_attr_getschedpolicy(const pthread_attr_t *attr, int *policy);
 int pthread_attr_setschedparam(pthread_attr_t *attr, const struct sched_param *param);
 int pthread_attr_getschedparam(const pthread_attr_t *attr, struct sched_param *param);
+
+int pthread_sigmask(int how, const sigset_t *set, sigset_t *oldset);
+int pthread_kill(pthread_t thread, int sig);
+
+struct __ptcb {
+	void (*__f)(void *);
+	void *__x;
+	struct __ptcb *__next;
+};
+
+void _pthread_cleanup_push(struct __ptcb *, void (*)(void *), void *);
+void _pthread_cleanup_pop(struct __ptcb *, int);
+
+#define pthread_cleanup_push(f, x) do { struct __ptcb __cb; _pthread_cleanup_push(&__cb, f, x);
+#define pthread_cleanup_pop(r) _pthread_cleanup_pop(&__cb, (r)); } while(0)
 
 #endif
