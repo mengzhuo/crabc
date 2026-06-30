@@ -18,6 +18,7 @@ int fcntl(int, int, ...);
 #define O_TRUNC    512
 #define O_APPEND   1024
 #define O_NONBLOCK 2048
+#define O_NOFOLLOW 0x40000
 #define O_CLOEXEC  0x80000
 
 #define F_DUPFD  0
