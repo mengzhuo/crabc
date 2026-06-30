@@ -574,6 +574,35 @@ pub unsafe extern "C" fn strtok(s: *mut u8, delim: *const u8) -> *mut u8 {
 
 type SizeT = usize;
 type SSizeT = isize;
+type TimeT = c_long;
+type ClockT = c_long;
+type wchar_t = c_int;
+type wint_t = c_uint;
+type wctype_t = *const c_int;
+type wctrans_t = *const c_int;
+
+const WEOF: wint_t = 0xffffffff;
+
+#[repr(C)]
+pub struct tm {
+    pub tm_sec: c_int,
+    pub tm_min: c_int,
+    pub tm_hour: c_int,
+    pub tm_mday: c_int,
+    pub tm_mon: c_int,
+    pub tm_year: c_int,
+    pub tm_wday: c_int,
+    pub tm_yday: c_int,
+    pub tm_isdst: c_int,
+    pub tm_gmtoff: c_long,
+    pub tm_zone: *const c_char,
+}
+
+#[repr(C)]
+pub struct timeval {
+    pub tv_sec: TimeT,
+    pub tv_usec: c_long,
+}
 
 // ============================================================
 // ctype.h
@@ -6265,6 +6294,1432 @@ pub unsafe extern "C" fn wcstombs(
 ) -> usize {
     let mut ws_ptr = ws;
     wcsrtombs(s, &mut ws_ptr, n, core::ptr::null_mut())
+}
+
+// ============================================================
+// wchar: btowc / wctob / mbsinit / mbrlen
+// ============================================================
+
+#[no_mangle]
+pub extern "C" fn btowc(c: c_int) -> wint_t {
+    if c == -1 { return WEOF; }
+    if (c as u32) < 128 { c as wint_t } else { WEOF }
+}
+
+#[no_mangle]
+pub extern "C" fn wctob(c: wint_t) -> c_int {
+    if c < 128 { c as c_int } else { -1 }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn mbsinit(s: *const c_uint) -> c_int {
+    if s.is_null() || *s == 0 { 1 } else { 0 }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn mbrlen(s: *const c_char, n: usize, ps: *mut c_uint) -> usize {
+    mbrtowc(core::ptr::null_mut(), s, n, ps)
+}
+
+// ============================================================
+// wchar: wide string functions
+// ============================================================
+
+#[no_mangle]
+pub unsafe extern "C" fn wcslen(s: *const wchar_t) -> usize {
+    let mut len = 0;
+    while *s.add(len) != 0 { len += 1; }
+    len
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn wcschr(s: *const wchar_t, c: wchar_t) -> *mut wchar_t {
+    let mut i = 0;
+    loop {
+        let ch = *s.add(i);
+        if ch == c { return s.add(i) as *mut wchar_t; }
+        if ch == 0 { return null_mut(); }
+        i += 1;
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn wcsrchr(s: *const wchar_t, c: wchar_t) -> *mut wchar_t {
+    let mut i = 0;
+    let mut last: *mut wchar_t = null_mut();
+    loop {
+        let ch = *s.add(i);
+        if ch == c { last = s.add(i) as *mut wchar_t; }
+        if ch == 0 { return last; }
+        i += 1;
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn wcsstr(haystack: *const wchar_t, needle: *const wchar_t) -> *mut wchar_t {
+    if *needle == 0 { return haystack as *mut wchar_t; }
+    let mut i = 0;
+    loop {
+        let h = *haystack.add(i);
+        if h == 0 { return null_mut(); }
+        if h == *needle {
+            let mut j = 0;
+            loop {
+                let n = *needle.add(j);
+                if n == 0 { return haystack.add(i) as *mut wchar_t; }
+                if *haystack.add(i + j) != n { break; }
+                j += 1;
+            }
+        }
+        i += 1;
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn wcscmp(s1: *const wchar_t, s2: *const wchar_t) -> c_int {
+    let mut i = 0;
+    loop {
+        let a = *s1.add(i);
+        let b = *s2.add(i);
+        if a != b { return a - b; }
+        if a == 0 { return 0; }
+        i += 1;
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn wcsncmp(s1: *const wchar_t, s2: *const wchar_t, n: usize) -> c_int {
+    let mut i = 0;
+    while i < n {
+        let a = *s1.add(i);
+        let b = *s2.add(i);
+        if a != b { return a - b; }
+        if a == 0 { return 0; }
+        i += 1;
+    }
+    0
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn wcscpy(dst: *mut wchar_t, src: *const wchar_t) -> *mut wchar_t {
+    let mut i = 0;
+    loop {
+        let c = *src.add(i);
+        *dst.add(i) = c;
+        if c == 0 { break; }
+        i += 1;
+    }
+    dst
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn wcsncpy(dst: *mut wchar_t, src: *const wchar_t, n: usize) -> *mut wchar_t {
+    let mut i = 0;
+    while i < n && *src.add(i) != 0 { *dst.add(i) = *src.add(i); i += 1; }
+    while i < n { *dst.add(i) = 0; i += 1; }
+    dst
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn wcscat(dst: *mut wchar_t, src: *const wchar_t) -> *mut wchar_t {
+    let mut i = 0;
+    while *dst.add(i) != 0 { i += 1; }
+    let mut j = 0;
+    loop {
+        let c = *src.add(j);
+        *dst.add(i + j) = c;
+        if c == 0 { break; }
+        j += 1;
+    }
+    dst
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn wcsncat(dst: *mut wchar_t, src: *const wchar_t, n: usize) -> *mut wchar_t {
+    let mut i = 0;
+    while *dst.add(i) != 0 { i += 1; }
+    let mut j = 0;
+    while j < n && *src.add(j) != 0 { *dst.add(i + j) = *src.add(j); j += 1; }
+    *dst.add(i + j) = 0;
+    dst
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn wcsdup(s: *const wchar_t) -> *mut wchar_t {
+    let len = wcslen(s);
+    let p = malloc((len + 1) * core::mem::size_of::<wchar_t>()) as *mut wchar_t;
+    if p.is_null() { return null_mut(); }
+    core::ptr::copy_nonoverlapping(s, p, len + 1);
+    p
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn wcsnlen(s: *const wchar_t, maxlen: usize) -> usize {
+    let mut i = 0;
+    while i < maxlen && *s.add(i) != 0 { i += 1; }
+    i
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn wcsspn(s: *const wchar_t, accept: *const wchar_t) -> usize {
+    let mut i = 0;
+    loop {
+        let c = *s.add(i);
+        if c == 0 { return i; }
+        let mut found = false;
+        let mut j = 0;
+        loop {
+            let a = *accept.add(j);
+            if a == 0 { break; }
+            if c == a { found = true; break; }
+            j += 1;
+        }
+        if !found { return i; }
+        i += 1;
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn wcscspn(s: *const wchar_t, reject: *const wchar_t) -> usize {
+    let mut i = 0;
+    loop {
+        let c = *s.add(i);
+        if c == 0 { return i; }
+        let mut j = 0;
+        loop {
+            let r = *reject.add(j);
+            if r == 0 { break; }
+            if c == r { return i; }
+            j += 1;
+        }
+        i += 1;
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn wcspbrk(s: *const wchar_t, accept: *const wchar_t) -> *mut wchar_t {
+    let mut i = 0;
+    loop {
+        let c = *s.add(i);
+        if c == 0 { return null_mut(); }
+        let mut j = 0;
+        loop {
+            let a = *accept.add(j);
+            if a == 0 { break; }
+            if c == a { return s.add(i) as *mut wchar_t; }
+            j += 1;
+        }
+        i += 1;
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn wcsxfrm(dst: *mut wchar_t, src: *const wchar_t, n: usize) -> usize {
+    let len = wcslen(src);
+    if !dst.is_null() {
+        let copy = if len < n { len } else { if n > 0 { n - 1 } else { 0 } };
+        for i in 0..copy { *dst.add(i) = *src.add(i); }
+        if n > 0 { *dst.add(copy) = 0; }
+    }
+    len
+}
+
+// ============================================================
+// wchar: wcsto* number conversions
+// ============================================================
+
+unsafe fn wcs_to_bytes(ws: *const wchar_t, buf: *mut u8, bufsz: usize) -> usize {
+    let mut i = 0;
+    while i < bufsz - 1 {
+        let c = *ws.add(i);
+        if c == 0 { break; }
+        if (c as u32) > 127 { break; }
+        *buf.add(i) = c as u8;
+        i += 1;
+    }
+    *buf.add(i) = 0;
+    i
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn wcstol(s: *const wchar_t, endptr: *mut *mut wchar_t, base: c_int) -> c_long {
+    let mut buf = [0u8; 256];
+    wcs_to_bytes(s, buf.as_mut_ptr(), 256);
+    let mut end: *mut c_char = core::ptr::null_mut();
+    let r = strtol(buf.as_ptr() as *const c_char, &mut end, base);
+    if !endptr.is_null() {
+        let offset = end as usize - buf.as_ptr() as usize;
+        *endptr = s.add(offset) as *mut wchar_t;
+    }
+    r
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn wcstoul(s: *const wchar_t, endptr: *mut *mut wchar_t, base: c_int) -> c_ulong {
+    let mut buf = [0u8; 256];
+    wcs_to_bytes(s, buf.as_mut_ptr(), 256);
+    let mut end: *mut c_char = core::ptr::null_mut();
+    let r = strtoul(buf.as_ptr() as *const c_char, &mut end, base);
+    if !endptr.is_null() {
+        let offset = end as usize - buf.as_ptr() as usize;
+        *endptr = s.add(offset) as *mut wchar_t;
+    }
+    r
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn wcstoll(s: *const wchar_t, endptr: *mut *mut wchar_t, base: c_int) -> c_longlong {
+    let mut buf = [0u8; 256];
+    wcs_to_bytes(s, buf.as_mut_ptr(), 256);
+    let mut end: *mut c_char = core::ptr::null_mut();
+    let r = strtoll(buf.as_ptr() as *const c_char, &mut end, base);
+    if !endptr.is_null() {
+        let offset = end as usize - buf.as_ptr() as usize;
+        *endptr = s.add(offset) as *mut wchar_t;
+    }
+    r
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn wcstoull(s: *const wchar_t, endptr: *mut *mut wchar_t, base: c_int) -> c_ulonglong {
+    let mut buf = [0u8; 256];
+    wcs_to_bytes(s, buf.as_mut_ptr(), 256);
+    let mut end: *mut c_char = core::ptr::null_mut();
+    let r = strtoull(buf.as_ptr() as *const c_char, &mut end, base);
+    if !endptr.is_null() {
+        let offset = end as usize - buf.as_ptr() as usize;
+        *endptr = s.add(offset) as *mut wchar_t;
+    }
+    r
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn wcstod(s: *const wchar_t, endptr: *mut *mut wchar_t) -> f64 {
+    let mut buf = [0u8; 256];
+    wcs_to_bytes(s, buf.as_mut_ptr(), 256);
+    let mut end: *mut c_char = core::ptr::null_mut();
+    let r = strtod(buf.as_ptr() as *const c_char, &mut end);
+    if !endptr.is_null() {
+        let offset = end as usize - buf.as_ptr() as usize;
+        *endptr = s.add(offset) as *mut wchar_t;
+    }
+    r
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn wcstof(s: *const wchar_t, endptr: *mut *mut wchar_t) -> f32 { wcstod(s, endptr) as f32 }
+
+#[no_mangle]
+pub unsafe extern "C" fn wcstold(s: *const wchar_t, endptr: *mut *mut wchar_t) -> f64 { wcstod(s, endptr) }
+
+#[no_mangle]
+pub unsafe extern "C" fn wcstoimax(s: *const wchar_t, endptr: *mut *mut wchar_t, base: c_int) -> c_longlong { wcstoll(s, endptr, base) }
+
+#[no_mangle]
+pub unsafe extern "C" fn wcstoumax(s: *const wchar_t, endptr: *mut *mut wchar_t, base: c_int) -> c_ulonglong { wcstoull(s, endptr, base) }
+
+// ============================================================
+// wctype: classification functions
+// ============================================================
+
+const WC_ALPHA: c_int = 1;
+const WC_DIGIT: c_int = 2;
+const WC_SPACE: c_int = 4;
+const WC_UPPER: c_int = 8;
+const WC_LOWER: c_int = 16;
+const WC_ALNUM: c_int = WC_ALPHA | WC_DIGIT;
+const WC_BLANK: c_int = 32;
+const WC_CNTRL: c_int = 64;
+const WC_PUNCT: c_int = 128;
+const WC_GRAPH: c_int = WC_ALNUM | WC_PUNCT;
+const WC_PRINT: c_int = WC_GRAPH | WC_BLANK;
+const WC_XDIGIT: c_int = 256;
+
+fn wc_flags(c: wint_t) -> c_int {
+    if c < 128 {
+        let f = CT_TABLE[c as usize];
+        let mut r = 0;
+        if f & (CT_UPPER | CT_LOWER) != 0 { r |= WC_ALPHA; }
+        if f & CT_DIGIT != 0 { r |= WC_DIGIT; }
+        if f & CT_SPACE != 0 { r |= WC_SPACE; }
+        if f & CT_UPPER != 0 { r |= WC_UPPER; }
+        if f & CT_LOWER != 0 { r |= WC_LOWER; }
+        if f & CT_BLANK != 0 { r |= WC_BLANK; }
+        if f & CT_CNTRL != 0 { r |= WC_CNTRL; }
+        if f & CT_PUNCT != 0 { r |= WC_PUNCT; }
+        if f & CT_XDIGIT != 0 { r |= WC_XDIGIT; }
+        r
+    } else {
+        if c < 0x100 { 0 }
+        else { WC_PRINT | WC_ALPHA }
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn iswalnum(c: wint_t) -> c_int { (wc_flags(c) & WC_ALNUM != 0) as c_int }
+#[no_mangle]
+pub extern "C" fn iswalpha(c: wint_t) -> c_int { (wc_flags(c) & WC_ALPHA != 0) as c_int }
+#[no_mangle]
+pub extern "C" fn iswblank(c: wint_t) -> c_int { (wc_flags(c) & WC_BLANK != 0) as c_int }
+#[no_mangle]
+pub extern "C" fn iswcntrl(c: wint_t) -> c_int { (wc_flags(c) & WC_CNTRL != 0) as c_int }
+#[no_mangle]
+pub extern "C" fn iswdigit(c: wint_t) -> c_int { ((c >= b'0' as wint_t) && (c <= b'9' as wint_t)) as c_int }
+#[no_mangle]
+pub extern "C" fn iswgraph(c: wint_t) -> c_int { (wc_flags(c) & WC_GRAPH != 0) as c_int }
+#[no_mangle]
+pub extern "C" fn iswlower(c: wint_t) -> c_int { (wc_flags(c) & WC_LOWER != 0) as c_int }
+#[no_mangle]
+pub extern "C" fn iswprint(c: wint_t) -> c_int {
+    if c < 128 { (wc_flags(c) & WC_PRINT != 0) as c_int }
+    else if c >= 0x100 && c < 0x110000 { 1 }
+    else { 0 }
+}
+#[no_mangle]
+pub extern "C" fn iswpunct(c: wint_t) -> c_int { (wc_flags(c) & WC_PUNCT != 0) as c_int }
+#[no_mangle]
+pub extern "C" fn iswspace(c: wint_t) -> c_int {
+    if c < 128 { (wc_flags(c) & WC_SPACE != 0) as c_int }
+    else {
+        match c {
+            0x1680 | 0x2000..=0x200A | 0x2028 | 0x2029 | 0x202F | 0x205F | 0x3000 => 1,
+            _ => 0,
+        }
+    }
+}
+#[no_mangle]
+pub extern "C" fn iswupper(c: wint_t) -> c_int { (wc_flags(c) & WC_UPPER != 0) as c_int }
+#[no_mangle]
+pub extern "C" fn iswxdigit(c: wint_t) -> c_int { (wc_flags(c) & WC_XDIGIT != 0) as c_int }
+
+static WCTYPE_ALNUM: c_int = WC_ALNUM;
+static WCTYPE_ALPHA: c_int = WC_ALPHA;
+static WCTYPE_BLANK: c_int = WC_BLANK;
+static WCTYPE_CNTRL: c_int = WC_CNTRL;
+static WCTYPE_DIGIT: c_int = WC_DIGIT;
+static WCTYPE_GRAPH: c_int = WC_GRAPH;
+static WCTYPE_LOWER: c_int = WC_LOWER;
+static WCTYPE_PRINT: c_int = WC_PRINT;
+static WCTYPE_PUNCT: c_int = WC_PUNCT;
+static WCTYPE_SPACE: c_int = WC_SPACE;
+static WCTYPE_UPPER: c_int = WC_UPPER;
+static WCTYPE_XDIGIT: c_int = WC_XDIGIT;
+
+#[no_mangle]
+pub unsafe extern "C" fn wctype(name: *const c_char) -> wctype_t {
+    if name.is_null() { return core::ptr::null(); }
+    let n = name as *const u8;
+    if strcmp(n, b"alnum\0".as_ptr()) == 0 { return &WCTYPE_ALNUM; }
+    if strcmp(n, b"alpha\0".as_ptr()) == 0 { return &WCTYPE_ALPHA; }
+    if strcmp(n, b"blank\0".as_ptr()) == 0 { return &WCTYPE_BLANK; }
+    if strcmp(n, b"cntrl\0".as_ptr()) == 0 { return &WCTYPE_CNTRL; }
+    if strcmp(n, b"digit\0".as_ptr()) == 0 { return &WCTYPE_DIGIT; }
+    if strcmp(n, b"graph\0".as_ptr()) == 0 { return &WCTYPE_GRAPH; }
+    if strcmp(n, b"lower\0".as_ptr()) == 0 { return &WCTYPE_LOWER; }
+    if strcmp(n, b"print\0".as_ptr()) == 0 { return &WCTYPE_PRINT; }
+    if strcmp(n, b"punct\0".as_ptr()) == 0 { return &WCTYPE_PUNCT; }
+    if strcmp(n, b"space\0".as_ptr()) == 0 { return &WCTYPE_SPACE; }
+    if strcmp(n, b"upper\0".as_ptr()) == 0 { return &WCTYPE_UPPER; }
+    if strcmp(n, b"xdigit\0".as_ptr()) == 0 { return &WCTYPE_XDIGIT; }
+    core::ptr::null()
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn iswctype(c: wint_t, desc: wctype_t) -> c_int {
+    if desc.is_null() { return 0; }
+    (wc_flags(c) & *desc != 0) as c_int
+}
+
+static WCTRANS_LOWER: c_int = 1;
+static WCTRANS_UPPER: c_int = 2;
+
+#[no_mangle]
+pub unsafe extern "C" fn towlower(c: wint_t) -> wint_t {
+    if c < 128 { tolower(c as c_int) as wint_t } else { c }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn towupper(c: wint_t) -> wint_t {
+    if c < 128 { toupper(c as c_int) as wint_t } else { c }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn wctrans(name: *const c_char) -> wctrans_t {
+    if name.is_null() { return core::ptr::null(); }
+    let n = name as *const u8;
+    if strcmp(n, b"tolower\0".as_ptr()) == 0 { return &WCTRANS_LOWER; }
+    if strcmp(n, b"toupper\0".as_ptr()) == 0 { return &WCTRANS_UPPER; }
+    core::ptr::null()
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn towctrans(c: wint_t, desc: wctrans_t) -> wint_t {
+    if desc.is_null() { return c; }
+    match *desc {
+        1 => towlower(c),
+        2 => towupper(c),
+        _ => c,
+    }
+}
+
+// ============================================================
+// wchar: wide stdio
+// ============================================================
+
+#[no_mangle]
+pub unsafe extern "C" fn fgetwc(f: *mut FILE) -> wint_t {
+    let mut state: c_uint = 0;
+    let mut wc: wchar_t = 0;
+    let mut buf = [0u8; 4];
+    let c = fgetc(f);
+    if c == -1 { return WEOF; }
+    buf[0] = c as u8;
+    if buf[0] < 0x80 { return buf[0] as wint_t; }
+    let len = if buf[0] < 0xE0 { 2 } else if buf[0] < 0xF0 { 3 } else { 4 };
+    let mut n = 1usize;
+    while n < len {
+        let c2 = fgetc(f);
+        if c2 == -1 { return WEOF; }
+        buf[n] = c2 as u8;
+        n += 1;
+    }
+    let r = mbrtowc(&mut wc, buf.as_ptr() as *const c_char, n, &mut state);
+    if r == !0usize || r == !1usize { WEOF } else { wc as wint_t }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn fputwc(c: wchar_t, f: *mut FILE) -> wint_t {
+    let mut buf = [0u8; 4];
+    let n = wcrtomb(buf.as_mut_ptr() as *mut c_char, c, core::ptr::null_mut());
+    if n == !0usize || n == 0 { return WEOF; }
+    if fwrite(buf.as_ptr() as *const c_void, 1, n, f) != n { return WEOF; }
+    c as wint_t
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn fputws(s: *const wchar_t, f: *mut FILE) -> c_int {
+    let mut i = 0;
+    while *s.add(i) != 0 {
+        if fputwc(*s.add(i), f) == WEOF { return -1; }
+        i += 1;
+    }
+    0
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn ungetwc(c: wint_t, f: *mut FILE) -> wint_t {
+    if c == WEOF { return WEOF; }
+    let mut buf = [0u8; 4];
+    let n = wcrtomb(buf.as_mut_ptr() as *mut c_char, c as wchar_t, core::ptr::null_mut());
+    if n == !0usize || n == 0 { return WEOF; }
+    let mut i = n;
+    while i > 0 {
+        i -= 1;
+        if ungetc(buf[i] as c_int, f) == -1 { return WEOF; }
+    }
+    c
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn getwchar() -> wint_t { fgetwc(stdin) }
+
+#[no_mangle]
+pub unsafe extern "C" fn putwchar(c: wchar_t) -> wint_t { fputwc(c, stdout) }
+
+// ============================================================
+// wchar: swprintf / vswprintf / fwprintf / vfwprintf
+// ============================================================
+
+unsafe fn wfmt_write_str(dst: *mut wchar_t, pos: usize, cap: usize, s: *const u8, len: usize) -> usize {
+    let mut i = 0;
+    while i < len {
+        if pos + i < cap { *dst.add(pos + i) = *s.add(i) as wchar_t; }
+        i += 1;
+    }
+    pos + len
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn vswprintf(s: *mut wchar_t, n: usize, fmt: *const wchar_t, mut args: VaListImpl) -> c_int {
+    if n == 0 { return -1; }
+    let cap = n - 1;
+    let mut pos = 0usize;
+    let mut i = 0usize;
+    loop {
+        let c = *fmt.add(i) as u32;
+        if c == 0 { break; }
+        if c != 0x25 {
+            if pos < cap { *s.add(pos) = c as wchar_t; }
+            pos += 1;
+            i += 1;
+            continue;
+        }
+        i += 1;
+        let spec = *fmt.add(i) as u32;
+        match spec {
+            0x73 => {
+                let p = args.arg::<*const c_char>();
+                if p.is_null() { pos = wfmt_write_str(s, pos, cap, b"(null)".as_ptr(), 6); }
+                else { let len = strlen(p as *const u8); pos = wfmt_write_str(s, pos, cap, p as *const u8, len); }
+            }
+            0x64 | 0x69 => {
+                let d = args.arg::<c_int>();
+                let (buf, len) = format_i64(d as i64);
+                pos = wfmt_write_str(s, pos, cap, buf.as_ptr().add(21 - len), len);
+            }
+            0x75 => {
+                let u = args.arg::<c_uint>();
+                let (buf, len) = format_u64(u as u64);
+                pos = wfmt_write_str(s, pos, cap, buf.as_ptr().add(20 - len), len);
+            }
+            0x78 => {
+                let x = args.arg::<c_uint>();
+                let (buf, len) = format_hex(x as u64, false);
+                pos = wfmt_write_str(s, pos, cap, buf.as_ptr().add(16 - len), len);
+            }
+            0x58 => {
+                let x = args.arg::<c_uint>();
+                let (buf, len) = format_hex(x as u64, true);
+                pos = wfmt_write_str(s, pos, cap, buf.as_ptr().add(16 - len), len);
+            }
+            0x63 => {
+                let ch = args.arg::<c_int>();
+                if pos < cap { *s.add(pos) = ch as wchar_t; }
+                pos += 1;
+            }
+            0x70 => {
+                if pos < cap { *s.add(pos) = b'0' as wchar_t; }
+                if pos + 1 < cap { *s.add(pos + 1) = b'x' as wchar_t; }
+                pos += 2;
+                let p = args.arg::<*const c_void>();
+                let (buf, len) = format_hex(p as u64, false);
+                pos = wfmt_write_str(s, pos, cap, buf.as_ptr().add(16 - len), len);
+            }
+            0x66 => {
+                let val = args.arg::<f64>();
+                let (buf, len) = format_f64(val);
+                pos = wfmt_write_str(s, pos, cap, buf.as_ptr(), len);
+            }
+            0x6c => {
+                i += 1;
+                let sub = *fmt.add(i) as u32;
+                match sub {
+                    0x64 => { let ld = args.arg::<c_long>(); let (buf, len) = format_i64(ld as i64); pos = wfmt_write_str(s, pos, cap, buf.as_ptr().add(21 - len), len); }
+                    0x75 => { let lu = args.arg::<c_ulong>(); let (buf, len) = format_u64(lu as u64); pos = wfmt_write_str(s, pos, cap, buf.as_ptr().add(20 - len), len); }
+                    0x78 => { let lx = args.arg::<c_ulong>(); let (buf, len) = format_hex(lx as u64, false); pos = wfmt_write_str(s, pos, cap, buf.as_ptr().add(16 - len), len); }
+                    0x58 => { let lx = args.arg::<c_ulong>(); let (buf, len) = format_hex(lx as u64, true); pos = wfmt_write_str(s, pos, cap, buf.as_ptr().add(16 - len), len); }
+                    _ => { if pos < cap { *s.add(pos) = b'%' as wchar_t; } if pos + 1 < cap { *s.add(pos + 1) = sub as wchar_t; } pos += 2; }
+                }
+            }
+            0x25 => { if pos < cap { *s.add(pos) = b'%' as wchar_t; } pos += 1; }
+            _ => { if pos < cap { *s.add(pos) = b'%' as wchar_t; } if pos + 1 < cap { *s.add(pos + 1) = spec as wchar_t; } pos += 2; }
+        }
+        i += 1;
+    }
+    if n > 0 { let null_pos = if pos < cap { pos } else { cap }; *s.add(null_pos) = 0; }
+    pos as c_int
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn swprintf(s: *mut wchar_t, n: usize, fmt: *const wchar_t, mut args: ...) -> c_int {
+    vswprintf(s, n, fmt, args)
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn vfwprintf(f: *mut FILE, fmt: *const wchar_t, mut args: VaListImpl) -> c_int {
+    let mut buf = [0i32; 4096];
+    let r = vswprintf(buf.as_mut_ptr(), 4096, fmt, args);
+    if r < 0 { return r; }
+    let mut i = 0;
+    while i < r as usize {
+        let mut mb = [0u8; 4];
+        let n = wcrtomb(mb.as_mut_ptr() as *mut c_char, buf[i], core::ptr::null_mut());
+        if n == !0usize { return -1; }
+        if fwrite(mb.as_ptr() as *const c_void, 1, n, f) != n { return -1; }
+        i += 1;
+    }
+    r
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn fwprintf(f: *mut FILE, fmt: *const wchar_t, mut args: ...) -> c_int {
+    vfwprintf(f, fmt, args)
+}
+
+// ============================================================
+// Time: internal helpers
+// ============================================================
+
+const LEAPOCH: i64 = 946684800 + 86400 * (31 + 29);
+const DAYS_PER_400Y: i64 = 365 * 400 + 97;
+const DAYS_PER_100Y: i64 = 365 * 100 + 24;
+const DAYS_PER_4Y: i64 = 365 * 4 + 1;
+
+const SECS_THROUGH_MONTH: [i32; 12] = [
+    0, 31*86400, 59*86400, 90*86400, 120*86400, 151*86400,
+    181*86400, 212*86400, 243*86400, 273*86400, 304*86400, 334*86400,
+];
+
+const DAYS_IN_MONTH: [i32; 12] = [31, 30, 31, 30, 31, 31, 30, 31, 30, 31, 31, 29];
+
+unsafe fn year_to_secs(year: i64, is_leap: &mut bool) -> i64 {
+    if year - 2 <= 136 {
+        let y = year as i32;
+        let mut leaps = (y - 68) >> 2;
+        if (y - 68) & 3 == 0 { leaps -= 1; *is_leap = true; } else { *is_leap = false; }
+        return 31536000 * (y as i64 - 70) + 86400 * leaps as i64;
+    }
+    let mut cycles = ((year - 100) / 400) as i32;
+    let mut rem = ((year - 100) % 400) as i32;
+    if rem < 0 { cycles -= 1; rem += 400; }
+    let (centuries, leaps);
+    if rem == 0 { *is_leap = true; centuries = 0; leaps = 0; }
+    else {
+        let c;
+        if rem >= 200 { if rem >= 300 { c = 3; rem -= 300; } else { c = 2; rem -= 200; } }
+        else { if rem >= 100 { c = 1; rem -= 100; } else { c = 0; } }
+        centuries = c;
+        if rem == 0 { *is_leap = false; leaps = 0; }
+        else { leaps = rem / 4; rem %= 4; *is_leap = rem == 0; }
+    }
+    let total_leaps = leaps + 97 * cycles + 24 * centuries - (*is_leap as i32);
+    (year - 100) * 31536000 + total_leaps as i64 * 86400 + 946684800 + 86400
+}
+
+fn month_to_secs(month: i32, is_leap: bool) -> i32 {
+    let mut t = SECS_THROUGH_MONTH[month as usize];
+    if is_leap && month >= 2 { t += 86400; }
+    t
+}
+
+unsafe fn secs_to_tm(t: i64, tm: &mut tm) -> bool {
+    if t < (i32::MIN as i64) * 31622400 || t > (i32::MAX as i64) * 31622400 { return false; }
+    let mut secs = t - LEAPOCH;
+    let mut days = secs / 86400;
+    let mut remsecs = (secs % 86400) as i32;
+    if remsecs < 0 { remsecs += 86400; days -= 1; }
+    let mut wday = ((3 + days) % 7) as i32;
+    if wday < 0 { wday += 7; }
+    let mut qc_cycles = (days / DAYS_PER_400Y) as i32;
+    let mut remdays = (days % DAYS_PER_400Y) as i32;
+    if remdays < 0 { remdays += DAYS_PER_400Y as i32; qc_cycles -= 1; }
+    let mut c_cycles = remdays / DAYS_PER_100Y as i32;
+    if c_cycles == 4 { c_cycles -= 1; }
+    remdays -= c_cycles * DAYS_PER_100Y as i32;
+    let mut q_cycles = remdays / DAYS_PER_4Y as i32;
+    if q_cycles == 25 { q_cycles -= 1; }
+    remdays -= q_cycles * DAYS_PER_4Y as i32;
+    let mut remyears = remdays / 365;
+    if remyears == 4 { remyears -= 1; }
+    remdays -= remyears * 365;
+    let leap = remyears == 0 && (q_cycles != 0 || c_cycles == 0);
+    let mut yday = remdays + 31 + 28 + leap as i32;
+    if yday >= 365 + leap as i32 { yday -= 365 + leap as i32; }
+    let years = remyears as i64 + 4 * q_cycles as i64 + 100 * c_cycles as i64 + 400 * qc_cycles as i64;
+    let mut months = 0i32;
+    let mut rd = remdays;
+    for m in 0..12 {
+        if DAYS_IN_MONTH[m] <= rd { rd -= DAYS_IN_MONTH[m]; } else { months = m as i32; break; }
+    }
+    let mut adj_years = years;
+    if months >= 10 { months -= 12; adj_years += 1; }
+    if adj_years + 100 > i32::MAX as i64 || adj_years + 100 < i32::MIN as i64 { return false; }
+    tm.tm_year = (adj_years + 100) as c_int;
+    tm.tm_mon = months + 2;
+    tm.tm_mday = rd + 1;
+    tm.tm_wday = wday;
+    tm.tm_yday = yday;
+    tm.tm_hour = remsecs / 3600;
+    tm.tm_min = remsecs / 60 % 60;
+    tm.tm_sec = remsecs % 60;
+    true
+}
+
+unsafe fn tm_to_secs(tm: *const tm) -> i64 {
+    let mut year = (*tm).tm_year as i64;
+    let mut month = (*tm).tm_mon;
+    if month >= 12 || month < 0 {
+        let adj = month / 12;
+        month %= 12;
+        if month < 0 { month += 12; }
+        year += adj as i64;
+    }
+    let mut is_leap = false;
+    let mut t = year_to_secs(year, &mut is_leap);
+    t += month_to_secs(month, is_leap) as i64;
+    t += 86400 * ((*tm).tm_mday - 1) as i64;
+    t += 3600 * (*tm).tm_hour as i64;
+    t += 60 * (*tm).tm_min as i64;
+    t += (*tm).tm_sec as i64;
+    t
+}
+
+static mut TM_BUF: tm = tm {
+    tm_sec: 0, tm_min: 0, tm_hour: 0, tm_mday: 0, tm_mon: 0,
+    tm_year: 0, tm_wday: 0, tm_yday: 0, tm_isdst: 0,
+    tm_gmtoff: 0, tm_zone: core::ptr::null(),
+};
+
+static mut UTC_STR: [c_char; 4] = [b'U' as c_char, b'T' as c_char, b'C' as c_char, 0];
+
+const CLOCK_PROCESS_CPUTIME_ID: c_int = 2;
+
+// ============================================================
+// Time: core functions
+// ============================================================
+
+#[no_mangle]
+pub unsafe extern "C" fn time(t: *mut TimeT) -> TimeT {
+    let mut ts: timespec = core::mem::zeroed();
+    let _ = sys_clock_gettime(CLOCK_REALTIME, &mut ts);
+    if !t.is_null() { *t = ts.tv_sec; }
+    ts.tv_sec
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn difftime(t1: TimeT, t0: TimeT) -> f64 {
+    (t1 as i64 - t0 as i64) as f64
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn clock() -> ClockT {
+    let mut ts: timespec = core::mem::zeroed();
+    let _ = sys_clock_gettime(CLOCK_PROCESS_CPUTIME_ID, &mut ts);
+    ts.tv_sec * 1000000 + ts.tv_nsec / 1000
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn gmtime(t: *const TimeT) -> *mut tm {
+    gmtime_r(t, &raw mut TM_BUF)
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn gmtime_r(t: *const TimeT, tm: *mut tm) -> *mut tm {
+    if !secs_to_tm(*t as i64, &mut *tm) { ERRNO = EOVERFLOW; return core::ptr::null_mut(); }
+    (*tm).tm_isdst = 0;
+    (*tm).tm_gmtoff = 0;
+    (*tm).tm_zone = UTC_STR.as_ptr();
+    tm
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn localtime(t: *const TimeT) -> *mut tm { gmtime(t) }
+
+#[no_mangle]
+pub unsafe extern "C" fn localtime_r(t: *const TimeT, tm: *mut tm) -> *mut tm { gmtime_r(t, tm) }
+
+#[no_mangle]
+pub unsafe extern "C" fn mktime(tm: *mut tm) -> TimeT {
+    let t = tm_to_secs(tm as *const tm);
+    if !secs_to_tm(t, &mut *tm) { ERRNO = EOVERFLOW; return -1; }
+    (*tm).tm_isdst = 0;
+    (*tm).tm_gmtoff = 0;
+    (*tm).tm_zone = UTC_STR.as_ptr();
+    t as TimeT
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn timegm(tm: *mut tm) -> TimeT {
+    let t = tm_to_secs(tm as *const tm);
+    if !secs_to_tm(t, &mut *tm) { ERRNO = EOVERFLOW; return -1; }
+    (*tm).tm_isdst = 0;
+    (*tm).tm_gmtoff = 0;
+    (*tm).tm_zone = UTC_STR.as_ptr();
+    t as TimeT
+}
+
+static mut ASCTIME_BUF: [c_char; 26] = [0; 26];
+
+const DAY_NAMES: [&[u8]; 7] = [b"Sun\0", b"Mon\0", b"Tue\0", b"Wed\0", b"Thu\0", b"Fri\0", b"Sat\0"];
+const MON_NAMES: [&[u8]; 12] = [b"Jan\0", b"Feb\0", b"Mar\0", b"Apr\0", b"May\0", b"Jun\0", b"Jul\0", b"Aug\0", b"Sep\0", b"Oct\0", b"Nov\0", b"Dec\0"];
+
+#[no_mangle]
+pub unsafe extern "C" fn asctime(tm: *const tm) -> *mut c_char {
+    asctime_r(tm, ASCTIME_BUF.as_mut_ptr())
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn asctime_r(tm: *const tm, buf: *mut c_char) -> *mut c_char {
+    let wday = if (*tm).tm_wday >= 0 && (*tm).tm_wday < 7 { (*tm).tm_wday as usize } else { 0 };
+    let mon = if (*tm).tm_mon >= 0 && (*tm).tm_mon < 12 { (*tm).tm_mon as usize } else { 0 };
+    let dn = DAY_NAMES[wday];
+    let mn = MON_NAMES[mon];
+    let mut p = 0;
+    for k in 0..3 { *buf.add(p) = *dn.as_ptr().add(k) as c_char; p += 1; }
+    *buf.add(p) = b' ' as c_char; p += 1;
+    for k in 0..3 { *buf.add(p) = *mn.as_ptr().add(k) as c_char; p += 1; }
+    *buf.add(p) = b' ' as c_char; p += 1;
+    let v = (*tm).tm_mday;
+    *buf.add(p) = (b'0' + (v / 10) as u8) as c_char; p += 1;
+    *buf.add(p) = (b'0' + (v % 10) as u8) as c_char; p += 1;
+    *buf.add(p) = b' ' as c_char; p += 1;
+    let hh = (*tm).tm_hour;
+    *buf.add(p) = (b'0' + (hh / 10) as u8) as c_char; p += 1;
+    *buf.add(p) = (b'0' + (hh % 10) as u8) as c_char; p += 1;
+    *buf.add(p) = b':' as c_char; p += 1;
+    let mm = (*tm).tm_min;
+    *buf.add(p) = (b'0' + (mm / 10) as u8) as c_char; p += 1;
+    *buf.add(p) = (b'0' + (mm % 10) as u8) as c_char; p += 1;
+    *buf.add(p) = b':' as c_char; p += 1;
+    let ss = (*tm).tm_sec;
+    *buf.add(p) = (b'0' + (ss / 10) as u8) as c_char; p += 1;
+    *buf.add(p) = (b'0' + (ss % 10) as u8) as c_char; p += 1;
+    *buf.add(p) = b' ' as c_char; p += 1;
+    let yr = (*tm).tm_year + 1900;
+    let mut tmp = [0u8; 4];
+    let mut v2 = yr;
+    for k in (0..4).rev() { tmp[k] = b'0' + (v2 % 10) as u8; v2 /= 10; }
+    for k in 0..4 { *buf.add(p) = tmp[k] as c_char; p += 1; }
+    *buf.add(p) = b'\n' as c_char; p += 1;
+    *buf.add(p) = 0;
+    buf
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn ctime(t: *const TimeT) -> *mut c_char { asctime(gmtime(t)) }
+
+#[no_mangle]
+pub unsafe extern "C" fn ctime_r(t: *const TimeT, buf: *mut c_char) -> *mut c_char {
+    let mut tmp: tm = core::mem::zeroed();
+    gmtime_r(t, &mut tmp);
+    asctime_r(&tmp, buf)
+}
+
+// ============================================================
+// Time: clock_getres / clock_settime / clock_nanosleep / gettimeofday
+// ============================================================
+
+unsafe fn sys_clock_getres(clockid: c_int, ts: *mut timespec) -> i64 {
+    let result: i64;
+    core::arch::asm!("syscall", inlateout("rax") 229i64 => result, in("rdi") clockid as i64, in("rsi") ts, lateout("rcx") _, lateout("r11") _);
+    result
+}
+
+unsafe fn sys_clock_settime(clockid: c_int, ts: *const timespec) -> i64 {
+    let result: i64;
+    core::arch::asm!("syscall", inlateout("rax") 230i64 => result, in("rdi") clockid as i64, in("rsi") ts, lateout("rcx") _, lateout("r11") _);
+    result
+}
+
+unsafe fn sys_clock_nanosleep(clockid: c_int, flags: c_int, req: *const timespec, rem: *mut timespec) -> i64 {
+    let result: i64;
+    core::arch::asm!("syscall", inlateout("rax") 231i64 => result, in("rdi") clockid as i64, in("rsi") flags as i64, in("rdx") req, in("r10") rem, lateout("rcx") _, lateout("r11") _);
+    result
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn clock_getres(clockid: c_int, ts: *mut timespec) -> c_int { if sys_clock_getres(clockid, ts) < 0 { -1 } else { 0 } }
+
+#[no_mangle]
+pub unsafe extern "C" fn clock_settime(clockid: c_int, ts: *const timespec) -> c_int { if sys_clock_settime(clockid, ts) < 0 { -1 } else { 0 } }
+
+#[no_mangle]
+pub unsafe extern "C" fn clock_nanosleep(clockid: c_int, flags: c_int, req: *const timespec, rem: *mut timespec) -> c_int {
+    let r = sys_clock_nanosleep(clockid, flags, req, rem);
+    if r < 0 { (-r) as c_int } else { 0 }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn gettimeofday(tv: *mut timeval, _tz: *mut c_void) -> c_int {
+    if tv.is_null() { return 0; }
+    let mut ts: timespec = core::mem::zeroed();
+    let _ = sys_clock_gettime(CLOCK_REALTIME, &mut ts);
+    (*tv).tv_sec = ts.tv_sec;
+    (*tv).tv_usec = ts.tv_nsec / 1000;
+    0
+}
+
+// ============================================================
+// Time: strftime
+// ============================================================
+
+fn is_leap_year(y: i32) -> bool {
+    let yr = if y > i32::MAX - 1900 { y - 2000 } else { y + 1900 };
+    yr % 4 == 0 && (yr % 100 != 0 || yr % 400 == 0)
+}
+
+fn week_num(tm: &tm) -> i32 {
+    let mut val = (tm.tm_yday + 7 - ((tm.tm_wday + 6) % 7)) / 7;
+    if (tm.tm_wday + 371 - tm.tm_yday - 2).rem_euclid(7) <= 2 { val += 1; }
+    if val == 0 {
+        val = 52;
+        let dec31 = (tm.tm_wday + 7 - tm.tm_yday - 1).rem_euclid(7);
+        if dec31 == 4 || (dec31 == 5 && is_leap_year(tm.tm_year % 400 - 1)) { val += 1; }
+    } else if val == 53 {
+        let jan1 = (tm.tm_wday + 371 - tm.tm_yday).rem_euclid(7);
+        if jan1 != 4 && (jan1 != 3 || !is_leap_year(tm.tm_year)) { val = 1; }
+    }
+    val
+}
+
+fn fmt_i32(buf: &mut [u8; 32], val: i32, width: usize) -> usize {
+    let mut tmp = [0u8; 12];
+    let mut v = if val < 0 { -val } else { val } as u32;
+    let mut pos = 12;
+    if v == 0 { pos -= 1; tmp[pos] = b'0'; }
+    while v > 0 { pos -= 1; tmp[pos] = b'0' + (v % 10) as u8; v /= 10; }
+    let digits = 12 - pos;
+    let fill = if width > digits { width - digits } else { 0 };
+    let mut p = 0;
+    for _ in 0..fill { buf[p] = b'0'; p += 1; }
+    for i in 0..digits { buf[p] = tmp[pos + i]; p += 1; }
+    p
+}
+
+fn fmt_i32_inline(buf: &mut [u8; 32], start: usize, val: i32, width: usize) -> usize {
+    let mut tmp = [0u8; 12];
+    let mut v = if val < 0 { -val } else { val } as u32;
+    let mut pos = 12;
+    if v == 0 { pos -= 1; tmp[pos] = b'0'; }
+    while v > 0 { pos -= 1; tmp[pos] = b'0' + (v % 10) as u8; v /= 10; }
+    let digits = 12 - pos;
+    let fill = if width > digits { width - digits } else { 0 };
+    let mut p = start;
+    for _ in 0..fill { buf[p] = b'0'; p += 1; }
+    for i in 0..digits { buf[p] = tmp[pos + i]; p += 1; }
+    p - start
+}
+
+fn fmt_i32_wide(buf: &mut [u8; 32], val: i32) -> usize {
+    let mut tmp = [0u8; 12];
+    let mut v = val;
+    let mut pos = 12;
+    if v < 0 { v = -v; }
+    if v == 0 { pos -= 1; tmp[pos] = b'0'; }
+    while v > 0 { pos -= 1; tmp[pos] = b'0' + (v % 10) as u8; v /= 10; }
+    let mut p = 0;
+    if val < 0 { buf[0] = b'-'; p = 1; }
+    for i in 0..(12 - pos) { buf[p] = tmp[pos + i]; p += 1; }
+    p
+}
+
+fn fmt_hhmmss(buf: &mut [u8; 32], h: i32, m: i32, s: i32) -> usize {
+    let mut p = fmt_i32(buf, h, 2);
+    buf[p] = b':'; p += 1;
+    p += fmt_i32_inline(buf, p, m, 2);
+    buf[p] = b':'; p += 1;
+    p += fmt_i32_inline(buf, p, s, 2);
+    p
+}
+
+fn fmt_hhmm(buf: &mut [u8; 32], h: i32, m: i32) -> usize {
+    let mut p = fmt_i32(buf, h, 2);
+    buf[p] = b':'; p += 1;
+    p += fmt_i32_inline(buf, p, m, 2);
+    p
+}
+
+fn fmt_date_slash(buf: &mut [u8; 32], m: i32, d: i32, y: i32) -> usize {
+    let mut p = fmt_i32(buf, m, 2);
+    buf[p] = b'/'; p += 1;
+    p += fmt_i32_inline(buf, p, d, 2);
+    buf[p] = b'/'; p += 1;
+    p += fmt_i32_inline(buf, p, if y < 0 { -y } else { y }, 2);
+    p
+}
+
+fn fmt_iso_date(buf: &mut [u8; 32], year: i32, m: i32, d: i32) -> usize {
+    let mut p = fmt_i32_wide(buf, year);
+    buf[p] = b'-'; p += 1;
+    p += fmt_i32_inline(buf, p, m, 2);
+    buf[p] = b'-'; p += 1;
+    p += fmt_i32_inline(buf, p, d, 2);
+    p
+}
+
+fn fmt_12h_time(buf: &mut [u8; 32], h: i32, m: i32, s: i32) -> usize {
+    let h12 = if h == 0 { 12 } else if h > 12 { h - 12 } else { h };
+    let ampm: &[u8] = if h >= 12 { b"PM" } else { b"AM" };
+    let mut p = fmt_i32(buf, h12, 2);
+    buf[p] = b':'; p += 1;
+    p += fmt_i32_inline(buf, p, m, 2);
+    buf[p] = b':'; p += 1;
+    p += fmt_i32_inline(buf, p, s, 2);
+    buf[p] = b' '; p += 1;
+    buf[p] = ampm[0]; buf[p + 1] = ampm[1]; p += 2;
+    p
+}
+
+fn fmt_tz_offset(buf: &mut [u8; 32], gmtoff: i64) -> usize {
+    let sign = if gmtoff >= 0 { b'+' } else { b'-' };
+    let mut off = if gmtoff < 0 { -gmtoff } else { gmtoff };
+    let hh = (off / 3600) as i32;
+    off %= 3600;
+    let mm = (off / 60) as i32;
+    buf[0] = sign;
+    let mut p = 1;
+    p += fmt_i32_inline(buf, p, hh, 2);
+    p += fmt_i32_inline(buf, p, mm, 2);
+    p
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn strftime(s: *mut c_char, maxsize: usize, fmt: *const c_char, tm: *const tm) -> usize {
+    let mut pos = 0usize;
+    let mut fi = 0usize;
+    let limit = if maxsize > 0 { maxsize - 1 } else { 0 };
+    loop {
+        let fc = *fmt.add(fi) as u8;
+        if fc == 0 { break; }
+        if fc != b'%' {
+            if pos < limit { *s.add(pos) = fc as c_char; }
+            pos += 1; fi += 1; continue;
+        }
+        fi += 1;
+        let spec = *fmt.add(fi) as u8;
+        let mut tmp = [0u8; 32];
+        let tlen;
+        match spec {
+            b'a' => {
+                let d = (*tm).tm_wday;
+                let names: [&[u8]; 7] = [b"Sun", b"Mon", b"Tue", b"Wed", b"Thu", b"Fri", b"Sat"];
+                let name = if d >= 0 && d < 7 { names[d as usize] } else { b"???" };
+                tlen = 3; for k in 0..3 { tmp[k] = name[k]; }
+            }
+            b'A' => {
+                let d = (*tm).tm_wday;
+                let names: [&[u8]; 7] = [b"Sunday", b"Monday", b"Tuesday", b"Wednesday", b"Thursday", b"Friday", b"Saturday"];
+                let name = if d >= 0 && d < 7 { names[d as usize] } else { b"???" };
+                tlen = name.len(); for k in 0..tlen { tmp[k] = name[k]; }
+            }
+            b'b' | b'h' => {
+                let m = (*tm).tm_mon;
+                let names: [&[u8]; 12] = [b"Jan", b"Feb", b"Mar", b"Apr", b"May", b"Jun", b"Jul", b"Aug", b"Sep", b"Oct", b"Nov", b"Dec"];
+                let name = if m >= 0 && m < 12 { names[m as usize] } else { b"???" };
+                tlen = 3; for k in 0..3 { tmp[k] = name[k]; }
+            }
+            b'B' => {
+                let m = (*tm).tm_mon;
+                let names: [&[u8]; 12] = [b"January", b"February", b"March", b"April", b"May", b"June", b"July", b"August", b"September", b"October", b"November", b"December"];
+                let name = if m >= 0 && m < 12 { names[m as usize] } else { b"???" };
+                tlen = name.len(); for k in 0..tlen { tmp[k] = name[k]; }
+            }
+            b'C' => { tlen = fmt_i32(&mut tmp, ((*tm).tm_year + 1900) / 100, 2); }
+            b'd' => { tlen = fmt_i32(&mut tmp, (*tm).tm_mday, 2); }
+            b'e' => { let v = (*tm).tm_mday; if v < 10 { tmp[0] = b' '; tmp[1] = b'0' + v as u8; tlen = 2; } else { tlen = fmt_i32(&mut tmp, v, 2); } }
+            b'D' => { tlen = fmt_date_slash(&mut tmp, (*tm).tm_mon + 1, (*tm).tm_mday, (*tm).tm_year % 100); }
+            b'F' => { tlen = fmt_iso_date(&mut tmp, (*tm).tm_year + 1900, (*tm).tm_mon + 1, (*tm).tm_mday); }
+            b'H' => { tlen = fmt_i32(&mut tmp, (*tm).tm_hour, 2); }
+            b'I' => { let h = (*tm).tm_hour; let v = if h == 0 { 12 } else if h > 12 { h - 12 } else { h }; tlen = fmt_i32(&mut tmp, v, 2); }
+            b'j' => { tlen = fmt_i32(&mut tmp, (*tm).tm_yday + 1, 3); }
+            b'm' => { tlen = fmt_i32(&mut tmp, (*tm).tm_mon + 1, 2); }
+            b'M' => { tlen = fmt_i32(&mut tmp, (*tm).tm_min, 2); }
+            b'n' => { if pos < limit { *s.add(pos) = b'\n' as c_char; } pos += 1; fi += 1; continue; }
+            b'p' => { let ampm: &[u8] = if (*tm).tm_hour >= 12 { b"PM" } else { b"AM" }; tlen = 2; tmp[0] = ampm[0]; tmp[1] = ampm[1]; }
+            b'r' => { tlen = fmt_12h_time(&mut tmp, (*tm).tm_hour, (*tm).tm_min, (*tm).tm_sec); }
+            b'R' => { tlen = fmt_hhmm(&mut tmp, (*tm).tm_hour, (*tm).tm_min); }
+            b'S' => { tlen = fmt_i32(&mut tmp, (*tm).tm_sec, 2); }
+            b't' => { if pos < limit { *s.add(pos) = b'\t' as c_char; } pos += 1; fi += 1; continue; }
+            b'T' => { tlen = fmt_hhmmss(&mut tmp, (*tm).tm_hour, (*tm).tm_min, (*tm).tm_sec); }
+            b'u' => { let v = if (*tm).tm_wday == 0 { 7 } else { (*tm).tm_wday }; tmp[0] = b'0' + v as u8; tlen = 1; }
+            b'U' => { let v = ((*tm).tm_yday + 7 - (*tm).tm_wday) / 7; tlen = fmt_i32(&mut tmp, v, 2); }
+            b'W' => { let v = ((*tm).tm_yday + 7 - ((*tm).tm_wday + 6) % 7) / 7; tlen = fmt_i32(&mut tmp, v, 2); }
+            b'V' => { tlen = fmt_i32(&mut tmp, week_num(&*tm), 2); }
+            b'w' => { tmp[0] = b'0' + (*tm).tm_wday as u8; tlen = 1; }
+            b'x' => { tlen = fmt_date_slash(&mut tmp, (*tm).tm_mon + 1, (*tm).tm_mday, (*tm).tm_year % 100); }
+            b'X' => { tlen = fmt_hhmmss(&mut tmp, (*tm).tm_hour, (*tm).tm_min, (*tm).tm_sec); }
+            b'y' => { let v = ((*tm).tm_year + 1900) % 100; tlen = fmt_i32(&mut tmp, if v < 0 { -v } else { v }, 2); }
+            b'Y' => { tlen = fmt_i32_wide(&mut tmp, (*tm).tm_year + 1900); }
+            b'z' => { tlen = fmt_tz_offset(&mut tmp, (*tm).tm_gmtoff); }
+            b'Z' => {
+                if (*tm).tm_zone.is_null() { tlen = 0; }
+                else {
+                    let mut k = 0;
+                    while *(*tm).tm_zone.add(k) != 0 { tmp[k] = *(*tm).tm_zone.add(k) as u8; k += 1; }
+                    tlen = k;
+                }
+            }
+            b'%' => { tmp[0] = b'%'; tlen = 1; }
+            b'E' | b'O' => {
+                fi += 1;
+                let sub = *fmt.add(fi) as u8;
+                match sub {
+                    b'Y' => { tlen = fmt_i32_wide(&mut tmp, (*tm).tm_year + 1900); }
+                    b'y' => { let v = ((*tm).tm_year + 1900) % 100; tlen = fmt_i32(&mut tmp, if v < 0 { -v } else { v }, 2); }
+                    b'd' => { tlen = fmt_i32(&mut tmp, (*tm).tm_mday, 2); }
+                    b'H' => { tlen = fmt_i32(&mut tmp, (*tm).tm_hour, 2); }
+                    b'M' => { tlen = fmt_i32(&mut tmp, (*tm).tm_min, 2); }
+                    b'S' => { tlen = fmt_i32(&mut tmp, (*tm).tm_sec, 2); }
+                    _ => { tmp[0] = b'%'; tmp[1] = spec; tmp[2] = sub; tlen = 3; }
+                }
+            }
+            _ => { tmp[0] = b'%'; tmp[1] = spec; tlen = 2; }
+        }
+        for k in 0..tlen {
+            if pos < limit { *s.add(pos) = tmp[k] as c_char; }
+            pos += 1;
+        }
+        fi += 1;
+    }
+    if maxsize > 0 { let null_pos = if pos < limit { pos } else { limit }; *s.add(null_pos) = 0; }
+    pos
+}
+
+// ============================================================
+// Time: strptime
+// ============================================================
+
+unsafe fn match_prefix(s: *const u8, prefix: &[u8]) -> bool {
+    for i in 0..prefix.len() {
+        if *s.add(i) == 0 || *s.add(i) != prefix[i] { return false; }
+    }
+    true
+}
+
+unsafe fn match_ci_prefix(s: *const u8, prefix: &[u8]) -> bool {
+    for i in 0..prefix.len() {
+        let c = *s.add(i);
+        if c == 0 { return false; }
+        if c.to_ascii_lowercase() != prefix[i].to_ascii_lowercase() { return false; }
+    }
+    true
+}
+
+unsafe fn parse_int(p: *const u8, max_digits: usize) -> (i32, *const u8) {
+    let mut val = 0i32;
+    let mut np = p;
+    let mut count = 0;
+    while *np >= b'0' && *np <= b'9' && count < max_digits {
+        val = val * 10 + (*np - b'0') as i32;
+        np = np.add(1);
+        count += 1;
+    }
+    if count == 0 { (0, p) } else { (val, np) }
+}
+
+unsafe fn parse_range(p: *const u8, min: i32, max: i32) -> (i32, *const u8) {
+    let (val, np) = parse_int(p, 4);
+    if np == p || val < min || val > max { (0, p) } else { (val, np) }
+}
+
+fn is_ascii_space(c: u8) -> bool {
+    c == b' ' || c == b'\t' || c == b'\n' || c == b'\r' || c == 0x0c || c == 0x0b
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn strptime(s: *const c_char, fmt: *const c_char, tm: *mut tm) -> *mut c_char {
+    let mut p = s as *const u8;
+    let mut f = fmt as *const u8;
+    let mut want_century = 0i32;
+    let mut century = 0i32;
+    let mut relyear = 0i32;
+    while *f != 0 {
+        if *f != b'%' {
+            if is_ascii_space(*f) {
+                while *p != 0 && is_ascii_space(*p) { p = p.add(1); }
+            } else {
+                if *p != *f { return core::ptr::null_mut(); }
+                p = p.add(1);
+            }
+            f = f.add(1);
+            continue;
+        }
+        f = f.add(1);
+        if *f == b'+' { f = f.add(1); }
+        while *f >= b'0' && *f <= b'9' { f = f.add(1); }
+        if *f == b'E' || *f == b'O' { f = f.add(1); }
+        match *f {
+            b'a' | b'A' => {
+                let mut found = false;
+                for i in 0..7 {
+                    let names: [&[u8]; 7] = [b"Sunday", b"Monday", b"Tuesday", b"Wednesday", b"Thursday", b"Friday", b"Saturday"];
+                    let snames: [&[u8]; 7] = [b"Sun", b"Mon", b"Tue", b"Wed", b"Thu", b"Fri", b"Sat"];
+                    if match_prefix(p, names[i]) { (*tm).tm_wday = i as c_int; p = p.add(names[i].len()); found = true; break; }
+                    if match_prefix(p, snames[i]) { (*tm).tm_wday = i as c_int; p = p.add(snames[i].len()); found = true; break; }
+                }
+                if !found { return core::ptr::null_mut(); }
+            }
+            b'b' | b'B' | b'h' => {
+                let mut found = false;
+                for i in 0..12 {
+                    let names: [&[u8]; 12] = [b"January", b"February", b"March", b"April", b"May", b"June", b"July", b"August", b"September", b"October", b"November", b"December"];
+                    let snames: [&[u8]; 12] = [b"Jan", b"Feb", b"Mar", b"Apr", b"May", b"Jun", b"Jul", b"Aug", b"Sep", b"Oct", b"Nov", b"Dec"];
+                    if match_prefix(p, names[i]) { (*tm).tm_mon = i as c_int; p = p.add(names[i].len()); found = true; break; }
+                    if match_prefix(p, snames[i]) { (*tm).tm_mon = i as c_int; p = p.add(snames[i].len()); found = true; break; }
+                }
+                if !found { return core::ptr::null_mut(); }
+            }
+            b'C' => {
+                let (v, np) = parse_int(p, 2);
+                if np == p { return core::ptr::null_mut(); }
+                century = v;
+                want_century |= 2;
+                p = np;
+            }
+            b'd' | b'e' => {
+                let (v, np) = parse_range(p, 1, 31);
+                if np == p { return core::ptr::null_mut(); }
+                (*tm).tm_mday = v;
+                p = np;
+            }
+            b'D' => {
+                let r = strptime(p as *const c_char, b"%m/%d/%y\0".as_ptr() as *const c_char, tm);
+                if r.is_null() { return core::ptr::null_mut(); }
+                p = r as *const u8;
+            }
+            b'F' => {
+                let (yv, ynp) = parse_int(p, 4);
+                if ynp == p { return core::ptr::null_mut(); }
+                (*tm).tm_year = yv - 1900;
+                p = ynp;
+                if *p != b'-' { return core::ptr::null_mut(); }
+                p = p.add(1);
+                let (mv, mnp) = parse_range(p, 1, 12);
+                if mnp == p { return core::ptr::null_mut(); }
+                (*tm).tm_mon = mv - 1;
+                p = mnp;
+                if *p != b'-' { return core::ptr::null_mut(); }
+                p = p.add(1);
+                let (dv, dnp) = parse_range(p, 1, 31);
+                if dnp == p { return core::ptr::null_mut(); }
+                (*tm).tm_mday = dv;
+                p = dnp;
+            }
+            b'H' | b'I' => {
+                let (v, np) = parse_range(p, 0, 23);
+                if np == p { return core::ptr::null_mut(); }
+                (*tm).tm_hour = v;
+                p = np;
+            }
+            b'j' => {
+                let (v, np) = parse_range(p, 1, 366);
+                if np == p { return core::ptr::null_mut(); }
+                (*tm).tm_yday = v - 1;
+                p = np;
+            }
+            b'm' => {
+                let (v, np) = parse_range(p, 1, 12);
+                if np == p { return core::ptr::null_mut(); }
+                (*tm).tm_mon = v - 1;
+                p = np;
+            }
+            b'M' => {
+                let (v, np) = parse_range(p, 0, 59);
+                if np == p { return core::ptr::null_mut(); }
+                (*tm).tm_min = v;
+                p = np;
+            }
+            b'n' | b't' => {
+                while *p != 0 && is_ascii_space(*p) { p = p.add(1); }
+            }
+            b'p' => {
+                if match_ci_prefix(p, b"AM") {
+                    if (*tm).tm_hour == 12 { (*tm).tm_hour = 0; }
+                    p = p.add(2);
+                } else if match_ci_prefix(p, b"PM") {
+                    if (*tm).tm_hour < 12 { (*tm).tm_hour += 12; }
+                    p = p.add(2);
+                } else { return core::ptr::null_mut(); }
+            }
+            b'r' => {
+                let r = strptime(p as *const c_char, b"%I:%M:%S %p\0".as_ptr() as *const c_char, tm);
+                if r.is_null() { return core::ptr::null_mut(); }
+                p = r as *const u8;
+            }
+            b'R' => {
+                let r = strptime(p as *const c_char, b"%H:%M\0".as_ptr() as *const c_char, tm);
+                if r.is_null() { return core::ptr::null_mut(); }
+                p = r as *const u8;
+            }
+            b's' => {
+                let neg = if *p == b'-' { p = p.add(1); true } else { false };
+                if *p < b'0' || *p > b'9' { return core::ptr::null_mut(); }
+                let mut val = 0i64;
+                while *p >= b'0' && *p <= b'9' {
+                    val = val * 10 + (*p - b'0') as i64;
+                    p = p.add(1);
+                }
+                if neg { val = -val; }
+                secs_to_tm(val, &mut *tm);
+            }
+            b'S' => {
+                let (v, np) = parse_range(p, 0, 60);
+                if np == p { return core::ptr::null_mut(); }
+                (*tm).tm_sec = v;
+                p = np;
+            }
+            b'T' => {
+                let r = strptime(p as *const c_char, b"%H:%M:%S\0".as_ptr() as *const c_char, tm);
+                if r.is_null() { return core::ptr::null_mut(); }
+                p = r as *const u8;
+            }
+            b'U' | b'W' => {
+                let (_, np) = parse_range(p, 0, 53);
+                if np == p { return core::ptr::null_mut(); }
+                p = np;
+            }
+            b'V' => {
+                let (_, np) = parse_range(p, 1, 53);
+                if np == p { return core::ptr::null_mut(); }
+                p = np;
+            }
+            b'w' => {
+                let (v, np) = parse_range(p, 0, 6);
+                if np == p { return core::ptr::null_mut(); }
+                (*tm).tm_wday = v;
+                p = np;
+            }
+            b'y' => {
+                let (v, np) = parse_int(p, 2);
+                if np == p { return core::ptr::null_mut(); }
+                relyear = v;
+                want_century |= 1;
+                p = np;
+            }
+            b'Y' => {
+                let neg = if *p == b'-' { p = p.add(1); true } else { false };
+                let (v, np) = parse_int(p, 4);
+                if np == p { return core::ptr::null_mut(); }
+                (*tm).tm_year = if neg { -(v + 1900) } else { v - 1900 };
+                want_century = 0;
+                p = np;
+            }
+            b'z' => {
+                if *p != b'+' && *p != b'-' { return core::ptr::null_mut(); }
+                let neg = *p == b'-';
+                p = p.add(1);
+                let mut off = 0i64;
+                let mut digits = 0;
+                while digits < 4 && *p >= b'0' && *p <= b'9' {
+                    off = off * 10 + (*p - b'0') as i64;
+                    p = p.add(1);
+                    digits += 1;
+                }
+                if digits == 0 { return core::ptr::null_mut(); }
+                let (hh, mm) = if digits <= 2 { (off, 0i64) } else { (off / 100, off % 100) };
+                (*tm).tm_gmtoff = (hh * 3600 + mm * 60) * if neg { -1 } else { 1 };
+            }
+            b'%' => {
+                if *p != b'%' { return core::ptr::null_mut(); }
+                p = p.add(1);
+            }
+            _ => { return core::ptr::null_mut(); }
+        }
+        f = f.add(1);
+    }
+    if want_century != 0 {
+        (*tm).tm_year = relyear;
+        if want_century & 2 != 0 { (*tm).tm_year += century * 100 - 1900; }
+        else if (*tm).tm_year <= 68 { (*tm).tm_year += 100; }
+    }
+    p as *mut c_char
+}
+
+// ============================================================
+// Time: tzset / daylight / timezone / tzname
+// ============================================================
+
+#[no_mangle]
+pub static mut daylight: c_int = 0;
+#[no_mangle]
+pub static mut timezone: c_long = 0;
+#[no_mangle]
+pub static mut tzname: [*mut c_char; 2] = [b"UTC\0".as_ptr() as *mut c_char, b"UTC\0".as_ptr() as *mut c_char];
+
+#[no_mangle]
+pub unsafe extern "C" fn tzset() {
+    daylight = 0;
+    timezone = 0;
 }
 
 // ============================================================

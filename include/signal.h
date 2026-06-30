@@ -90,10 +90,13 @@ struct sigaltstack {
 
 typedef struct sigaltstack stack_t;
 
+#ifndef _TIMESPEC_DEFINED
+#define _TIMESPEC_DEFINED
 struct timespec {
     long tv_sec;
     long tv_nsec;
 };
+#endif
 
 typedef struct {
     int si_signo;
