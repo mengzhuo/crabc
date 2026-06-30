@@ -39,6 +39,7 @@ const R_X86_64_TPOFF64: u64 = 18;
 
 const AT_NULL: u64 = 0;
 const AT_PHDR: u64 = 3;
+const AT_PHENT: u64 = 4;
 const AT_PHNUM: u64 = 5;
 const AT_PAGESZ: u64 = 6;
 const AT_BASE: u64 = 7;
@@ -1210,15 +1211,28 @@ unsafe fn load_and_jump(sp: usize) -> ! {
     }
 
     let phdr_addr = e_phoff;
-    build_and_jump(e_entry, phdr_addr, e_phnum)
+    build_and_jump(e_entry, phdr_addr, e_phnum, sp)
 }
 
 // ============================================================
 // Build a fresh stack for the target program and jump
 // ============================================================
 
-unsafe fn build_and_jump(entry: u64, phdr_addr: u64, phnum: u16) -> ! {
-    let stack_size = 64 * 1024usize;
+unsafe fn build_and_jump(entry: u64, phdr_addr: u64, phnum: u16, orig_sp: usize) -> ! {
+    let argc = *(orig_sp as *const u64) as usize;
+    let argv_start = orig_sp + 8;
+    let envp_start = argv_start + (argc + 1) * 8;
+
+    let mut envc: usize = 0;
+    while *((envp_start + envc * 8) as *const u64) != 0 {
+        envc += 1;
+    }
+
+    // ponytail: max 128 args, 512 env vars — covers any realistic binary
+    let max_args = if argc > 128 { 128 } else { argc };
+    let max_env = if envc > 512 { 512 } else { envc };
+
+    let stack_size = 256 * 1024usize;
     let stack_base = sys_mmap(
         core::ptr::null_mut(),
         stack_size,
@@ -1230,59 +1244,73 @@ unsafe fn build_and_jump(entry: u64, phdr_addr: u64, phnum: u16) -> ! {
     if stack_base as usize == MAP_FAILED {
         sys_exit(94);
     }
-
     let mut sp = stack_base as usize + stack_size;
 
-    // argv[0] = "tiny\0"
-    let argv0 = b"tiny\0";
-    sp -= argv0.len();
-    let src = argv0.as_ptr();
-    let dst = sp as *mut u8;
-    *dst = *src;
-    *dst.add(1) = *src.add(1);
-    *dst.add(2) = *src.add(2);
-    *dst.add(3) = *src.add(3);
-    *dst.add(4) = *src.add(4);
-    let argv0_ptr = sp;
+    let mut new_argv: [usize; 128] = [0; 128];
+    for i in 0..max_args {
+        let s = *((argv_start + i * 8) as *const u64) as *const u8;
+        let len = strlen(s);
+        sp -= len + 1;
+        core::ptr::copy_nonoverlapping(s, sp as *mut u8, len + 1);
+        new_argv[i] = sp;
+    }
 
-    sp &= !7usize;
+    let mut new_envp: [usize; 512] = [0; 512];
+    for i in 0..max_env {
+        let s = *((envp_start + i * 8) as *const u64) as *const u8;
+        let len = strlen(s);
+        sp -= len + 1;
+        core::ptr::copy_nonoverlapping(s, sp as *mut u8, len + 1);
+        new_envp[i] = sp;
+    }
 
-    // auxv
-    sp -= 5 * 16;
-    let auxv_ptr = sp as *mut u64;
-    *auxv_ptr.add(0) = AT_PHDR;
-    *auxv_ptr.add(1) = phdr_addr;
-    *auxv_ptr.add(2) = AT_PHNUM;
-    *auxv_ptr.add(3) = phnum as u64;
-    *auxv_ptr.add(4) = AT_PAGESZ;
-    *auxv_ptr.add(5) = 4096;
-    *auxv_ptr.add(6) = AT_ENTRY;
-    *auxv_ptr.add(7) = entry;
-    *auxv_ptr.add(8) = AT_NULL;
-    *auxv_ptr.add(9) = 0;
-
-    // envp = NULL
-    sp -= 8;
-    *(sp as *mut u64) = 0;
-    // argv terminator = NULL
-    sp -= 8;
-    *(sp as *mut u64) = 0;
-    // argv[0]
-    sp -= 8;
-    *(sp as *mut u64) = argv0_ptr as u64;
-    // argc = 1
-    sp -= 8;
-    *(sp as *mut u64) = 1;
-
+    // 16-byte align before structured data so argc lands on a boundary
     sp &= !15usize;
+
+    // Pad before auxv so argc lands on 16-byte boundary (no gap between argv[] and argc)
+    if (max_env + max_args) % 2 == 0 {
+        sp -= 8;
+        *(sp as *mut u64) = 0;
+    }
+
+    // auxv: AT_PHDR, AT_PHENT, AT_PHNUM, AT_PAGESZ, AT_ENTRY, AT_BASE, AT_NULL
+    sp -= 7 * 16;
+    let aux = sp as *mut u64;
+    *aux.add(0) = AT_PHDR;
+    *aux.add(1) = phdr_addr;
+    *aux.add(2) = AT_PHENT;
+    *aux.add(3) = PHDR_SIZE as u64;
+    *aux.add(4) = AT_PHNUM;
+    *aux.add(5) = phnum as u64;
+    *aux.add(6) = AT_PAGESZ;
+    *aux.add(7) = 4096;
+    *aux.add(8) = AT_ENTRY;
+    *aux.add(9) = entry;
+    *aux.add(10) = AT_BASE;
+    *aux.add(11) = 0;
+    *aux.add(12) = AT_NULL;
+    *aux.add(13) = 0;
+
+    sp -= (max_env + 1) * 8;
+    for i in 0..max_env {
+        *((sp + i * 8) as *mut u64) = new_envp[i] as u64;
+    }
+    *((sp + max_env * 8) as *mut u64) = 0;
+
+    sp -= (max_args + 1) * 8;
+    for i in 0..max_args {
+        *((sp + i * 8) as *mut u64) = new_argv[i] as u64;
+    }
+    *((sp + max_args * 8) as *mut u64) = 0;
+
+    sp -= 8;
+    *(sp as *mut u64) = argc as u64;
 
     core::arch::asm!(
         "mov rsp, {sp}",
         "jmp {entry}",
         sp = in(reg) sp,
         entry = in(reg) entry,
-        in("rdi") 1usize,
-        in("rsi") sp + 8,
         options(noreturn)
     );
 }
