@@ -26,3 +26,4 @@
 tests/fixtures/startup_argv_env
 tests/fixtures/crypt_test
 tests/fixtures/va_list_abi_test
+tests/fixtures/fnmatch_test
