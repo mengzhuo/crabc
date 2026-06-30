@@ -7,12 +7,6 @@ fn ldso_sets_up_tls() {
     let tlstest_src = fixtures.join("tlstest.c");
     let tlstest_bin = fixtures.join("tlstest");
 
-    let build_status = Command::new("cargo")
-        .args(["build", "-p", "ldso"])
-        .status()
-        .expect("failed to run cargo build -p ldso");
-    assert!(build_status.success(), "cargo build -p ldso failed");
-
     let ldso_path = manifest_dir.join("target/debug/libldso.so");
     assert!(ldso_path.exists(), "libldso.so not found at {}", ldso_path.display());
 

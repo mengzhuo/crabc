@@ -1,22 +1,14 @@
 use std::process::Command;
+use std::sync::Mutex;
+
+static PTHREAD_TEST_LOCK: Mutex<()> = Mutex::new(());
 
 #[test]
 fn pthread_functions_under_libc_so() {
+    let _guard = PTHREAD_TEST_LOCK.lock();
     let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
     let fixtures = manifest_dir.join("tests/fixtures");
     let include = manifest_dir.join("include");
-
-    let build_status = Command::new("cargo")
-        .args(["build", "-p", "ldso"])
-        .status()
-        .expect("failed to run cargo build -p ldso");
-    assert!(build_status.success(), "cargo build -p ldso failed");
-
-    let build_status = Command::new("cargo")
-        .args(["build", "-p", "libc"])
-        .status()
-        .expect("failed to run cargo build -p libc");
-    assert!(build_status.success(), "cargo build -p libc failed");
 
     let ldso_path = manifest_dir.join("target/debug/libldso.so");
     let libc_path = manifest_dir.join("target/debug/libc.so");
@@ -61,21 +53,10 @@ fn pthread_functions_under_libc_so() {
 
 #[test]
 fn pthread_full_test() {
+    let _guard = PTHREAD_TEST_LOCK.lock();
     let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
     let fixtures = manifest_dir.join("tests/fixtures");
     let include = manifest_dir.join("include");
-
-    let build_status = Command::new("cargo")
-        .args(["build", "-p", "ldso"])
-        .status()
-        .expect("failed to run cargo build -p ldso");
-    assert!(build_status.success(), "cargo build -p ldso failed");
-
-    let build_status = Command::new("cargo")
-        .args(["build", "-p", "libc"])
-        .status()
-        .expect("failed to run cargo build -p libc");
-    assert!(build_status.success(), "cargo build -p libc failed");
 
     let ldso_path = manifest_dir.join("target/debug/libldso.so");
     assert!(ldso_path.exists(), "libldso.so not found");

@@ -28,3 +28,11 @@ tests/fixtures/crypt_test
 tests/fixtures/va_list_abi_test
 tests/fixtures/fnmatch_test
 tests/fixtures/strtol_test
+tests/fixtures/daemon_test
+tests/fixtures/dn_expand_test
+tests/fixtures/fenv_test
+tests/fixtures/lrand48_test
+tests/fixtures/pthread_atfork_test
+tests/fixtures/statvfs_test
+tests/fixtures/syscall_test
+tests/fixtures/wave3_test
