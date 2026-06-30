@@ -8,11 +8,14 @@
 #include <fnmatch.h>
 #include <mntent.h>
 #include <math.h>
+#include <wchar.h>
 #include <sys/stat.h>
 #include <sys/resource.h>
 #include <unistd.h>
 #include <errno.h>
 #include <time.h>
+#include <spawn.h>
+#include <sys/wait.h>
 
 static int cmp(const void *a, const void *b) {
     return strcmp((const char *)a, (const char *)b);
@@ -293,6 +296,88 @@ static void test_sigsetjmp(void) {
     sigprocmask(SIG_SETMASK, &oldset, 0);
 }
 
+static void test_posix_spawn(void) {
+    posix_spawn_file_actions_t fa;
+    if (posix_spawn_file_actions_init(&fa) != 0) { puts("fa init fail"); exit(1); }
+    if (posix_spawn_file_actions_addclose(&fa, 99) != 0) { puts("fa addclose fail"); exit(1); }
+    if (posix_spawn_file_actions_adddup2(&fa, 0, 10) != 0) { puts("fa adddup2 fail"); exit(1); }
+    if (posix_spawn_file_actions_destroy(&fa) != 0) { puts("fa destroy fail"); exit(1); }
+
+    int p[2];
+    if (pipe(p) != 0) { puts("pipe fail"); exit(1); }
+    posix_spawn_file_actions_t fa2;
+    posix_spawn_file_actions_init(&fa2);
+    posix_spawn_file_actions_addclose(&fa2, p[0]);
+    posix_spawn_file_actions_adddup2(&fa2, p[1], 1);
+    posix_spawn_file_actions_addclose(&fa2, p[1]);
+
+    pid_t pid;
+    char *argv[] = {"echo", "spawn_ok", 0};
+    if (posix_spawnp(&pid, "echo", &fa2, 0, argv, 0) != 0) { puts("posix_spawnp fail"); exit(1); }
+    close(p[1]);
+    char buf[32];
+    int n = read(p[0], buf, sizeof buf - 1);
+    if (n <= 0) { puts("spawn read fail"); exit(1); }
+    buf[n] = 0;
+    if (strncmp(buf, "spawn_ok", 8) != 0) { puts("spawn output fail"); exit(1); }
+    close(p[0]);
+    int status;
+    waitpid(pid, &status, 0);
+    posix_spawn_file_actions_destroy(&fa2);
+}
+
+static void test_fwscanf(void) {
+    int x, y;
+    double u;
+    char a[100], b[100];
+    FILE *f;
+
+    f = tmpfile();
+    if (!f) { puts("tmpfile fail"); exit(1); }
+    fwrite("      42", 1, 8, f);
+    rewind(f);
+    x = y = -1;
+    if (fwscanf(f, L" %n%*d%n", &x, &y) != 0) { puts("fwscanf test1 return fail"); exit(1); }
+    if (x != 6) { puts("fwscanf test1 x fail"); exit(1); }
+    if (y != 8) { puts("fwscanf test1 y fail"); exit(1); }
+    if (ftell(f) != 8) { puts("fwscanf test1 ftell fail"); exit(1); }
+    fclose(f);
+
+    f = tmpfile();
+    if (!f) { puts("tmpfile fail"); exit(1); }
+    fwrite("[abc123]....x", 1, 13, f);
+    rewind(f);
+    if (fwscanf(f, L"%10[^]]%n%10[].]%n", a, &x, b, &y) != 2) { puts("fwscanf test2 return fail"); exit(1); }
+    if (strcmp(a, "[abc123") != 0) { puts("fwscanf test2 a fail"); exit(1); }
+    if (strcmp(b, "]....") != 0) { puts("fwscanf test2 b fail"); exit(1); }
+    if (x != 7) { puts("fwscanf test2 x fail"); exit(1); }
+    if (y != 12) { puts("fwscanf test2 y fail"); exit(1); }
+    if (ftell(f) != 12) { puts("fwscanf test2 ftell fail"); exit(1); }
+    fclose(f);
+
+    f = tmpfile();
+    if (!f) { puts("tmpfile fail"); exit(1); }
+    fwrite("0xx", 1, 3, f);
+    rewind(f);
+    x = y = -1;
+    if (fwscanf(f, L"%x%n", &x, &y) != 0) { puts("fwscanf test3 return fail"); exit(1); }
+    if (x != -1) { puts("fwscanf test3 x fail"); exit(1); }
+    if (ftell(f) != 2) { puts("fwscanf test3 ftell fail"); exit(1); }
+    fclose(f);
+
+    f = tmpfile();
+    if (!f) { puts("tmpfile fail"); exit(1); }
+    fwrite("0x.1p4    012", 1, 13, f);
+    rewind(f);
+    x = y = -1; u = -1;
+    if (fwscanf(f, L"%lf%n %i", &u, &x, &y) != 2) { puts("fwscanf test4 return fail"); exit(1); }
+    if (u != 1.0) { puts("fwscanf test4 u fail"); exit(1); }
+    if (x != 6) { puts("fwscanf test4 x fail"); exit(1); }
+    if (y != 10) { puts("fwscanf test4 y fail"); exit(1); }
+    if (ftell(f) != 13) { puts("fwscanf test4 ftell fail"); exit(1); }
+    fclose(f);
+}
+
 int main(void) {
     test_hsearch();
     test_insque();
@@ -308,6 +393,8 @@ int main(void) {
     test_rlimit();
     test_lrint_funcs();
     test_sigsetjmp();
+    test_posix_spawn();
+    test_fwscanf();
     puts("new_functions ok");
     return 0;
 }
