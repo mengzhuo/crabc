@@ -119,6 +119,13 @@ int pclose(FILE *);
 /* Error */
 void perror(const char *);
 
+/* Memory streams */
+FILE *open_memstream(char **, size_t *);
+FILE *fmemopen(void *, size_t, const char *);
+
+/* mkstemp */
+int mkstemp(char *);
+
 #ifdef __cplusplus
 }
 #endif
