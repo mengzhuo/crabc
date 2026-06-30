@@ -3,7 +3,7 @@
 #![feature(linkage)]
 #![allow(dead_code, non_camel_case_types)]
 
-use core::ffi::{c_char, c_int, c_long, c_longlong, c_uint, c_ulong, c_ulonglong, c_void, VaListImpl};
+use core::ffi::{c_char, c_int, c_long, c_longlong, c_uint, c_ulong, c_ulonglong, c_void, VaList, VaListImpl};
 use core::ptr::null_mut;
 use core::sync::atomic::{AtomicI32, AtomicUsize, Ordering};
 
@@ -6024,7 +6024,7 @@ unsafe fn format_f64(val: f64) -> ([u8; 64], usize) {
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn vprintf(fmt: *const c_char, mut args: VaListImpl) -> c_int {
+pub unsafe extern "C" fn vprintf(fmt: *const c_char, mut args: VaList) -> c_int {
     impl_format!(fmt, args,
         |c: u8| { let _ = fwrite(&c as *const u8 as *const c_void, 1, 1, stdout); },
         |s: *const u8, len: usize| { let _ = fwrite(s as *const c_void, 1, len, stdout); }
@@ -6032,7 +6032,7 @@ pub unsafe extern "C" fn vprintf(fmt: *const c_char, mut args: VaListImpl) -> c_
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn vfprintf(stream: *mut FILE, fmt: *const c_char, mut args: VaListImpl) -> c_int {
+pub unsafe extern "C" fn vfprintf(stream: *mut FILE, fmt: *const c_char, mut args: VaList) -> c_int {
     impl_format!(fmt, args,
         |c: u8| { let _ = fwrite(&c as *const u8 as *const c_void, 1, 1, stream); },
         |s: *const u8, len: usize| { let _ = fwrite(s as *const c_void, 1, len, stream); }
@@ -6064,7 +6064,7 @@ pub unsafe extern "C" fn dprintf(fd: c_int, fmt: *const c_char, mut args: ...) -
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn vdprintf(fd: c_int, fmt: *const c_char, mut args: VaListImpl) -> c_int {
+pub unsafe extern "C" fn vdprintf(fd: c_int, fmt: *const c_char, mut args: VaList) -> c_int {
     impl_format!(fmt, args,
         |c: u8| { write_str(fd, &c as *const u8, 1); },
         |s: *const u8, len: usize| { write_str(fd, s, len); }
@@ -6130,13 +6130,13 @@ unsafe fn format_to_buf(buf: *mut u8, cap: usize, fmt: *const c_char, args: &mut
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn vsprintf(buf: *mut c_char, fmt: *const c_char, mut args: VaListImpl) -> c_int {
-    format_to_buf(buf as *mut u8, usize::MAX, fmt, &mut args)
+pub unsafe extern "C" fn vsprintf(buf: *mut c_char, fmt: *const c_char, mut args: VaList) -> c_int {
+    format_to_buf(buf as *mut u8, usize::MAX, fmt, &mut *args)
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn vsnprintf(buf: *mut c_char, size: usize, fmt: *const c_char, mut args: VaListImpl) -> c_int {
-    format_to_buf(buf as *mut u8, size, fmt, &mut args)
+pub unsafe extern "C" fn vsnprintf(buf: *mut c_char, size: usize, fmt: *const c_char, mut args: VaList) -> c_int {
+    format_to_buf(buf as *mut u8, size, fmt, &mut *args)
 }
 
 #[no_mangle]
@@ -6440,12 +6440,12 @@ unsafe fn vsscanf_inner(buf: *const u8, fmt: *const c_char, args: &mut VaListImp
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn vsscanf(buf: *const c_char, fmt: *const c_char, mut args: VaListImpl) -> c_int {
-    vsscanf_inner(buf as *const u8, fmt, &mut args)
+pub unsafe extern "C" fn vsscanf(buf: *const c_char, fmt: *const c_char, mut args: VaList) -> c_int {
+    vsscanf_inner(buf as *const u8, fmt, &mut *args)
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn vfscanf(stream: *mut FILE, fmt: *const c_char, mut args: VaListImpl) -> c_int {
+pub unsafe extern "C" fn vfscanf(stream: *mut FILE, fmt: *const c_char, mut args: VaList) -> c_int {
     let mut line = [0u8; 4096];
     let mut pos = 0usize;
     loop {
@@ -6458,11 +6458,11 @@ pub unsafe extern "C" fn vfscanf(stream: *mut FILE, fmt: *const c_char, mut args
     }
     line[pos] = 0;
     if pos == 0 { return 0; }
-    vsscanf_inner(line.as_ptr(), fmt, &mut args)
+    vsscanf_inner(line.as_ptr(), fmt, &mut *args)
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn vscanf(fmt: *const c_char, args: VaListImpl) -> c_int {
+pub unsafe extern "C" fn vscanf(fmt: *const c_char, mut args: VaList) -> c_int {
     vfscanf(stdin, fmt, args)
 }
 
@@ -6472,13 +6472,13 @@ pub unsafe extern "C" fn sscanf(buf: *const c_char, fmt: *const c_char, mut args
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn fscanf(stream: *mut FILE, fmt: *const c_char, args: ...) -> c_int {
-    vfscanf(stream, fmt, args)
+pub unsafe extern "C" fn fscanf(stream: *mut FILE, fmt: *const c_char, mut args: ...) -> c_int {
+    vfscanf(stream, fmt, args.as_va_list())
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn scanf(fmt: *const c_char, args: ...) -> c_int {
-    vfscanf(stdin, fmt, args)
+pub unsafe extern "C" fn scanf(fmt: *const c_char, mut args: ...) -> c_int {
+    vfscanf(stdin, fmt, args.as_va_list())
 }
 
 // ============================================================
@@ -8182,7 +8182,7 @@ unsafe fn wfmt_write_str(dst: *mut wchar_t, pos: usize, cap: usize, s: *const u8
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn vswprintf(s: *mut wchar_t, n: usize, fmt: *const wchar_t, mut args: VaListImpl) -> c_int {
+pub unsafe extern "C" fn vswprintf(s: *mut wchar_t, n: usize, fmt: *const wchar_t, mut args: VaList) -> c_int {
     if n == 0 { return -1; }
     let cap = n - 1;
     let mut pos = 0usize;
@@ -8263,12 +8263,12 @@ pub unsafe extern "C" fn vswprintf(s: *mut wchar_t, n: usize, fmt: *const wchar_
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn swprintf(s: *mut wchar_t, n: usize, fmt: *const wchar_t, args: ...) -> c_int {
-    vswprintf(s, n, fmt, args)
+pub unsafe extern "C" fn swprintf(s: *mut wchar_t, n: usize, fmt: *const wchar_t, mut args: ...) -> c_int {
+    vswprintf(s, n, fmt, args.as_va_list())
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn vfwprintf(f: *mut FILE, fmt: *const wchar_t, args: VaListImpl) -> c_int {
+pub unsafe extern "C" fn vfwprintf(f: *mut FILE, fmt: *const wchar_t, mut args: VaList) -> c_int {
     let mut buf = [0i32; 4096];
     let r = vswprintf(buf.as_mut_ptr(), 4096, fmt, args);
     if r < 0 { return r; }
@@ -8284,8 +8284,8 @@ pub unsafe extern "C" fn vfwprintf(f: *mut FILE, fmt: *const wchar_t, args: VaLi
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn fwprintf(f: *mut FILE, fmt: *const wchar_t, args: ...) -> c_int {
-    vfwprintf(f, fmt, args)
+pub unsafe extern "C" fn fwprintf(f: *mut FILE, fmt: *const wchar_t, mut args: ...) -> c_int {
+    vfwprintf(f, fmt, args.as_va_list())
 }
 
 // ============================================================
@@ -8305,7 +8305,7 @@ unsafe fn wcsfmt_to_mbs(dst: *mut u8, dst_len: usize, src: *const wchar_t) {
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn vswscanf(s: *const wchar_t, fmt: *const wchar_t, mut args: VaListImpl) -> c_int {
+pub unsafe extern "C" fn vswscanf(s: *const wchar_t, fmt: *const wchar_t, mut args: VaList) -> c_int {
     let mut mbs_buf = [0u8; 4096];
     let mut i = 0usize;
     let mut mb_pos = 0usize;
@@ -8324,16 +8324,16 @@ pub unsafe extern "C" fn vswscanf(s: *const wchar_t, fmt: *const wchar_t, mut ar
     mbs_buf[mb_pos] = 0;
     let mut mbs_fmt = [0u8; 4096];
     wcsfmt_to_mbs(mbs_fmt.as_mut_ptr(), mbs_fmt.len(), fmt);
-    do_vsscanf(mbs_buf.as_ptr(), mb_pos, mbs_fmt.as_ptr() as *const c_char, &mut args, core::ptr::null_mut())
+    do_vsscanf(mbs_buf.as_ptr(), mb_pos, mbs_fmt.as_ptr() as *const c_char, &mut *args, core::ptr::null_mut())
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn swscanf(s: *const wchar_t, fmt: *const wchar_t, args: ...) -> c_int {
-    vswscanf(s, fmt, args)
+pub unsafe extern "C" fn swscanf(s: *const wchar_t, fmt: *const wchar_t, mut args: ...) -> c_int {
+    vswscanf(s, fmt, args.as_va_list())
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn vfwscanf(f: *mut FILE, fmt: *const wchar_t, mut args: VaListImpl) -> c_int {
+pub unsafe extern "C" fn vfwscanf(f: *mut FILE, fmt: *const wchar_t, mut args: VaList) -> c_int {
     let start_pos = ftello(f);
     if start_pos < 0 { return -1; }
     let mut buf = [0u8; 4096];
@@ -8349,24 +8349,24 @@ pub unsafe extern "C" fn vfwscanf(f: *mut FILE, fmt: *const wchar_t, mut args: V
     let mut mbs_fmt = [0u8; 4096];
     wcsfmt_to_mbs(mbs_fmt.as_mut_ptr(), mbs_fmt.len(), fmt);
     let mut consumed = 0usize;
-    let result = do_vsscanf(buf.as_ptr(), n, mbs_fmt.as_ptr() as *const c_char, &mut args, &mut consumed);
+    let result = do_vsscanf(buf.as_ptr(), n, mbs_fmt.as_ptr() as *const c_char, &mut *args, &mut consumed);
     let _ = fseeko(f, start_pos + consumed as i64, SEEK_SET);
     result
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn fwscanf(f: *mut FILE, fmt: *const wchar_t, args: ...) -> c_int {
-    vfwscanf(f, fmt, args)
+pub unsafe extern "C" fn fwscanf(f: *mut FILE, fmt: *const wchar_t, mut args: ...) -> c_int {
+    vfwscanf(f, fmt, args.as_va_list())
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn vwscanf(fmt: *const wchar_t, args: VaListImpl) -> c_int {
+pub unsafe extern "C" fn vwscanf(fmt: *const wchar_t, mut args: VaList) -> c_int {
     vfwscanf(stdin, fmt, args)
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn wscanf(fmt: *const wchar_t, args: ...) -> c_int {
-    vfwscanf(stdin, fmt, args)
+pub unsafe extern "C" fn wscanf(fmt: *const wchar_t, mut args: ...) -> c_int {
+    vfwscanf(stdin, fmt, args.as_va_list())
 }
 
 // ============================================================
