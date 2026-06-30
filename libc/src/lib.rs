@@ -2349,42 +2349,58 @@ unsafe fn sys_getsockname(fd: c_int, addr: *mut sockaddr, len: *mut c_uint) -> i
 
 #[no_mangle]
 pub unsafe extern "C" fn socket(domain: c_int, ty: c_int, protocol: c_int) -> c_int {
-    sys_socket(domain, ty, protocol) as c_int
+    let r = sys_socket(domain, ty, protocol);
+    if r < 0 { ERRNO = (-r) as c_int; return -1; }
+    r as c_int
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn socketpair(domain: c_int, ty: c_int, protocol: c_int, sv: *mut c_int) -> c_int {
-    sys_socketpair(domain, ty, protocol, sv) as c_int
+    let r = sys_socketpair(domain, ty, protocol, sv);
+    if r < 0 { ERRNO = (-r) as c_int; return -1; }
+    0
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn bind(fd: c_int, addr: *const sockaddr, len: c_uint) -> c_int {
-    sys_bind(fd, addr, len) as c_int
+    let r = sys_bind(fd, addr, len);
+    if r < 0 { ERRNO = (-r) as c_int; return -1; }
+    0
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn listen(fd: c_int, backlog: c_int) -> c_int {
-    sys_listen(fd, backlog) as c_int
+    let r = sys_listen(fd, backlog);
+    if r < 0 { ERRNO = (-r) as c_int; return -1; }
+    0
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn accept(fd: c_int, addr: *mut sockaddr, len: *mut c_uint) -> c_int {
-    sys_accept(fd, addr, len) as c_int
+    let r = sys_accept(fd, addr, len);
+    if r < 0 { ERRNO = (-r) as c_int; return -1; }
+    r as c_int
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn connect(fd: c_int, addr: *const sockaddr, len: c_uint) -> c_int {
-    sys_connect(fd, addr, len) as c_int
+    let r = sys_connect(fd, addr, len);
+    if r < 0 { ERRNO = (-r) as c_int; return -1; }
+    0
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn send(fd: c_int, buf: *const c_void, len: usize, flags: c_int) -> isize {
-    sys_sendto(fd, buf, len, flags, core::ptr::null(), 0) as isize
+    let r = sys_sendto(fd, buf, len, flags, core::ptr::null(), 0);
+    if r < 0 { ERRNO = (-r) as c_int; return -1; }
+    r as isize
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn recv(fd: c_int, buf: *mut c_void, len: usize, flags: c_int) -> isize {
-    sys_recvfrom(fd, buf, len, flags, core::ptr::null_mut(), core::ptr::null_mut()) as isize
+    let r = sys_recvfrom(fd, buf, len, flags, core::ptr::null_mut(), core::ptr::null_mut());
+    if r < 0 { ERRNO = (-r) as c_int; return -1; }
+    r as isize
 }
 
 #[no_mangle]
@@ -2396,7 +2412,9 @@ pub unsafe extern "C" fn sendto(
     addr: *const sockaddr,
     addrlen: c_uint,
 ) -> isize {
-    sys_sendto(fd, buf, len, flags, addr, addrlen) as isize
+    let r = sys_sendto(fd, buf, len, flags, addr, addrlen);
+    if r < 0 { ERRNO = (-r) as c_int; return -1; }
+    r as isize
 }
 
 #[no_mangle]
@@ -2408,7 +2426,9 @@ pub unsafe extern "C" fn recvfrom(
     addr: *mut sockaddr,
     addrlen: *mut c_uint,
 ) -> isize {
-    sys_recvfrom(fd, buf, len, flags, addr, addrlen) as isize
+    let r = sys_recvfrom(fd, buf, len, flags, addr, addrlen);
+    if r < 0 { ERRNO = (-r) as c_int; return -1; }
+    r as isize
 }
 
 #[no_mangle]
@@ -5352,6 +5372,11 @@ const F_GETFD: i32 = 1;
 const F_SETFD: i32 = 2;
 const F_GETFL: i32 = 3;
 const F_SETFL: i32 = 4;
+const F_GETLK: i32 = 5;
+const F_SETLK: i32 = 6;
+const F_SETLKW: i32 = 7;
+const F_DUPFD: i32 = 0;
+const F_DUPFD_CLOEXEC: i32 = 1030;
 const FD_CLOEXEC: i32 = 1;
 
 const TIOCGWINSZ: u32 = 0x5413;
@@ -11017,8 +11042,12 @@ pub unsafe extern "C" fn dup3(oldfd: c_int, newfd: c_int, flags: c_int) -> c_int
 pub unsafe extern "C" fn fcntl(fd: c_int, cmd: c_int, mut args: ...) -> c_int {
     let r = match cmd {
         F_GETFD | F_GETFL => sys_fcntl(fd, cmd, 0),
-        F_SETFD | F_SETFL => {
+        F_SETFD | F_SETFL | F_DUPFD | F_DUPFD_CLOEXEC => {
             let arg = args.arg::<c_int>();
+            sys_fcntl(fd, cmd, arg as i64)
+        }
+        F_GETLK | F_SETLK | F_SETLKW => {
+            let arg = args.arg::<*mut c_void>();
             sys_fcntl(fd, cmd, arg as i64)
         }
         _ => sys_fcntl(fd, cmd, 0),
@@ -11529,7 +11558,7 @@ pub unsafe extern "C" fn inet_ntop(af: c_int, a: *const c_void, s: *mut c_char, 
         for i in 0..4 {
             if i > 0 { *s.add(pos) = b'.' as c_char; pos += 1; }
             let (buf, len) = format_u64(*b.add(i) as u64);
-            for j in 0..len { *s.add(pos) = buf[20 - len + j] as c_char; pos += 1; }
+            for j in 0..len { *s.add(pos) = buf[j] as c_char; pos += 1; }
         }
         *s.add(pos) = 0;
         s
@@ -11578,19 +11607,25 @@ pub unsafe extern "C" fn inet_ntop(af: c_int, a: *const c_void, s: *mut c_char, 
             }
         }
         let mut i: usize = 0;
+        let mut prev_in_run = false;
         while i < 8 {
-            if i == best_start as usize && best_len >= 2 {
-                if i == 0 { *s.add(pos) = b':' as c_char; pos += 1; }
-                *s.add(pos) = b':' as c_char; pos += 1;
-                i += best_len;
+            let in_run = best_len >= 2 && i >= best_start as usize && i < best_start as usize + best_len;
+            if in_run {
+                if i == best_start as usize {
+                    *s.add(pos) = b':' as c_char; pos += 1;
+                    *s.add(pos) = b':' as c_char; pos += 1;
+                }
+                i += 1;
+                prev_in_run = true;
                 continue;
             }
-            if i > 0 && (i != best_start as usize || best_len < 2) {
+            if i > 0 && !prev_in_run {
                 *s.add(pos) = b':' as c_char; pos += 1;
             }
             let (buf, len) = format_hex(words[i] as u64, false);
-            for k in 0..len { *s.add(pos) = buf[16 - len + k] as c_char; pos += 1; }
+            for k in 0..len { *s.add(pos) = buf[k] as c_char; pos += 1; }
             i += 1;
+            prev_in_run = false;
         }
         *s.add(pos) = 0;
         s
@@ -11601,10 +11636,69 @@ pub unsafe extern "C" fn inet_ntop(af: c_int, a: *const c_void, s: *mut c_char, 
 }
 
 #[no_mangle]
+pub unsafe extern "C" fn inet_aton(s: *const c_char, dest: *mut c_void) -> c_int {
+    let a = dest as *mut u8;
+    let mut p = s as *const u8;
+    let mut vals = [0u64; 4];
+    let mut i = 0usize;
+    while i < 4 {
+        if *p < b'0' || *p > b'9' { return 0; }
+        let mut base = 10u32;
+        if *p == b'0' {
+            let c = *p.add(1);
+            if c == b'x' || c == b'X' {
+                base = 16;
+                p = p.add(2);
+                if !((*p >= b'0' && *p <= b'9')
+                    || (*p >= b'a' && *p <= b'f')
+                    || (*p >= b'A' && *p <= b'F')) {
+                    return 0;
+                }
+            } else {
+                base = 8;
+            }
+        }
+        let mut v: u64 = 0;
+        let start = p;
+        loop {
+            let c = *p;
+            let d = if c >= b'0' && c <= b'9' {
+                (c - b'0') as u64
+            } else if base == 16 && c >= b'a' && c <= b'f' {
+                (c - b'a' + 10) as u64
+            } else if base == 16 && c >= b'A' && c <= b'F' {
+                (c - b'A' + 10) as u64
+            } else {
+                break;
+            };
+            v = v * (base as u64) + d;
+            p = p.add(1);
+        }
+        if p == start { return 0; }
+        vals[i] = v;
+        if *p == 0 {
+            break;
+        }
+        if *p != b'.' || i == 3 { return 0; }
+        p = p.add(1);
+        i += 1;
+    }
+    if i == 4 { return 0; }
+    if i < 1 { vals[1] = vals[0] & 0xffffff; vals[0] >>= 24; }
+    if i < 2 { vals[2] = vals[1] & 0xffff; vals[1] >>= 16; }
+    if i < 3 { vals[3] = vals[2] & 0xff; vals[2] >>= 8; }
+    for j in 0..4 {
+        if vals[j] > 255 { return 0; }
+        *a.add(j) = vals[j] as u8;
+    }
+    1
+}
+
+#[no_mangle]
 pub unsafe extern "C" fn inet_addr(s: *const c_char) -> u32 {
     let mut a = [0u8; 4];
-    if inet_pton_v4(s as *const u8, a.as_mut_ptr()) == 1 {
-        u32::from_be_bytes(a)
+    if inet_aton(s, a.as_mut_ptr() as *mut c_void) == 1 {
+        u32::from_ne_bytes(a)
     } else {
         !0u32 // INADDR_NONE
     }
@@ -11613,28 +11707,15 @@ pub unsafe extern "C" fn inet_addr(s: *const c_char) -> u32 {
 #[no_mangle]
 pub unsafe extern "C" fn inet_ntoa(addr: u32) -> *mut c_char {
     static mut NTOA_BUF: [c_char; 16] = [0; 16];
-    let b = addr.to_be_bytes();
+    let b = addr.to_ne_bytes();
     let mut pos = 0;
     for i in 0..4 {
         if i > 0 { NTOA_BUF[pos] = b'.' as c_char; pos += 1; }
         let (buf, len) = format_u64(b[i] as u64);
-        for j in 0..len { NTOA_BUF[pos] = buf[20 - len + j] as c_char; pos += 1; }
+        for j in 0..len { NTOA_BUF[pos] = buf[j] as c_char; pos += 1; }
     }
     NTOA_BUF[pos] = 0;
     core::ptr::addr_of_mut!(NTOA_BUF).cast::<c_char>()
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn inet_aton(s: *const c_char, addr: *mut u32) -> c_int {
-    let mut a = [0u8; 4];
-    if inet_pton_v4(s as *const u8, a.as_mut_ptr()) == 1 {
-        if !addr.is_null() {
-            *addr = u32::from_be_bytes(a);
-        }
-        1
-    } else {
-        0
-    }
 }
 
 // ponytail: inet_network/inet_makeaddr/inet_lnaof/inet_netof - simple implementations
