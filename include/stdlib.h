@@ -54,6 +54,7 @@ double drand48(void);
 double erand48(unsigned short *);
 void lcong48(unsigned short *);
 void srandom(unsigned);
+long random(void);
 char *initstate(unsigned, char *, size_t);
 char *setstate(char *);
 

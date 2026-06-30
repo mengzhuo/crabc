@@ -4208,17 +4208,27 @@ pub unsafe extern "C" fn localeconv() -> *mut lconv {
 }
 
 pub type locale_t = *mut c_void;
-static mut CURRENT_LOCALE: locale_t = core::ptr::null_mut();
+static mut CURRENT_LOCALE: locale_t = LC_GLOBAL_LOCALE;
+
+static mut C_LOCALE_STORAGE: c_int = 0;
+const C_LOCALE: locale_t = unsafe { core::ptr::addr_of_mut!(C_LOCALE_STORAGE) as locale_t };
+const LC_GLOBAL_LOCALE: locale_t = usize::MAX as locale_t;
 
 #[no_mangle]
-pub unsafe extern "C" fn newlocale(_mask: c_int, name: *const c_char, _base: locale_t) -> locale_t {
+pub unsafe extern "C" fn newlocale(mask: c_int, name: *const c_char, base: locale_t) -> locale_t {
     if !name.is_null() && *name != 0 {
         let n = name as *const u8;
-        if strcmp(n, b"C\0".as_ptr()) != 0 && strcmp(n, b"POSIX\0".as_ptr()) != 0 {
+        if strcmp(n, b"C\0".as_ptr()) != 0
+            && strcmp(n, b"POSIX\0".as_ptr()) != 0
+        {
             return core::ptr::null_mut();
         }
     }
-    core::ptr::null_mut()
+    if base.is_null() || base == C_LOCALE || base == LC_GLOBAL_LOCALE {
+        C_LOCALE
+    } else {
+        core::ptr::null_mut()
+    }
 }
 
 #[no_mangle]
@@ -4227,14 +4237,18 @@ pub unsafe extern "C" fn freelocale(_loc: locale_t) {}
 #[no_mangle]
 pub unsafe extern "C" fn uselocale(loc: locale_t) -> locale_t {
     let old = CURRENT_LOCALE;
-    if !loc.is_null() { return old; }
-    CURRENT_LOCALE = loc;
+    if !loc.is_null() {
+        CURRENT_LOCALE = loc;
+    }
     old
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn duplocale(_loc: locale_t) -> locale_t {
-    core::ptr::null_mut()
+pub unsafe extern "C" fn duplocale(loc: locale_t) -> locale_t {
+    if loc.is_null() {
+        return core::ptr::null_mut();
+    }
+    C_LOCALE
 }
 
 const NL_ITEM_CODESET: c_int = 14;
@@ -12380,3 +12394,5 @@ include!("../../wave1/lrand48.rs");
 include!("../../wave1/strverscmp.rs");
 include!("../../wave1/syscall.rs");
 include!("../../wave1/pthread_atfork.rs");
+include!("../../wave2/fenv.rs");
+include!("../../wave2/locale_ctype.rs");
