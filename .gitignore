@@ -36,3 +36,4 @@ tests/fixtures/pthread_atfork_test
 tests/fixtures/statvfs_test
 tests/fixtures/syscall_test
 tests/fixtures/wave3_test
+tests/fixtures/net_test
