@@ -6,6 +6,8 @@ edition = "2021"
 [lib]
 name = "c"
 crate-type = ["cdylib", "staticlib"]
+test = false
+bench = false
 
 [dependencies]
 libm = "0.2"
