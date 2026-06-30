@@ -1,0 +1,853 @@
+libc-test Integration Report
+============================
+Date: Tue Jun 30 08:42:41 AM CST 2026
+libc.so: /home/root/librc/target/debug/libc.so
+Symbols: 351
+Subset: functional
+
+Results
+-------
+Total:      76
+PASS:       13
+FAIL:       0
+BUILDERROR: 63
+TIMEOUT:    0
+Other:      0
+
+Failure Breakdown (by category):
+
+BUILDERROR tests:
+  functional/basename: link failed
+  functional/clocale_mbfuncs: link failed
+  functional/clock_gettime: link failed
+  functional/crypt: compile failed
+  functional/dirname: link failed
+  functional/dlopen: skipped (dlopen)
+  functional/dlopen_dso: skipped (dlopen)
+  functional/env: link failed
+  functional/fcntl: link failed
+  functional/fdopen: link failed
+  functional/fnmatch: link failed
+  functional/fscanf: link failed
+  functional/fwscanf: link failed
+  functional/iconv_open: link failed
+  functional/inet_pton: link failed
+  functional/ipc_msg: link failed
+  functional/ipc_sem: link failed
+  functional/ipc_shm: link failed
+  functional/memstream: link failed
+  functional/mntent: link failed
+  functional/pthread_cancel: link failed
+  functional/pthread_cancel-points: link failed
+  functional/pthread_cond: link failed
+  functional/pthread_mutex: link failed
+  functional/pthread_mutex_pi: link failed
+  functional/pthread_robust: link failed
+  functional/pthread_tsd: link failed
+  functional/random: link failed
+  functional/search_hsearch: link failed
+  functional/search_insque: link failed
+  functional/search_lsearch: link failed
+  functional/search_tsearch: link failed
+  functional/sem_init: link failed
+  functional/sem_open: link failed
+  functional/setjmp: link failed
+  functional/socket: link failed
+  functional/spawn: link failed
+  functional/sscanf_long: link failed
+  functional/stat: link failed
+  functional/strftime: link failed
+  functional/string: link failed
+  functional/string_memcpy: link failed
+  functional/string_memmem: link failed
+  functional/string_memset: link failed
+  functional/strptime: link failed
+  functional/strtod: link failed
+  functional/strtod_long: link failed
+  functional/strtod_simple: link failed
+  functional/strtof: link failed
+  functional/strtold: link failed
+  functional/swprintf: link failed
+  functional/tgmath: link failed
+  functional/time: link failed
+  functional/tls_align: link failed
+  functional/tls_align_dlopen: skipped (dlopen)
+  functional/tls_align_dso: link failed
+  functional/tls_init_dlopen: skipped (dlopen)
+  functional/tls_init_dso: link failed
+  functional/ungetc: link failed
+  functional/utime: link failed
+  functional/vfork: link failed
+  functional/wcsstr: link failed
+  functional/wcstol: link failed
+
+PASS tests:
+  functional/argv
+  functional/mbc
+  functional/popen
+  functional/qsort
+  functional/snprintf
+  functional/sscanf
+  functional/string_strchr
+  functional/string_strcspn
+  functional/string_strstr
+  functional/strtol
+  functional/tls_init
+  functional/tls_local_exec
+  functional/udiv
+
+
+=== RAW REPORT ===
+PASS functional/argv
+BUILDERROR functional/basename: link failed
+/home/root/libc-test/src/functional/basename.c:16:(.text+0x11): undefined reference to `basename'
+/usr/bin/ld: /home/root/libc-test/src/functional/basename.c:17:(.text+0x34): undefined reference to `basename'
+/usr/bin/ld: /home/root/libc-test/src/functional/basename.c:18:(.text+0x6c): undefined reference to `basename'
+/usr/bin/ld: /home/root/libc-test/src/functional/basename.c:19:(.text+0xda): undefined reference to `basename'
+/usr/bin/ld: /home/root/libc-test/src/functional/basename.c:20:(.text+0x148): undefined reference to `basename'
+/usr/bin/ld: /home/root/librc/libc-test-harness/build/functional/basename.o:/home/root/libc-test/src/functional/basename.c:21: more undefined references to `basename' follow
+BUILDERROR functional/clocale_mbfuncs: link failed
+/home/root/libc-test/src/functional/clocale_mbfuncs.c:29:(.text+0xb9): undefined reference to `btowc'
+/usr/bin/ld: /home/root/libc-test/src/functional/clocale_mbfuncs.c:41:(.text+0x18c): undefined reference to `wctob'
+/usr/bin/ld: /home/root/libc-test/src/functional/clocale_mbfuncs.c:47:(.text+0x1ee): undefined reference to `wcschr'
+/usr/bin/ld: /home/root/libc-test/src/functional/clocale_mbfuncs.c:48:(.text+0x201): undefined reference to `wctob'
+/usr/bin/ld: /home/root/libc-test/src/functional/clocale_mbfuncs.c:67:(.text+0x3d2): undefined reference to `iswalnum'
+/usr/bin/ld: /home/root/libc-test/src/functional/clocale_mbfuncs.c:68:(.text+0x40e): undefined reference to `iswalpha'
+/usr/bin/ld: /home/root/libc-test/src/functional/clocale_mbfuncs.c:69:(.text+0x44a): undefined reference to `iswblank'
+/usr/bin/ld: /home/root/libc-test/src/functional/clocale_mbfuncs.c:70:(.text+0x486): undefined reference to `iswcntrl'
+/usr/bin/ld: /home/root/libc-test/src/functional/clocale_mbfuncs.c:72:(.text+0x4fb): undefined reference to `iswgraph'
+/usr/bin/ld: /home/root/libc-test/src/functional/clocale_mbfuncs.c:73:(.text+0x537): undefined reference to `iswlower'
+/usr/bin/ld: /home/root/libc-test/src/functional/clocale_mbfuncs.c:74:(.text+0x573): undefined reference to `iswprint'
+/usr/bin/ld: /home/root/libc-test/src/functional/clocale_mbfuncs.c:75:(.text+0x5af): undefined reference to `iswpunct'
+/usr/bin/ld: /home/root/libc-test/src/functional/clocale_mbfuncs.c:76:(.text+0x5eb): undefined reference to `iswspace'
+/usr/bin/ld: /home/root/libc-test/src/functional/clocale_mbfuncs.c:77:(.text+0x627): undefined reference to `iswupper'
+/usr/bin/ld: /home/root/libc-test/src/functional/clocale_mbfuncs.c:78:(.text+0x663): undefined reference to `iswxdigit'
+BUILDERROR functional/clock_gettime: link failed
+/home/root/libc-test/src/functional/clock_gettime.c:12:(.text+0x32): undefined reference to `strerror'
+BUILDERROR functional/crypt: compile failed
+/home/root/libc-test/src/functional/crypt.c:2:10: fatal error: crypt.h: No such file or directory
+    2 | #include <crypt.h>
+      |          ^~~~~~~~~
+compilation terminated.
+BUILDERROR functional/dirname: link failed
+/home/root/libc-test/src/functional/dirname.c:16:(.text+0x11): undefined reference to `dirname'
+/usr/bin/ld: /home/root/libc-test/src/functional/dirname.c:17:(.text+0x34): undefined reference to `dirname'
+/usr/bin/ld: /home/root/libc-test/src/functional/dirname.c:18:(.text+0x6c): undefined reference to `dirname'
+/usr/bin/ld: /home/root/libc-test/src/functional/dirname.c:19:(.text+0xda): undefined reference to `dirname'
+/usr/bin/ld: /home/root/libc-test/src/functional/dirname.c:20:(.text+0x148): undefined reference to `dirname'
+/usr/bin/ld: /home/root/librc/libc-test-harness/build/functional/dirname.o:/home/root/libc-test/src/functional/dirname.c:21: more undefined references to `dirname' follow
+BUILDERROR functional/dlopen: skipped (dlopen)
+BUILDERROR functional/dlopen_dso: skipped (dlopen)
+BUILDERROR functional/env: link failed
+/home/root/libc-test/src/functional/env.c:17:(.text+0xc): undefined reference to `environ'
+/usr/bin/ld: /home/root/libc-test/src/functional/env.c:19:(.text+0x35): undefined reference to `environ'
+/usr/bin/ld: /home/root/libc-test/src/functional/env.c:19:(.text+0x41): undefined reference to `environ'
+/usr/bin/ld: /home/root/libc-test/src/functional/env.c:20:(.text+0x57): undefined reference to `strerror'
+/usr/bin/ld: /home/root/libc-test/src/functional/env.c:22:(.text+0x8f): undefined reference to `strerror'
+/usr/bin/ld: /home/root/libc-test/src/functional/env.c:23:(.text+0xad): undefined reference to `environ'
+/usr/bin/ld: /home/root/libc-test/src/functional/env.c:24:(.text+0xcd): undefined reference to `environ'
+/usr/bin/ld: /home/root/libc-test/src/functional/env.c:25:(.text+0xee): undefined reference to `environ'
+/usr/bin/ld: /home/root/libc-test/src/functional/env.c:32:(.text+0x19c): undefined reference to `strerror'
+/usr/bin/ld: /home/root/libc-test/src/functional/env.c:33:(.text+0x1ba): undefined reference to `environ'
+/usr/bin/ld: /home/root/libc-test/src/functional/env.c:39:(.text+0x253): undefined reference to `strerror'
+/usr/bin/ld: /home/root/libc-test/src/functional/env.c:42:(.text+0x2b9): undefined reference to `environ'
+/usr/bin/ld: /home/root/libc-test/src/functional/env.c:43:(.text+0x2d9): undefined reference to `environ'
+/usr/bin/ld: /home/root/libc-test/src/functional/env.c:46:(.text+0x32e): undefined reference to `strerror'
+/usr/bin/ld: /home/root/libc-test/src/functional/env.c:51:(.text+0x3c8): undefined reference to `strerror'
+/usr/bin/ld: /home/root/libc-test/src/functional/env.c:57:(.text+0x473): undefined reference to `strerror'
+BUILDERROR functional/fcntl: link failed
+/home/root/libc-test/src/functional/fcntl.c:20:(.text+0x3a): undefined reference to `strerror'
+/usr/bin/ld: /home/root/libc-test/src/functional/fcntl.c:27:(.text+0xba): undefined reference to `fcntl'
+/usr/bin/ld: /home/root/libc-test/src/functional/fcntl.c:27:(.text+0xcc): undefined reference to `strerror'
+/usr/bin/ld: /home/root/libc-test/src/functional/fcntl.c:32:(.text+0x10f): undefined reference to `fcntl'
+/usr/bin/ld: /home/root/libc-test/src/functional/fcntl.c:41:(.text+0x1ac): undefined reference to `fcntl'
+BUILDERROR functional/fdopen: link failed
+/home/root/libc-test/src/functional/fdopen.c:21:(.text+0x45): undefined reference to `mkstemp'
+/usr/bin/ld: /home/root/libc-test/src/functional/fdopen.c:33:(.text+0x25c): undefined reference to `unlink'
+BUILDERROR functional/fnmatch: link failed
+/home/root/libc-test/src/functional/fnmatch.c:153:(.text+0x18b): undefined reference to `fnmatch'
+BUILDERROR functional/fscanf: link failed
+/home/root/libc-test/src/functional/fscanf.c:36:(.text+0x95): undefined reference to `pipe'
+/usr/bin/ld: /home/root/libc-test/src/functional/fscanf.c:36:(.text+0xac): undefined reference to `strerror'
+/usr/bin/ld: /home/root/libc-test/src/functional/fscanf.c:37:(.text+0x122): undefined reference to `strerror'
+/usr/bin/ld: /home/root/libc-test/src/functional/fscanf.c:45:(.text+0x1b9): undefined reference to `strerror'
+/usr/bin/ld: /home/root/libc-test/src/functional/fscanf.c:46:(.text+0x22f): undefined reference to `strerror'
+/usr/bin/ld: /home/root/libc-test/src/functional/fscanf.c:49:(.text+0x323): undefined reference to `strerror'
+/usr/bin/ld: /home/root/librc/libc-test-harness/build/functional/fscanf.o:/home/root/libc-test/src/functional/fscanf.c:51: more undefined references to `strerror' follow
+BUILDERROR functional/fwscanf: link failed
+/home/root/libc-test/src/functional/fwscanf.c:23:(.text+0x6c): undefined reference to `strerror'
+/usr/bin/ld: /home/root/libc-test/src/functional/fwscanf.c:28:(.text+0xc6): undefined reference to `strerror'
+/home/root/libc-test/src/functional/fwscanf.c:42:(.text+0x141): undefined reference to `strerror'
+/usr/bin/ld: /home/root/libc-test/src/functional/fwscanf.c:45:(.text+0x1b2): undefined reference to `fwscanf'
+/usr/bin/ld: /home/root/libc-test/src/functional/fwscanf.c:45:(.text+0x1c9): undefined reference to `strerror'
+/usr/bin/ld: /home/root/libc-test/src/functional/fwscanf.c:46:(.text+0x21c): undefined reference to `strerror'
+/usr/bin/ld: /home/root/libc-test/src/functional/fwscanf.c:47:(.text+0x26f): undefined reference to `strerror'
+/usr/bin/ld: /home/root/libc-test/src/functional/fwscanf.c:48:(.text+0x2cb): undefined reference to `strerror'
+/usr/bin/ld: /home/root/libc-test/src/functional/fwscanf.c:49:(.text+0x32f): undefined reference to `strerror'
+/usr/bin/ld: /home/root/librc/libc-test-harness/build/functional/fwscanf.o:/home/root/libc-test/src/functional/fwscanf.c:53: more undefined references to `strerror' follow
+/home/root/libc-test/src/functional/fwscanf.c:56:(.text+0x42e): undefined reference to `fwscanf'
+/usr/bin/ld: /home/root/libc-test/src/functional/fwscanf.c:56:(.text+0x445): undefined reference to `strerror'
+/usr/bin/ld: /home/root/libc-test/src/functional/fwscanf.c:59:(.text+0x530): undefined reference to `strerror'
+/usr/bin/ld: /home/root/libc-test/src/functional/fwscanf.c:60:(.text+0x583): undefined reference to `strerror'
+/usr/bin/ld: /home/root/libc-test/src/functional/fwscanf.c:61:(.text+0x5df): undefined reference to `strerror'
+/usr/bin/ld: /home/root/libc-test/src/functional/fwscanf.c:62:(.text+0x63b): undefined reference to `strerror'
+/usr/bin/ld: /home/root/libc-test/src/functional/fwscanf.c:63:(.text+0x680): undefined reference to `fgetwc'
+/usr/bin/ld: /home/root/libc-test/src/functional/fwscanf.c:63:(.text+0x697): undefined reference to `strerror'
+/usr/bin/ld: /home/root/libc-test/src/functional/fwscanf.c:67:(.text+0x711): undefined reference to `strerror'
+/usr/bin/ld: /home/root/libc-test/src/functional/fwscanf.c:71:(.text+0x796): undefined reference to `fwscanf'
+/usr/bin/ld: /home/root/libc-test/src/functional/fwscanf.c:71:(.text+0x7ad): undefined reference to `strerror'
+/usr/bin/ld: /home/root/libc-test/src/functional/fwscanf.c:72:(.text+0x81f): undefined reference to `strerror'
+/usr/bin/ld: /home/root/libc-test/src/functional/fwscanf.c:73:(.text+0x87a): undefined reference to `strerror'
+/usr/bin/ld: /home/root/libc-test/src/functional/fwscanf.c:74:(.text+0x8cd): undefined reference to `strerror'
+/usr/bin/ld: /home/root/libc-test/src/functional/fwscanf.c:75:(.text+0x929): undefined reference to `strerror'
+/usr/bin/ld: /home/root/librc/libc-test-harness/build/functional/fwscanf.o:/home/root/libc-test/src/functional/fwscanf.c:76: more undefined references to `strerror' follow
+/home/root/libc-test/src/functional/fwscanf.c:77:(.text+0x9ca): undefined reference to `fgetwc'
+/usr/bin/ld: /home/root/libc-test/src/functional/fwscanf.c:77:(.text+0x9e1): undefined reference to `strerror'
+/usr/bin/ld: /home/root/libc-test/src/functional/fwscanf.c:79:(.text+0xa32): undefined reference to `fgetwc'
+/usr/bin/ld: /home/root/libc-test/src/functional/fwscanf.c:79:(.text+0xa49): undefined reference to `strerror'
+/usr/bin/ld: /home/root/libc-test/src/functional/fwscanf.c:80:(.text+0xa8e): undefined reference to `fgetwc'
+/usr/bin/ld: /home/root/libc-test/src/functional/fwscanf.c:80:(.text+0xaa5): undefined reference to `strerror'
+/usr/bin/ld: /home/root/libc-test/src/functional/fwscanf.c:81:(.text+0xb0f): undefined reference to `fwscanf'
+/usr/bin/ld: /home/root/libc-test/src/functional/fwscanf.c:81:(.text+0xb26): undefined reference to `strerror'
+/usr/bin/ld: /home/root/libc-test/src/functional/fwscanf.c:82:(.text+0xb98): undefined reference to `strerror'
+/usr/bin/ld: /home/root/libc-test/src/functional/fwscanf.c:83:(.text+0xbf3): undefined reference to `strerror'
+/usr/bin/ld: /home/root/libc-test/src/functional/fwscanf.c:84:(.text+0xc4d): undefined reference to `strerror'
+/usr/bin/ld: /home/root/libc-test/src/functional/fwscanf.c:85:(.text+0xca0): undefined reference to `strerror'
+/usr/bin/ld: /home/root/librc/libc-test-harness/build/functional/fwscanf.o:/home/root/libc-test/src/functional/fwscanf.c:86: more undefined references to `strerror' follow
+/home/root/libc-test/src/functional/fwscanf.c:95:(.text+0xe5f): undefined reference to `fwscanf'
+/usr/bin/ld: /home/root/libc-test/src/functional/fwscanf.c:95:(.text+0xe76): undefined reference to `strerror'
+/usr/bin/ld: /home/root/libc-test/src/functional/fwscanf.c:96:(.text+0xee8): undefined reference to `strerror'
+/usr/bin/ld: /home/root/libc-test/src/functional/fwscanf.c:97:(.text+0xf43): undefined reference to `strerror'
+/usr/bin/ld: /home/root/libc-test/src/functional/fwscanf.c:98:(.text+0xf96): undefined reference to `strerror'
+/usr/bin/ld: /home/root/libc-test/src/functional/fwscanf.c:99:(.text+0xff2): undefined reference to `strerror'
+/usr/bin/ld: /home/root/librc/libc-test-harness/build/functional/fwscanf.o:/home/root/libc-test/src/functional/fwscanf.c:100: more undefined references to `strerror' follow
+/home/root/libc-test/src/functional/fwscanf.c:107:(.text+0x1141): undefined reference to `fwscanf'
+/usr/bin/ld: /home/root/libc-test/src/functional/fwscanf.c:107:(.text+0x1158): undefined reference to `strerror'
+/usr/bin/ld: /home/root/libc-test/src/functional/fwscanf.c:108:(.text+0x11ab): undefined reference to `strerror'
+/usr/bin/ld: /home/root/libc-test/src/functional/fwscanf.c:109:(.text+0x11fe): undefined reference to `strerror'
+/usr/bin/ld: /home/root/libc-test/src/functional/fwscanf.c:110:(.text+0x125a): undefined reference to `strerror'
+/usr/bin/ld: /home/root/libc-test/src/functional/fwscanf.c:111:(.text+0x12b6): undefined reference to `strerror'
+BUILDERROR functional/iconv_open: link failed
+/home/root/libc-test/src/functional/iconv_open.c:21:(.text+0x98): undefined reference to `strerror'
+/usr/bin/ld: /home/root/libc-test/src/functional/iconv_open.c:26:(.text+0xf7): undefined reference to `strerror'
+/usr/bin/ld: /home/root/libc-test/src/functional/iconv_open.c:34:(.text+0x188): undefined reference to `strerror'
+/usr/bin/ld: /home/root/libc-test/src/functional/iconv_open.c:42:(.text+0x21f): undefined reference to `strerror'
+/usr/bin/ld: /home/root/libc-test/src/functional/iconv_open.c:46:(.text+0x25d): undefined reference to `strerror'
+BUILDERROR functional/inet_pton: link failed
+/home/root/libc-test/src/functional/inet_pton.c:94:(.text+0x141): undefined reference to `inet_pton'
+/usr/bin/ld: /home/root/libc-test/src/functional/inet_pton.c:95:(.text+0x160): undefined reference to `strerror'
+/usr/bin/ld: /home/root/libc-test/src/functional/inet_pton.c:97:(.text+0x1a5): undefined reference to `inet_ntop'
+/usr/bin/ld: /home/root/libc-test/src/functional/inet_pton.c:98:(.text+0x1c4): undefined reference to `strerror'
+/usr/bin/ld: /home/root/libc-test/src/functional/inet_pton.c:102:(.text+0x215): undefined reference to `inet_addr'
+/usr/bin/ld: /home/root/libc-test/src/functional/inet_pton.c:102:(.text+0x299): undefined reference to `inet_pton'
+/usr/bin/ld: /home/root/libc-test/src/functional/inet_pton.c:102:(.text+0x359): undefined reference to `inet_ntop'
+/usr/bin/ld: /home/root/libc-test/src/functional/inet_pton.c:102:(.text+0x3d7): undefined reference to `inet_ntoa'
+/usr/bin/ld: /home/root/libc-test/src/functional/inet_pton.c:103:(.text+0x446): undefined reference to `inet_addr'
+/usr/bin/ld: /home/root/libc-test/src/functional/inet_pton.c:103:(.text+0x4ca): undefined reference to `inet_pton'
+/usr/bin/ld: /home/root/libc-test/src/functional/inet_pton.c:103:(.text+0x58a): undefined reference to `inet_ntop'
+/usr/bin/ld: /home/root/libc-test/src/functional/inet_pton.c:103:(.text+0x608): undefined reference to `inet_ntoa'
+/usr/bin/ld: /home/root/libc-test/src/functional/inet_pton.c:104:(.text+0x677): undefined reference to `inet_addr'
+/usr/bin/ld: /home/root/libc-test/src/functional/inet_pton.c:104:(.text+0x6fb): undefined reference to `inet_pton'
+/usr/bin/ld: /home/root/libc-test/src/functional/inet_pton.c:104:(.text+0x7bb): undefined reference to `inet_ntop'
+/usr/bin/ld: /home/root/libc-test/src/functional/inet_pton.c:104:(.text+0x839): undefined reference to `inet_ntoa'
+/usr/bin/ld: /home/root/libc-test/src/functional/inet_pton.c:105:(.text+0x8a8): undefined reference to `inet_addr'
+/usr/bin/ld: /home/root/libc-test/src/functional/inet_pton.c:105:(.text+0x92c): undefined reference to `inet_pton'
+/usr/bin/ld: /home/root/libc-test/src/functional/inet_pton.c:105:(.text+0x9ec): undefined reference to `inet_ntop'
+/usr/bin/ld: /home/root/libc-test/src/functional/inet_pton.c:105:(.text+0xa6a): undefined reference to `inet_ntoa'
+/usr/bin/ld: /home/root/libc-test/src/functional/inet_pton.c:108:(.text+0xad9): undefined reference to `inet_addr'
+/usr/bin/ld: /home/root/libc-test/src/functional/inet_pton.c:108:(.text+0xb5d): undefined reference to `inet_pton'
+/usr/bin/ld: /home/root/libc-test/src/functional/inet_pton.c:109:(.text+0xbb3): undefined reference to `inet_addr'
+/usr/bin/ld: /home/root/libc-test/src/functional/inet_pton.c:109:(.text+0xc37): undefined reference to `inet_pton'
+/usr/bin/ld: /home/root/libc-test/src/functional/inet_pton.c:110:(.text+0xc8d): undefined reference to `inet_addr'
+/usr/bin/ld: /home/root/libc-test/src/functional/inet_pton.c:110:(.text+0xd11): undefined reference to `inet_pton'
+/usr/bin/ld: /home/root/libc-test/src/functional/inet_pton.c:111:(.text+0xd67): undefined reference to `inet_addr'
+/usr/bin/ld: /home/root/libc-test/src/functional/inet_pton.c:111:(.text+0xdeb): undefined reference to `inet_pton'
+/usr/bin/ld: /home/root/libc-test/src/functional/inet_pton.c:112:(.text+0xe41): undefined reference to `inet_addr'
+/usr/bin/ld: /home/root/libc-test/src/functional/inet_pton.c:112:(.text+0xec5): undefined reference to `inet_pton'
+/usr/bin/ld: /home/root/libc-test/src/functional/inet_pton.c:113:(.text+0xf1b): undefined reference to `inet_addr'
+/usr/bin/ld: /home/root/libc-test/src/functional/inet_pton.c:113:(.text+0xf9f): undefined reference to `inet_pton'
+/usr/bin/ld: /home/root/libc-test/src/functional/inet_pton.c:116:(.text+0xff5): undefined reference to `inet_addr'
+/usr/bin/ld: /home/root/libc-test/src/functional/inet_pton.c:116:(.text+0x1079): undefined reference to `inet_pton'
+/usr/bin/ld: /home/root/libc-test/src/functional/inet_pton.c:117:(.text+0x10cf): undefined reference to `inet_addr'
+/usr/bin/ld: /home/root/libc-test/src/functional/inet_pton.c:117:(.text+0x1153): undefined reference to `inet_pton'
+/usr/bin/ld: /home/root/libc-test/src/functional/inet_pton.c:118:(.text+0x11a9): undefined reference to `inet_addr'
+/usr/bin/ld: /home/root/libc-test/src/functional/inet_pton.c:118:(.text+0x122d): undefined reference to `inet_pton'
+/usr/bin/ld: /home/root/libc-test/src/functional/inet_pton.c:119:(.text+0x1283): undefined reference to `inet_addr'
+/usr/bin/ld: /home/root/libc-test/src/functional/inet_pton.c:119:(.text+0x1307): undefined reference to `inet_pton'
+/usr/bin/ld: /home/root/libc-test/src/functional/inet_pton.c:120:(.text+0x135d): undefined reference to `inet_addr'
+/usr/bin/ld: /home/root/libc-test/src/functional/inet_pton.c:120:(.text+0x13e1): undefined reference to `inet_pton'
+/usr/bin/ld: /home/root/libc-test/src/functional/inet_pton.c:121:(.text+0x1437): undefined reference to `inet_addr'
+/usr/bin/ld: /home/root/libc-test/src/functional/inet_pton.c:121:(.text+0x14bb): undefined reference to `inet_pton'
+/usr/bin/ld: /home/root/libc-test/src/functional/inet_pton.c:122:(.text+0x1511): undefined reference to `inet_addr'
+/usr/bin/ld: /home/root/libc-test/src/functional/inet_pton.c:122:(.text+0x1595): undefined reference to `inet_pton'
+/usr/bin/ld: /home/root/libc-test/src/functional/inet_pton.c:123:(.text+0x15eb): undefined reference to `inet_addr'
+/usr/bin/ld: /home/root/libc-test/src/functional/inet_pton.c:123:(.text+0x166f): undefined reference to `inet_pton'
+/usr/bin/ld: /home/root/libc-test/src/functional/inet_pton.c:124:(.text+0x16c5): undefined reference to `inet_addr'
+/usr/bin/ld: /home/root/libc-test/src/functional/inet_pton.c:124:(.text+0x1749): undefined reference to `inet_pton'
+/usr/bin/ld: /home/root/libc-test/src/functional/inet_pton.c:127:(.text+0x1833): undefined reference to `inet_pton'
+/usr/bin/ld: /home/root/libc-test/src/functional/inet_pton.c:128:(.text+0x191d): undefined reference to `inet_pton'
+/usr/bin/ld: /home/root/libc-test/src/functional/inet_pton.c:128:(.text+0x19e6): undefined reference to `inet_ntop'
+/usr/bin/ld: /home/root/libc-test/src/functional/inet_pton.c:128:(.text+0x1a24): undefined reference to `inet_pton'
+/usr/bin/ld: /home/root/libc-test/src/functional/inet_pton.c:129:(.text+0x1bca): undefined reference to `inet_pton'
+/usr/bin/ld: /home/root/libc-test/src/functional/inet_pton.c:129:(.text+0x1c93): undefined reference to `inet_ntop'
+/usr/bin/ld: /home/root/libc-test/src/functional/inet_pton.c:129:(.text+0x1cd1): undefined reference to `inet_pton'
+/usr/bin/ld: /home/root/libc-test/src/functional/inet_pton.c:130:(.text+0x1e77): undefined reference to `inet_pton'
+/usr/bin/ld: /home/root/libc-test/src/functional/inet_pton.c:131:(.text+0x1f6a): undefined reference to `inet_pton'
+/usr/bin/ld: /home/root/libc-test/src/functional/inet_pton.c:132:(.text+0x205d): undefined reference to `inet_pton'
+/usr/bin/ld: /home/root/libc-test/src/functional/inet_pton.c:133:(.text+0x2150): undefined reference to `inet_pton'
+/usr/bin/ld: /home/root/libc-test/src/functional/inet_pton.c:133:(.text+0x2219): undefined reference to `inet_ntop'
+/usr/bin/ld: /home/root/libc-test/src/functional/inet_pton.c:133:(.text+0x2257): undefined reference to `inet_pton'
+/usr/bin/ld: /home/root/libc-test/src/functional/inet_pton.c:134:(.text+0x23fd): undefined reference to `inet_pton'
+/usr/bin/ld: /home/root/libc-test/src/functional/inet_pton.c:134:(.text+0x24c6): undefined reference to `inet_ntop'
+/usr/bin/ld: /home/root/libc-test/src/functional/inet_pton.c:134:(.text+0x2504): undefined reference to `inet_pton'
+/usr/bin/ld: /home/root/libc-test/src/functional/inet_pton.c:135:(.text+0x26aa): undefined reference to `inet_pton'
+/usr/bin/ld: /home/root/libc-test/src/functional/inet_pton.c:135:(.text+0x2773): undefined reference to `inet_ntop'
+/usr/bin/ld: /home/root/libc-test/src/functional/inet_pton.c:135:(.text+0x27b1): undefined reference to `inet_pton'
+/usr/bin/ld: /home/root/libc-test/src/functional/inet_pton.c:136:(.text+0x2957): undefined reference to `inet_pton'
+/usr/bin/ld: /home/root/libc-test/src/functional/inet_pton.c:137:(.text+0x2a4a): undefined reference to `inet_pton'
+/usr/bin/ld: /home/root/libc-test/src/functional/inet_pton.c:138:(.text+0x2b3d): undefined reference to `inet_pton'
+/usr/bin/ld: /home/root/libc-test/src/functional/inet_pton.c:138:(.text+0x2c06): undefined reference to `inet_ntop'
+/usr/bin/ld: /home/root/libc-test/src/functional/inet_pton.c:138:(.text+0x2c44): undefined reference to `inet_pton'
+/usr/bin/ld: /home/root/libc-test/src/functional/inet_pton.c:139:(.text+0x2dea): undefined reference to `inet_pton'
+/usr/bin/ld: /home/root/libc-test/src/functional/inet_pton.c:140:(.text+0x2edd): undefined reference to `inet_pton'
+/usr/bin/ld: /home/root/libc-test/src/functional/inet_pton.c:141:(.text+0x2fd0): undefined reference to `inet_pton'
+/usr/bin/ld: /home/root/libc-test/src/functional/inet_pton.c:141:(.text+0x3099): undefined reference to `inet_ntop'
+/usr/bin/ld: /home/root/libc-test/src/functional/inet_pton.c:141:(.text+0x30d7): undefined reference to `inet_pton'
+/usr/bin/ld: /home/root/libc-test/src/functional/inet_pton.c:142:(.text+0x327d): undefined reference to `inet_pton'
+/usr/bin/ld: /home/root/libc-test/src/functional/inet_pton.c:143:(.text+0x3370): undefined reference to `inet_pton'
+/usr/bin/ld: /home/root/libc-test/src/functional/inet_pton.c:143:(.text+0x3439): undefined reference to `inet_ntop'
+/usr/bin/ld: /home/root/libc-test/src/functional/inet_pton.c:143:(.text+0x3477): undefined reference to `inet_pton'
+/usr/bin/ld: /home/root/libc-test/src/functional/inet_pton.c:144:(.text+0x361d): undefined reference to `inet_pton'
+/usr/bin/ld: /home/root/libc-test/src/functional/inet_pton.c:144:(.text+0x36e6): undefined reference to `inet_ntop'
+/usr/bin/ld: /home/root/libc-test/src/functional/inet_pton.c:144:(.text+0x3724): undefined reference to `inet_pton'
+/usr/bin/ld: /home/root/libc-test/src/functional/inet_pton.c:145:(.text+0x38ca): undefined reference to `inet_pton'
+/usr/bin/ld: /home/root/libc-test/src/functional/inet_pton.c:146:(.text+0x39bd): undefined reference to `inet_pton'
+/usr/bin/ld: /home/root/libc-test/src/functional/inet_pton.c:147:(.text+0x3ab0): undefined reference to `inet_pton'
+/usr/bin/ld: /home/root/libc-test/src/functional/inet_pton.c:147:(.text+0x3b79): undefined reference to `inet_ntop'
+/usr/bin/ld: /home/root/libc-test/src/functional/inet_pton.c:147:(.text+0x3bb7): undefined reference to `inet_pton'
+/usr/bin/ld: /home/root/libc-test/src/functional/inet_pton.c:148:(.text+0x3d5d): undefined reference to `inet_pton'
+/usr/bin/ld: /home/root/libc-test/src/functional/inet_pton.c:148:(.text+0x3e26): undefined reference to `inet_ntop'
+/usr/bin/ld: /home/root/libc-test/src/functional/inet_pton.c:148:(.text+0x3e64): undefined reference to `inet_pton'
+/usr/bin/ld: /home/root/libc-test/src/functional/inet_pton.c:149:(.text+0x400a): undefined reference to `inet_pton'
+/usr/bin/ld: /home/root/libc-test/src/functional/inet_pton.c:150:(.text+0x40fd): undefined reference to `inet_pton'
+/usr/bin/ld: /home/root/libc-test/src/functional/inet_pton.c:150:(.text+0x41c6): undefined reference to `inet_ntop'
+/usr/bin/ld: /home/root/libc-test/src/functional/inet_pton.c:150:(.text+0x4204): undefined reference to `inet_pton'
+/usr/bin/ld: /home/root/libc-test/src/functional/inet_pton.c:151:(.text+0x43aa): undefined reference to `inet_pton'
+/usr/bin/ld: /home/root/libc-test/src/functional/inet_pton.c:152:(.text+0x449d): undefined reference to `inet_pton'
+/usr/bin/ld: /home/root/libc-test/src/functional/inet_pton.c:153:(.text+0x4590): undefined reference to `inet_pton'
+/usr/bin/ld: /home/root/libc-test/src/functional/inet_pton.c:153:(.text+0x4659): undefined reference to `inet_ntop'
+/usr/bin/ld: /home/root/libc-test/src/functional/inet_pton.c:153:(.text+0x4697): undefined reference to `inet_pton'
+/usr/bin/ld: /home/root/libc-test/src/functional/inet_pton.c:154:(.text+0x483d): undefined reference to `inet_pton'
+/usr/bin/ld: /home/root/libc-test/src/functional/inet_pton.c:155:(.text+0x4930): undefined reference to `inet_pton'
+/usr/bin/ld: /home/root/libc-test/src/functional/inet_pton.c:155:(.text+0x49f9): undefined reference to `inet_ntop'
+/usr/bin/ld: /home/root/libc-test/src/functional/inet_pton.c:155:(.text+0x4a37): undefined reference to `inet_pton'
+/usr/bin/ld: /home/root/libc-test/src/functional/inet_pton.c:156:(.text+0x4bdd): undefined reference to `inet_pton'
+/usr/bin/ld: /home/root/libc-test/src/functional/inet_pton.c:157:(.text+0x4cd0): undefined reference to `inet_pton'
+BUILDERROR functional/ipc_msg: link failed
+/home/root/libc-test/src/functional/ipc_msg.c:38:(.text+0x44): undefined reference to `time'
+/usr/bin/ld: /home/root/libc-test/src/functional/ipc_msg.c:38:(.text+0x5d): undefined reference to `strerror'
+/usr/bin/ld: /home/root/libc-test/src/functional/ipc_msg.c:39:(.text+0x94): undefined reference to `ftok'
+/usr/bin/ld: /home/root/libc-test/src/functional/ipc_msg.c:39:(.text+0xab): undefined reference to `strerror'
+/usr/bin/ld: /home/root/libc-test/src/functional/ipc_msg.c:42:(.text+0xdb): undefined reference to `msgget'
+/usr/bin/ld: /home/root/libc-test/src/functional/ipc_msg.c:42:(.text+0xf2): undefined reference to `strerror'
+/usr/bin/ld: /home/root/libc-test/src/functional/ipc_msg.c:43:(.text+0x127): undefined reference to `msgctl'
+/usr/bin/ld: /home/root/libc-test/src/functional/ipc_msg.c:43:(.text+0x13a): undefined reference to `strerror'
+/usr/bin/ld: /home/root/libc-test/src/functional/ipc_msg.c:44:(.text+0x16a): undefined reference to `msgget'
+/usr/bin/ld: /home/root/libc-test/src/functional/ipc_msg.c:44:(.text+0x181): undefined reference to `strerror'
+/usr/bin/ld: /home/root/libc-test/src/functional/ipc_msg.c:51:(.text+0x1d3): undefined reference to `msgget'
+/usr/bin/ld: /home/root/libc-test/src/functional/ipc_msg.c:52:(.text+0x1f2): undefined reference to `strerror'
+/usr/bin/ld: /home/root/libc-test/src/functional/ipc_msg.c:55:(.text+0x21f): undefined reference to `msgctl'
+/usr/bin/ld: /home/root/libc-test/src/functional/ipc_msg.c:55:(.text+0x232): undefined reference to `strerror'
+/usr/bin/ld: /home/root/libc-test/src/functional/ipc_msg.c:74:(.text+0x592): undefined reference to `msgsnd'
+/usr/bin/ld: /home/root/libc-test/src/functional/ipc_msg.c:74:(.text+0x5a5): undefined reference to `strerror'
+/usr/bin/ld: /home/root/libc-test/src/functional/ipc_msg.c:75:(.text+0x5dc): undefined reference to `msgctl'
+/usr/bin/ld: /home/root/libc-test/src/functional/ipc_msg.c:75:(.text+0x5ef): undefined reference to `strerror'
+/home/root/libc-test/src/functional/ipc_msg.c:94:(.text+0x71c): undefined reference to `ftok'
+/usr/bin/ld: /home/root/libc-test/src/functional/ipc_msg.c:94:(.text+0x733): undefined reference to `strerror'
+/usr/bin/ld: /home/root/libc-test/src/functional/ipc_msg.c:95:(.text+0x763): undefined reference to `msgget'
+/usr/bin/ld: /home/root/libc-test/src/functional/ipc_msg.c:95:(.text+0x77a): undefined reference to `strerror'
+/usr/bin/ld: /home/root/libc-test/src/functional/ipc_msg.c:98:(.text+0x7c6): undefined reference to `msgrcv'
+/usr/bin/ld: /home/root/libc-test/src/functional/ipc_msg.c:99:(.text+0x7e6): undefined reference to `strerror'
+/usr/bin/ld: /home/root/libc-test/src/functional/ipc_msg.c:102:(.text+0x81d): undefined reference to `msgrcv'
+/usr/bin/ld: /home/root/libc-test/src/functional/ipc_msg.c:102:(.text+0x831): undefined reference to `strerror'
+/usr/bin/ld: /home/root/libc-test/src/functional/ipc_msg.c:107:(.text+0x8c1): undefined reference to `msgrcv'
+/usr/bin/ld: /home/root/libc-test/src/functional/ipc_msg.c:108:(.text+0x8e1): undefined reference to `strerror'
+/usr/bin/ld: /home/root/libc-test/src/functional/ipc_msg.c:111:(.text+0x90c): undefined reference to `msgctl'
+/usr/bin/ld: /home/root/libc-test/src/functional/ipc_msg.c:111:(.text+0x91f): undefined reference to `strerror'
+/home/root/libc-test/src/functional/ipc_msg.c:122:(.text+0x971): undefined reference to `strerror'
+/usr/bin/ld: /home/root/libc-test/src/functional/ipc_msg.c:126:(.text+0x9c8): undefined reference to `strerror'
+BUILDERROR functional/ipc_sem: link failed
+/home/root/libc-test/src/functional/ipc_sem.c:40:(.text+0x12): undefined reference to `time'
+/usr/bin/ld: /home/root/libc-test/src/functional/ipc_sem.c:40:(.text+0x2b): undefined reference to `strerror'
+/usr/bin/ld: /home/root/libc-test/src/functional/ipc_sem.c:41:(.text+0x62): undefined reference to `ftok'
+/usr/bin/ld: /home/root/libc-test/src/functional/ipc_sem.c:41:(.text+0x79): undefined reference to `strerror'
+/usr/bin/ld: /home/root/libc-test/src/functional/ipc_sem.c:44:(.text+0xae): undefined reference to `semget'
+/usr/bin/ld: /home/root/libc-test/src/functional/ipc_sem.c:44:(.text+0xc5): undefined reference to `strerror'
+/usr/bin/ld: /home/root/libc-test/src/functional/ipc_sem.c:45:(.text+0xff): undefined reference to `semctl'
+/usr/bin/ld: /home/root/libc-test/src/functional/ipc_sem.c:45:(.text+0x112): undefined reference to `strerror'
+/usr/bin/ld: /home/root/libc-test/src/functional/ipc_sem.c:46:(.text+0x147): undefined reference to `semget'
+/usr/bin/ld: /home/root/libc-test/src/functional/ipc_sem.c:46:(.text+0x15e): undefined reference to `strerror'
+/usr/bin/ld: /home/root/libc-test/src/functional/ipc_sem.c:53:(.text+0x1b5): undefined reference to `semget'
+/usr/bin/ld: /home/root/libc-test/src/functional/ipc_sem.c:54:(.text+0x1d4): undefined reference to `strerror'
+/usr/bin/ld: /home/root/libc-test/src/functional/ipc_sem.c:58:(.text+0x21c): undefined reference to `semctl'
+/usr/bin/ld: /home/root/libc-test/src/functional/ipc_sem.c:58:(.text+0x22f): undefined reference to `strerror'
+/usr/bin/ld: /home/root/libc-test/src/functional/ipc_sem.c:75:(.text+0x4d1): undefined reference to `semop'
+/usr/bin/ld: /home/root/libc-test/src/functional/ipc_sem.c:75:(.text+0x4e4): undefined reference to `strerror'
+/usr/bin/ld: /home/root/libc-test/src/functional/ipc_sem.c:76:(.text+0x51e): undefined reference to `semctl'
+/usr/bin/ld: /home/root/libc-test/src/functional/ipc_sem.c:76:(.text+0x535): undefined reference to `strerror'
+/usr/bin/ld: /home/root/libc-test/src/functional/ipc_sem.c:78:(.text+0x5a8): undefined reference to `semctl'
+/usr/bin/ld: /home/root/libc-test/src/functional/ipc_sem.c:78:(.text+0x5bf): undefined reference to `strerror'
+/usr/bin/ld: /home/root/libc-test/src/functional/ipc_sem.c:80:(.text+0x63a): undefined reference to `semctl'
+/usr/bin/ld: /home/root/libc-test/src/functional/ipc_sem.c:80:(.text+0x651): undefined reference to `strerror'
+/usr/bin/ld: /home/root/libc-test/src/functional/ipc_sem.c:82:(.text+0x6c4): undefined reference to `semctl'
+/usr/bin/ld: /home/root/libc-test/src/functional/ipc_sem.c:82:(.text+0x6db): undefined reference to `strerror'
+/home/root/libc-test/src/functional/ipc_sem.c:92:(.text+0x75a): undefined reference to `ftok'
+/usr/bin/ld: /home/root/libc-test/src/functional/ipc_sem.c:92:(.text+0x771): undefined reference to `strerror'
+/usr/bin/ld: /home/root/libc-test/src/functional/ipc_sem.c:93:(.text+0x7a6): undefined reference to `semget'
+/usr/bin/ld: /home/root/libc-test/src/functional/ipc_sem.c:93:(.text+0x7bd): undefined reference to `strerror'
+/usr/bin/ld: /home/root/libc-test/src/functional/ipc_sem.c:99:(.text+0x806): undefined reference to `semop'
+/usr/bin/ld: /home/root/libc-test/src/functional/ipc_sem.c:99:(.text+0x819): undefined reference to `strerror'
+/usr/bin/ld: /home/root/libc-test/src/functional/ipc_sem.c:100:(.text+0x853): undefined reference to `semctl'
+/usr/bin/ld: /home/root/libc-test/src/functional/ipc_sem.c:100:(.text+0x86a): undefined reference to `strerror'
+/usr/bin/ld: /home/root/libc-test/src/functional/ipc_sem.c:104:(.text+0x8dd): undefined reference to `semctl'
+/usr/bin/ld: /home/root/libc-test/src/functional/ipc_sem.c:104:(.text+0x8f0): undefined reference to `strerror'
+/home/root/libc-test/src/functional/ipc_sem.c:115:(.text+0x942): undefined reference to `strerror'
+/usr/bin/ld: /home/root/libc-test/src/functional/ipc_sem.c:119:(.text+0x999): undefined reference to `strerror'
+BUILDERROR functional/ipc_shm: link failed
+/home/root/libc-test/src/functional/ipc_shm.c:35:(.text+0x12): undefined reference to `time'
+/usr/bin/ld: /home/root/libc-test/src/functional/ipc_shm.c:35:(.text+0x2b): undefined reference to `strerror'
+/usr/bin/ld: /home/root/libc-test/src/functional/ipc_shm.c:36:(.text+0x62): undefined reference to `ftok'
+/usr/bin/ld: /home/root/libc-test/src/functional/ipc_shm.c:36:(.text+0x79): undefined reference to `strerror'
+/usr/bin/ld: /home/root/libc-test/src/functional/ipc_shm.c:39:(.text+0xae): undefined reference to `shmget'
+/usr/bin/ld: /home/root/libc-test/src/functional/ipc_shm.c:39:(.text+0xc5): undefined reference to `strerror'
+/usr/bin/ld: /home/root/libc-test/src/functional/ipc_shm.c:40:(.text+0xfa): undefined reference to `shmctl'
+/usr/bin/ld: /home/root/libc-test/src/functional/ipc_shm.c:40:(.text+0x10d): undefined reference to `strerror'
+/usr/bin/ld: /home/root/libc-test/src/functional/ipc_shm.c:41:(.text+0x142): undefined reference to `shmget'
+/usr/bin/ld: /home/root/libc-test/src/functional/ipc_shm.c:41:(.text+0x159): undefined reference to `strerror'
+/usr/bin/ld: /home/root/libc-test/src/functional/ipc_shm.c:48:(.text+0x1b0): undefined reference to `shmget'
+/usr/bin/ld: /home/root/libc-test/src/functional/ipc_shm.c:49:(.text+0x1cf): undefined reference to `strerror'
+/usr/bin/ld: /home/root/libc-test/src/functional/ipc_shm.c:52:(.text+0x1fc): undefined reference to `shmctl'
+/usr/bin/ld: /home/root/libc-test/src/functional/ipc_shm.c:52:(.text+0x20f): undefined reference to `strerror'
+/usr/bin/ld: /home/root/libc-test/src/functional/ipc_shm.c:70:(.text+0x586): undefined reference to `shmat'
+/usr/bin/ld: /home/root/libc-test/src/functional/ipc_shm.c:71:(.text+0x59f): undefined reference to `strerror'
+/usr/bin/ld: /home/root/libc-test/src/functional/ipc_shm.c:72:(.text+0x5cc): undefined reference to `shmctl'
+/usr/bin/ld: /home/root/libc-test/src/functional/ipc_shm.c:72:(.text+0x5df): undefined reference to `strerror'
+/usr/bin/ld: /home/root/libc-test/src/functional/ipc_shm.c:80:(.text+0x6ff): undefined reference to `shmdt'
+/usr/bin/ld: /home/root/libc-test/src/functional/ipc_shm.c:80:(.text+0x712): undefined reference to `strerror'
+/home/root/libc-test/src/functional/ipc_shm.c:89:(.text+0x758): undefined reference to `ftok'
+/usr/bin/ld: /home/root/libc-test/src/functional/ipc_shm.c:89:(.text+0x76f): undefined reference to `strerror'
+/usr/bin/ld: /home/root/libc-test/src/functional/ipc_shm.c:90:(.text+0x7a4): undefined reference to `shmget'
+/usr/bin/ld: /home/root/libc-test/src/functional/ipc_shm.c:90:(.text+0x7bb): undefined reference to `strerror'
+/usr/bin/ld: /home/root/libc-test/src/functional/ipc_shm.c:93:(.text+0x7fb): undefined reference to `shmat'
+/usr/bin/ld: /home/root/libc-test/src/functional/ipc_shm.c:94:(.text+0x814): undefined reference to `strerror'
+/usr/bin/ld: /home/root/libc-test/src/functional/ipc_shm.c:100:(.text+0x86c): undefined reference to `shmdt'
+/usr/bin/ld: /home/root/libc-test/src/functional/ipc_shm.c:100:(.text+0x87f): undefined reference to `strerror'
+/usr/bin/ld: /home/root/libc-test/src/functional/ipc_shm.c:101:(.text+0x8b4): undefined reference to `shmctl'
+/usr/bin/ld: /home/root/libc-test/src/functional/ipc_shm.c:101:(.text+0x8c7): undefined reference to `strerror'
+/home/root/libc-test/src/functional/ipc_shm.c:112:(.text+0x919): undefined reference to `strerror'
+/usr/bin/ld: /home/root/libc-test/src/functional/ipc_shm.c:116:(.text+0x970): undefined reference to `strerror'
+PASS functional/mbc
+BUILDERROR functional/memstream: link failed
+/home/root/libc-test/src/functional/memstream.c:32:(.text+0x2d): undefined reference to `open_memstream'
+/usr/bin/ld: /home/root/libc-test/src/functional/memstream.c:42:(.text+0x206): undefined reference to `open_memstream'
+/usr/bin/ld: /home/root/libc-test/src/functional/memstream.c:57:(.text+0x5a3): undefined reference to `fmemopen'
+/usr/bin/ld: /home/root/libc-test/src/functional/memstream.c:72:(.text+0x90b): undefined reference to `fmemopen'
+BUILDERROR functional/mntent: link failed
+/home/root/libc-test/src/functional/mntent.c:28:(.text+0x22): undefined reference to `fmemopen'
+/usr/bin/ld: /home/root/libc-test/src/functional/mntent.c:29:(.text+0x3b): undefined reference to `strerror'
+/usr/bin/ld: /home/root/libc-test/src/functional/mntent.c:30:(.text+0x68): undefined reference to `getmntent'
+/usr/bin/ld: /home/root/libc-test/src/functional/mntent.c:31:(.text+0x97): undefined reference to `endmntent'
+/home/root/libc-test/src/functional/mntent.c:38:(.text+0x115): undefined reference to `fmemopen'
+/usr/bin/ld: /home/root/libc-test/src/functional/mntent.c:39:(.text+0x12e): undefined reference to `strerror'
+/usr/bin/ld: /home/root/libc-test/src/functional/mntent.c:40:(.text+0x15b): undefined reference to `getmntent'
+/usr/bin/ld: /home/root/libc-test/src/functional/mntent.c:48:(.text+0x2d1): undefined reference to `endmntent'
+/home/root/libc-test/src/functional/mntent.c:57:(.text+0x34f): undefined reference to `fmemopen'
+/usr/bin/ld: /home/root/libc-test/src/functional/mntent.c:58:(.text+0x368): undefined reference to `strerror'
+/usr/bin/ld: /home/root/libc-test/src/functional/mntent.c:60:(.text+0x3a2): undefined reference to `getmntent_r'
+/usr/bin/ld: /home/root/libc-test/src/functional/mntent.c:68:(.text+0x506): undefined reference to `endmntent'
+PASS functional/popen
+BUILDERROR functional/pthread_cancel: link failed
+/home/root/libc-test/src/functional/pthread_cancel.c:40:(.text+0xaf): undefined reference to `_pthread_cleanup_push'
+/usr/bin/ld: /home/root/libc-test/src/functional/pthread_cancel.c:41:(.text+0xb9): undefined reference to `sleep'
+/usr/bin/ld: /home/root/libc-test/src/functional/pthread_cancel.c:42:(.text+0xca): undefined reference to `_pthread_cleanup_pop'
+/home/root/libc-test/src/functional/pthread_cancel.c:49:(.text+0x108): undefined reference to `_pthread_cleanup_push'
+/usr/bin/ld: /home/root/libc-test/src/functional/pthread_cancel.c:50:(.text+0x126): undefined reference to `_pthread_cleanup_push'
+/usr/bin/ld: /home/root/libc-test/src/functional/pthread_cancel.c:51:(.text+0x144): undefined reference to `_pthread_cleanup_push'
+/usr/bin/ld: /home/root/libc-test/src/functional/pthread_cancel.c:52:(.text+0x162): undefined reference to `_pthread_cleanup_push'
+/usr/bin/ld: /home/root/libc-test/src/functional/pthread_cancel.c:53:(.text+0x16c): undefined reference to `sleep'
+/usr/bin/ld: /home/root/libc-test/src/functional/pthread_cancel.c:54:(.text+0x17d): undefined reference to `_pthread_cleanup_pop'
+/usr/bin/ld: /home/root/libc-test/src/functional/pthread_cancel.c:55:(.text+0x18e): undefined reference to `_pthread_cleanup_pop'
+/usr/bin/ld: /home/root/libc-test/src/functional/pthread_cancel.c:56:(.text+0x19f): undefined reference to `_pthread_cleanup_pop'
+/usr/bin/ld: /home/root/libc-test/src/functional/pthread_cancel.c:57:(.text+0x1b0): undefined reference to `_pthread_cleanup_pop'
+/home/root/libc-test/src/functional/pthread_cancel.c:69:(.text+0x1e8): undefined reference to `strerror'
+/usr/bin/ld: /home/root/libc-test/src/functional/pthread_cancel.c:72:(.text+0x23b): undefined reference to `strerror'
+/usr/bin/ld: /home/root/libc-test/src/functional/pthread_cancel.c:74:(.text+0x28c): undefined reference to `strerror'
+/usr/bin/ld: /home/root/libc-test/src/functional/pthread_cancel.c:75:(.text+0x2d3): undefined reference to `strerror'
+/usr/bin/ld: /home/root/libc-test/src/functional/pthread_cancel.c:80:(.text+0x355): undefined reference to `strerror'
+/usr/bin/ld: /home/root/librc/libc-test-harness/build/functional/pthread_cancel.o:/home/root/libc-test/src/functional/pthread_cancel.c:81: more undefined references to `strerror' follow
+BUILDERROR functional/pthread_cancel-points: link failed
+/home/root/libc-test/src/functional/pthread_cancel-points.c:25:(.text+0x3d): undefined reference to `strerror'
+/home/root/libc-test/src/functional/pthread_cancel-points.c:30:(.text+0x94): undefined reference to `strerror'
+/home/root/libc-test/src/functional/pthread_cancel-points.c:35:(.text+0xeb): undefined reference to `strerror'
+/home/root/libc-test/src/functional/pthread_cancel-points.c:43:(.text+0x166): undefined reference to `strerror'
+/home/root/libc-test/src/functional/pthread_cancel-points.c:57:(.text+0x204): undefined reference to `strerror'
+/usr/bin/ld: /home/root/librc/libc-test-harness/build/functional/pthread_cancel-points.o:/home/root/libc-test/src/functional/pthread_cancel-points.c:64: more undefined references to `strerror' follow
+/home/root/libc-test/src/functional/pthread_cancel-points.c:84:(.text+0x3a9): undefined reference to `shm_open'
+/usr/bin/ld: /home/root/libc-test/src/functional/pthread_cancel-points.c:84:(.text+0x3cf): undefined reference to `strerror'
+/home/root/libc-test/src/functional/pthread_cancel-points.c:91:(.text+0x43a): undefined reference to `strerror'
+/usr/bin/ld: /home/root/libc-test/src/functional/pthread_cancel-points.c:92:(.text+0x463): undefined reference to `shm_unlink'
+/usr/bin/ld: /home/root/libc-test/src/functional/pthread_cancel-points.c:92:(.text+0x47d): undefined reference to `strerror'
+/home/root/libc-test/src/functional/pthread_cancel-points.c:127:(.text+0x552): undefined reference to `strerror'
+/usr/bin/ld: /home/root/libc-test/src/functional/pthread_cancel-points.c:136:(.text+0x5df): undefined reference to `strerror'
+/usr/bin/ld: /home/root/libc-test/src/functional/pthread_cancel-points.c:137:(.text+0x61f): undefined reference to `strerror'
+/usr/bin/ld: /home/root/libc-test/src/functional/pthread_cancel-points.c:138:(.text+0x662): undefined reference to `strerror'
+/usr/bin/ld: /home/root/librc/libc-test-harness/build/functional/pthread_cancel-points.o:/home/root/libc-test/src/functional/pthread_cancel-points.c:139: more undefined references to `strerror' follow
+BUILDERROR functional/pthread_cond: link failed
+/home/root/libc-test/src/functional/pthread_cond.c:42:(.text+0xf0): undefined reference to `strerror'
+/usr/bin/ld: /home/root/libc-test/src/functional/pthread_cond.c:43:(.text+0x138): undefined reference to `strerror'
+/usr/bin/ld: /home/root/libc-test/src/functional/pthread_cond.c:44:(.text+0x178): undefined reference to `strerror'
+/usr/bin/ld: /home/root/libc-test/src/functional/pthread_cond.c:45:(.text+0x1e7): undefined reference to `strerror'
+/usr/bin/ld: /home/root/libc-test/src/functional/pthread_cond.c:46:(.text+0x231): undefined reference to `strerror'
+/usr/bin/ld: /home/root/librc/libc-test-harness/build/functional/pthread_cond.o:/home/root/libc-test/src/functional/pthread_cond.c:47: more undefined references to `strerror' follow
+/home/root/libc-test/src/functional/pthread_cond.c:61:(.text+0x61f): undefined reference to `nanosleep'
+/usr/bin/ld: /home/root/libc-test/src/functional/pthread_cond.c:63:(.text+0x648): undefined reference to `strerror'
+/usr/bin/ld: /home/root/libc-test/src/functional/pthread_cond.c:64:(.text+0x68b): undefined reference to `strerror'
+/usr/bin/ld: /home/root/libc-test/src/functional/pthread_cond.c:65:(.text+0x6cb): undefined reference to `strerror'
+/usr/bin/ld: /home/root/libc-test/src/functional/pthread_cond.c:66:(.text+0x70b): undefined reference to `strerror'
+/usr/bin/ld: /home/root/libc-test/src/functional/pthread_cond.c:67:(.text+0x74e): undefined reference to `strerror'
+/usr/bin/ld: /home/root/librc/libc-test-harness/build/functional/pthread_cond.o:/home/root/libc-test/src/functional/pthread_cond.c:68: more undefined references to `strerror' follow
+/home/root/libc-test/src/functional/pthread_cond.c:87:(.text+0xc87): undefined reference to `nanosleep'
+/usr/bin/ld: /home/root/libc-test/src/functional/pthread_cond.c:88:(.text+0xca6): undefined reference to `strerror'
+/usr/bin/ld: /home/root/libc-test/src/functional/pthread_cond.c:90:(.text+0xcf0): undefined reference to `strerror'
+/usr/bin/ld: /home/root/libc-test/src/functional/pthread_cond.c:91:(.text+0xd33): undefined reference to `strerror'
+/usr/bin/ld: /home/root/libc-test/src/functional/pthread_cond.c:92:(.text+0xd78): undefined reference to `strerror'
+/usr/bin/ld: /home/root/libc-test/src/functional/pthread_cond.c:93:(.text+0xdbd): undefined reference to `strerror'
+/usr/bin/ld: /home/root/librc/libc-test-harness/build/functional/pthread_cond.o:/home/root/libc-test/src/functional/pthread_cond.c:94: more undefined references to `strerror' follow
+BUILDERROR functional/pthread_mutex: link failed
+/home/root/libc-test/src/functional/pthread_mutex.c:17:(.text+0x33): undefined reference to `strerror'
+/usr/bin/ld: /home/root/libc-test/src/functional/pthread_mutex.c:18:(.text+0x6f): undefined reference to `strerror'
+/usr/bin/ld: /home/root/libc-test/src/functional/pthread_mutex.c:20:(.text+0xc7): undefined reference to `strerror'
+/usr/bin/ld: /home/root/libc-test/src/functional/pthread_mutex.c:22:(.text+0x100): undefined reference to `strerror'
+/usr/bin/ld: /home/root/libc-test/src/functional/pthread_mutex.c:24:(.text+0x14a): undefined reference to `strerror'
+/usr/bin/ld: /home/root/librc/libc-test-harness/build/functional/pthread_mutex.o:/home/root/libc-test/src/functional/pthread_mutex.c:40: more undefined references to `strerror' follow
+BUILDERROR functional/pthread_mutex_pi: link failed
+/home/root/libc-test/src/functional/pthread_mutex_pi.c:17:(.text+0x33): undefined reference to `strerror'
+/usr/bin/ld: /home/root/libc-test/src/functional/pthread_mutex_pi.c:18:(.text+0x6f): undefined reference to `strerror'
+/usr/bin/ld: /home/root/libc-test/src/functional/pthread_mutex_pi.c:20:(.text+0xc7): undefined reference to `strerror'
+/usr/bin/ld: /home/root/libc-test/src/functional/pthread_mutex_pi.c:22:(.text+0x100): undefined reference to `strerror'
+/usr/bin/ld: /home/root/libc-test/src/functional/pthread_mutex_pi.c:24:(.text+0x14a): undefined reference to `strerror'
+/usr/bin/ld: /home/root/librc/libc-test-harness/build/functional/pthread_mutex_pi.o:/home/root/libc-test/src/functional/pthread_mutex_pi.c:40: more undefined references to `strerror' follow
+/home/root/libc-test/src/functional/pthread_mutex_pi.c:42:(.text+0x226): undefined reference to `pthread_mutexattr_setprotocol'
+/usr/bin/ld: /home/root/libc-test/src/functional/pthread_mutex_pi.c:42:(.text+0x239): undefined reference to `strerror'
+/usr/bin/ld: /home/root/libc-test/src/functional/pthread_mutex_pi.c:43:(.text+0x279): undefined reference to `strerror'
+/usr/bin/ld: /home/root/libc-test/src/functional/pthread_mutex_pi.c:44:(.text+0x2af): undefined reference to `strerror'
+/usr/bin/ld: /home/root/libc-test/src/functional/pthread_mutex_pi.c:45:(.text+0x2f1): undefined reference to `strerror'
+/usr/bin/ld: /home/root/libc-test/src/functional/pthread_mutex_pi.c:46:(.text+0x33d): undefined reference to `strerror'
+/usr/bin/ld: /home/root/librc/libc-test-harness/build/functional/pthread_mutex_pi.o:/home/root/libc-test/src/functional/pthread_mutex_pi.c:47: more undefined references to `strerror' follow
+/home/root/libc-test/src/functional/pthread_mutex_pi.c:87:(.text+0x5e6): undefined reference to `pthread_mutexattr_setprotocol'
+/usr/bin/ld: /home/root/libc-test/src/functional/pthread_mutex_pi.c:87:(.text+0x5f9): undefined reference to `strerror'
+/usr/bin/ld: /home/root/libc-test/src/functional/pthread_mutex_pi.c:88:(.text+0x636): undefined reference to `strerror'
+/usr/bin/ld: /home/root/libc-test/src/functional/pthread_mutex_pi.c:89:(.text+0x66c): undefined reference to `strerror'
+/usr/bin/ld: /home/root/libc-test/src/functional/pthread_mutex_pi.c:90:(.text+0x6b5): undefined reference to `strerror'
+/usr/bin/ld: /home/root/libc-test/src/functional/pthread_mutex_pi.c:91:(.text+0x6f2): undefined reference to `strerror'
+/usr/bin/ld: /home/root/librc/libc-test-harness/build/functional/pthread_mutex_pi.o:/home/root/libc-test/src/functional/pthread_mutex_pi.c:92: more undefined references to `strerror' follow
+/home/root/libc-test/src/functional/pthread_mutex_pi.c:108:(.text+0x7e1): undefined reference to `pthread_mutexattr_setprotocol'
+/usr/bin/ld: /home/root/libc-test/src/functional/pthread_mutex_pi.c:108:(.text+0x7f4): undefined reference to `strerror'
+/usr/bin/ld: /home/root/libc-test/src/functional/pthread_mutex_pi.c:109:(.text+0x831): undefined reference to `strerror'
+/usr/bin/ld: /home/root/libc-test/src/functional/pthread_mutex_pi.c:110:(.text+0x867): undefined reference to `strerror'
+/usr/bin/ld: /home/root/libc-test/src/functional/pthread_mutex_pi.c:111:(.text+0x89d): undefined reference to `strerror'
+/usr/bin/ld: /home/root/libc-test/src/functional/pthread_mutex_pi.c:112:(.text+0x8e6): undefined reference to `strerror'
+/usr/bin/ld: /home/root/librc/libc-test-harness/build/functional/pthread_mutex_pi.o:/home/root/libc-test/src/functional/pthread_mutex_pi.c:113: more undefined references to `strerror' follow
+BUILDERROR functional/pthread_robust: link failed
+/home/root/libc-test/src/functional/pthread_robust.c:22:(.text+0x7a): undefined reference to `nanosleep'
+/home/root/libc-test/src/functional/pthread_robust.c:35:(.text+0xc2): undefined reference to `strerror'
+/usr/bin/ld: /home/root/libc-test/src/functional/pthread_robust.c:38:(.text+0x115): undefined reference to `strerror'
+/usr/bin/ld: /home/root/libc-test/src/functional/pthread_robust.c:39:(.text+0x15a): undefined reference to `pthread_mutexattr_setrobust'
+/usr/bin/ld: /home/root/libc-test/src/functional/pthread_robust.c:39:(.text+0x16d): undefined reference to `strerror'
+/usr/bin/ld: /home/root/libc-test/src/functional/pthread_robust.c:41:(.text+0x1ce): undefined reference to `strerror'
+/usr/bin/ld: /home/root/libc-test/src/functional/pthread_robust.c:43:(.text+0x21c): undefined reference to `pthread_mutexattr_setprotocol'
+/usr/bin/ld: /home/root/libc-test/src/functional/pthread_robust.c:43:(.text+0x22f): undefined reference to `strerror'
+/usr/bin/ld: /home/root/libc-test/src/functional/pthread_robust.c:44:(.text+0x289): undefined reference to `strerror'
+/usr/bin/ld: /home/root/libc-test/src/functional/pthread_robust.c:45:(.text+0x2dc): undefined reference to `strerror'
+/usr/bin/ld: /home/root/libc-test/src/functional/pthread_robust.c:46:(.text+0x32f): undefined reference to `strerror'
+/usr/bin/ld: /home/root/libc-test/src/functional/pthread_robust.c:47:(.text+0x395): undefined reference to `strerror'
+/usr/bin/ld: /home/root/librc/libc-test-harness/build/functional/pthread_robust.o:/home/root/libc-test/src/functional/pthread_robust.c:48: more undefined references to `strerror' follow
+/home/root/libc-test/src/functional/pthread_robust.c:58:(.text+0x748): undefined reference to `pthread_mutex_consistent'
+/usr/bin/ld: /home/root/libc-test/src/functional/pthread_robust.c:58:(.text+0x75b): undefined reference to `strerror'
+/usr/bin/ld: /home/root/libc-test/src/functional/pthread_robust.c:59:(.text+0x7ae): undefined reference to `strerror'
+/usr/bin/ld: /home/root/libc-test/src/functional/pthread_robust.c:60:(.text+0x801): undefined reference to `strerror'
+/usr/bin/ld: /home/root/libc-test/src/functional/pthread_robust.c:61:(.text+0x854): undefined reference to `strerror'
+/usr/bin/ld: /home/root/libc-test/src/functional/pthread_robust.c:63:(.text+0x8ae): undefined reference to `strerror'
+/usr/bin/ld: /home/root/librc/libc-test-harness/build/functional/pthread_robust.o:/home/root/libc-test/src/functional/pthread_robust.c:64: more undefined references to `strerror' follow
+/home/root/libc-test/src/functional/pthread_robust.c:72:(.text+0xad3): undefined reference to `pthread_mutex_consistent'
+/usr/bin/ld: /home/root/libc-test/src/functional/pthread_robust.c:72:(.text+0xae6): undefined reference to `strerror'
+/usr/bin/ld: /home/root/libc-test/src/functional/pthread_robust.c:73:(.text+0xb39): undefined reference to `strerror'
+/usr/bin/ld: /home/root/libc-test/src/functional/pthread_robust.c:74:(.text+0xb8c): undefined reference to `strerror'
+BUILDERROR functional/pthread_tsd: link failed
+/home/root/libc-test/src/functional/pthread_tsd.c:32:(.text+0x9a): undefined reference to `strerror'
+/usr/bin/ld: /home/root/libc-test/src/functional/pthread_tsd.c:33:(.text+0xe7): undefined reference to `strerror'
+/usr/bin/ld: /home/root/libc-test/src/functional/pthread_tsd.c:35:(.text+0x13c): undefined reference to `strerror'
+/usr/bin/ld: /home/root/libc-test/src/functional/pthread_tsd.c:36:(.text+0x188): undefined reference to `strerror'
+/usr/bin/ld: /home/root/libc-test/src/functional/pthread_tsd.c:37:(.text+0x1db): undefined reference to `strerror'
+/usr/bin/ld: /home/root/librc/libc-test-harness/build/functional/pthread_tsd.o:/home/root/libc-test/src/functional/pthread_tsd.c:38: more undefined references to `strerror' follow
+PASS functional/qsort
+BUILDERROR functional/random: link failed
+/home/root/libc-test/src/functional/random.c:46:(.text+0x174): undefined reference to `srandom'
+/usr/bin/ld: /home/root/libc-test/src/functional/random.c:48:(.text+0x197): undefined reference to `random'
+/home/root/libc-test/src/functional/random.c:67:(.text+0x246): undefined reference to `random'
+/usr/bin/ld: /home/root/libc-test/src/functional/random.c:68:(.text+0x277): undefined reference to `initstate'
+/usr/bin/ld: /home/root/libc-test/src/functional/random.c:70:(.text+0x296): undefined reference to `random'
+/usr/bin/ld: /home/root/libc-test/src/functional/random.c:73:(.text+0x2e2): undefined reference to `random'
+/usr/bin/ld: /home/root/libc-test/src/functional/random.c:74:(.text+0x2f2): undefined reference to `setstate'
+/usr/bin/ld: /home/root/libc-test/src/functional/random.c:75:(.text+0x2fb): undefined reference to `random'
+/usr/bin/ld: /home/root/libc-test/src/functional/random.c:77:(.text+0x336): undefined reference to `setstate'
+/usr/bin/ld: /home/root/libc-test/src/functional/random.c:79:(.text+0x34e): undefined reference to `srandom'
+/usr/bin/ld: /home/root/libc-test/src/functional/random.c:81:(.text+0x369): undefined reference to `random'
+BUILDERROR functional/search_hsearch: link failed
+/home/root/libc-test/src/functional/search_hsearch.c:25:(.text+0x1b): undefined reference to `hcreate'
+/usr/bin/ld: /home/root/libc-test/src/functional/search_hsearch.c:26:(.text+0x39): undefined reference to `strerror'
+/usr/bin/ld: /home/root/libc-test/src/functional/search_hsearch.c:27:(.text+0x5a): undefined reference to `hcreate'
+/usr/bin/ld: /home/root/libc-test/src/functional/search_hsearch.c:29:(.text+0x95): undefined reference to `hsearch'
+/usr/bin/ld: /home/root/libc-test/src/functional/search_hsearch.c:30:(.text+0x103): undefined reference to `hsearch'
+/usr/bin/ld: /home/root/libc-test/src/functional/search_hsearch.c:31:(.text+0x17f): undefined reference to `hsearch'
+/usr/bin/ld: /home/root/libc-test/src/functional/search_hsearch.c:32:(.text+0x1fb): undefined reference to `hsearch'
+/usr/bin/ld: /home/root/libc-test/src/functional/search_hsearch.c:33:(.text+0x277): undefined reference to `hsearch'
+/usr/bin/ld: /home/root/librc/libc-test-harness/build/functional/search_hsearch.o:/home/root/libc-test/src/functional/search_hsearch.c:34: more undefined references to `hsearch' follow
+/home/root/libc-test/src/functional/search_hsearch.c:52:(.text+0x837): undefined reference to `hdestroy'
+BUILDERROR functional/search_insque: link failed
+/home/root/libc-test/src/functional/search_insque.c:27:(.text+0x4c): undefined reference to `insque'
+/usr/bin/ld: /home/root/libc-test/src/functional/search_insque.c:29:(.text+0x71): undefined reference to `insque'
+/usr/bin/ld: /home/root/libc-test/src/functional/search_insque.c:38:(.text+0xe3): undefined reference to `remque'
+BUILDERROR functional/search_lsearch: link failed
+/home/root/libc-test/src/functional/search_lsearch.c:24:(.text+0x36): undefined reference to `lsearch'
+/usr/bin/ld: /home/root/libc-test/src/functional/search_lsearch.c:25:(.text+0xa4): undefined reference to `lsearch'
+/usr/bin/ld: /home/root/libc-test/src/functional/search_lsearch.c:26:(.text+0x112): undefined reference to `lsearch'
+/usr/bin/ld: /home/root/libc-test/src/functional/search_lsearch.c:27:(.text+0x180): undefined reference to `lsearch'
+/usr/bin/ld: /home/root/libc-test/src/functional/search_lsearch.c:28:(.text+0x1ee): undefined reference to `lsearch'
+/usr/bin/ld: /home/root/librc/libc-test-harness/build/functional/search_lsearch.o:/home/root/libc-test/src/functional/search_lsearch.c:29: more undefined references to `lsearch' follow
+/home/root/libc-test/src/functional/search_lsearch.c:34:(.text+0x482): undefined reference to `lfind'
+/usr/bin/ld: /home/root/libc-test/src/functional/search_lsearch.c:36:(.text+0x4cd): undefined reference to `lfind'
+/usr/bin/ld: /home/root/libc-test/src/functional/search_lsearch.c:39:(.text+0x523): undefined reference to `lsearch'
+/usr/bin/ld: /home/root/libc-test/src/functional/search_lsearch.c:43:(.text+0x5cb): undefined reference to `lsearch'
+BUILDERROR functional/search_tsearch: link failed
+/home/root/libc-test/src/functional/search_tsearch.c:61:(.text+0x215): undefined reference to `tfind'
+/home/root/libc-test/src/functional/search_tsearch.c:73:(.text+0x2a5): undefined reference to `tsearch'
+/home/root/libc-test/src/functional/search_tsearch.c:85:(.text+0x352): undefined reference to `tdelete'
+/home/root/libc-test/src/functional/search_tsearch.c:121:(.text+0x595): undefined reference to `twalk'
+/usr/bin/ld: /home/root/libc-test/src/functional/search_tsearch.c:125:(.text+0x5e3): undefined reference to `twalk'
+/usr/bin/ld: /home/root/libc-test/src/functional/search_tsearch.c:138:(.text+0x6bc): undefined reference to `tdelete'
+BUILDERROR functional/sem_init: link failed
+/home/root/libc-test/src/functional/sem_init.c:16:(.text+0x33): undefined reference to `strerror'
+/usr/bin/ld: /home/root/libc-test/src/functional/sem_init.c:18:(.text+0x74): undefined reference to `strerror'
+/usr/bin/ld: /home/root/libc-test/src/functional/sem_init.c:19:(.text+0xb4): undefined reference to `strerror'
+/home/root/libc-test/src/functional/sem_init.c:30:(.text+0x102): undefined reference to `strerror'
+/usr/bin/ld: /home/root/libc-test/src/functional/sem_init.c:31:(.text+0x145): undefined reference to `strerror'
+/usr/bin/ld: /home/root/librc/libc-test-harness/build/functional/sem_init.o:/home/root/libc-test/src/functional/sem_init.c:32: more undefined references to `strerror' follow
+BUILDERROR functional/sem_open: link failed
+/home/root/libc-test/src/functional/sem_open.c:25:(.text+0x74): undefined reference to `sem_open'
+/usr/bin/ld: /home/root/libc-test/src/functional/sem_open.c:25:(.text+0x8d): undefined reference to `strerror'
+/usr/bin/ld: /home/root/libc-test/src/functional/sem_open.c:28:(.text+0xd2): undefined reference to `sem_open'
+/usr/bin/ld: /home/root/libc-test/src/functional/sem_open.c:30:(.text+0x10c): undefined reference to `strerror'
+/usr/bin/ld: /home/root/libc-test/src/functional/sem_open.c:36:(.text+0x198): undefined reference to `sem_open'
+/usr/bin/ld: /home/root/libc-test/src/functional/sem_open.c:40:(.text+0x1ee): undefined reference to `strerror'
+/usr/bin/ld: /home/root/libc-test/src/functional/sem_open.c:41:(.text+0x22d): undefined reference to `strerror'
+/usr/bin/ld: /home/root/libc-test/src/functional/sem_open.c:45:(.text+0x2a7): undefined reference to `strerror'
+/usr/bin/ld: /home/root/libc-test/src/functional/sem_open.c:48:(.text+0x2e3): undefined reference to `strerror'
+/usr/bin/ld: /home/root/libc-test/src/functional/sem_open.c:49:(.text+0x322): undefined reference to `strerror'
+/usr/bin/ld: /home/root/libc-test/src/functional/sem_open.c:52:(.text+0x36c): undefined reference to `sem_close'
+/usr/bin/ld: /home/root/libc-test/src/functional/sem_open.c:52:(.text+0x37e): undefined reference to `strerror'
+/usr/bin/ld: /home/root/libc-test/src/functional/sem_open.c:53:(.text+0x3a1): undefined reference to `sem_close'
+/usr/bin/ld: /home/root/libc-test/src/functional/sem_open.c:53:(.text+0x3b3): undefined reference to `strerror'
+/usr/bin/ld: /home/root/libc-test/src/functional/sem_open.c:54:(.text+0x3d9): undefined reference to `sem_unlink'
+/usr/bin/ld: /home/root/libc-test/src/functional/sem_open.c:54:(.text+0x3eb): undefined reference to `strerror'
+BUILDERROR functional/setjmp: link failed
+/home/root/libc-test/src/functional/setjmp.c:39:(.text+0x1ff): undefined reference to `sigsetjmp'
+/usr/bin/ld: /home/root/libc-test/src/functional/setjmp.c:43:(.text+0x253): undefined reference to `siglongjmp'
+/usr/bin/ld: /home/root/libc-test/src/functional/setjmp.c:54:(.text+0x4ac): undefined reference to `sigsetjmp'
+/usr/bin/ld: /home/root/libc-test/src/functional/setjmp.c:58:(.text+0x500): undefined reference to `siglongjmp'
+PASS functional/snprintf
+BUILDERROR functional/socket: link failed
+/home/root/libc-test/src/functional/socket.c:20:(.text+0x53): undefined reference to `strerror'
+/usr/bin/ld: /home/root/libc-test/src/functional/socket.c:21:(.text+0x9d): undefined reference to `strerror'
+/usr/bin/ld: /home/root/libc-test/src/functional/socket.c:22:(.text+0xf3): undefined reference to `strerror'
+/usr/bin/ld: /home/root/libc-test/src/functional/socket.c:24:(.text+0x16c): undefined reference to `strerror'
+/usr/bin/ld: /home/root/libc-test/src/functional/socket.c:27:(.text+0x1b9): undefined reference to `strerror'
+/usr/bin/ld: /home/root/librc/libc-test-harness/build/functional/socket.o:/home/root/libc-test/src/functional/socket.c:29: more undefined references to `strerror' follow
+/home/root/libc-test/src/functional/socket.c:39:(.text+0x363): undefined reference to `fcntl'
+/usr/bin/ld: /home/root/libc-test/src/functional/socket.c:40:(.text+0x3b1): undefined reference to `strerror'
+/usr/bin/ld: /home/root/libc-test/src/functional/socket.c:41:(.text+0x407): undefined reference to `strerror'
+/usr/bin/ld: /home/root/libc-test/src/functional/socket.c:44:(.text+0x457): undefined reference to `strerror'
+/usr/bin/ld: /home/root/libc-test/src/functional/socket.c:46:(.text+0x4a4): undefined reference to `strerror'
+/usr/bin/ld: /home/root/libc-test/src/functional/socket.c:47:(.text+0x4cf): undefined reference to `fcntl'
+/usr/bin/ld: /home/root/libc-test/src/functional/socket.c:49:(.text+0x52b): undefined reference to `strerror'
+/usr/bin/ld: /home/root/libc-test/src/functional/socket.c:51:(.text+0x586): undefined reference to `strerror'
+BUILDERROR functional/spawn: link failed
+/home/root/libc-test/src/functional/spawn.c:30:(.text+0x1f): undefined reference to `pipe'
+/usr/bin/ld: /home/root/libc-test/src/functional/spawn.c:30:(.text+0x31): undefined reference to `strerror'
+/usr/bin/ld: /home/root/libc-test/src/functional/spawn.c:31:(.text+0x6c): undefined reference to `posix_spawn_file_actions_init'
+/usr/bin/ld: /home/root/libc-test/src/functional/spawn.c:32:(.text+0xb0): undefined reference to `posix_spawn_file_actions_addclose'
+/usr/bin/ld: /home/root/libc-test/src/functional/spawn.c:33:(.text+0xf9): undefined reference to `posix_spawn_file_actions_adddup2'
+/usr/bin/ld: /home/root/libc-test/src/functional/spawn.c:34:(.text+0x13d): undefined reference to `posix_spawn_file_actions_addclose'
+/usr/bin/ld: /home/root/libc-test/src/functional/spawn.c:35:(.text+0x1c3): undefined reference to `posix_spawnp'
+/usr/bin/ld: /home/root/libc-test/src/functional/spawn.c:40:(.text+0x2aa): undefined reference to `posix_spawn_file_actions_destroy'
+PASS functional/sscanf
+BUILDERROR functional/sscanf_long: link failed
+/home/root/libc-test/src/common/setrlim.c:10:(.text+0x1c): undefined reference to `getrlimit'
+/usr/bin/ld: /home/root/libc-test/src/common/setrlim.c:11:(.text+0x2e): undefined reference to `strerror'
+/usr/bin/ld: /home/root/libc-test/src/common/setrlim.c:20:(.text+0xad): undefined reference to `setrlimit'
+/usr/bin/ld: /home/root/libc-test/src/common/setrlim.c:21:(.text+0xbf): undefined reference to `strerror'
+BUILDERROR functional/stat: link failed
+/home/root/libc-test/src/functional/stat.c:18:(.text+0x21): undefined reference to `stat'
+/usr/bin/ld: /home/root/libc-test/src/functional/stat.c:18:(.text+0x33): undefined reference to `strerror'
+/usr/bin/ld: /home/root/libc-test/src/functional/stat.c:21:(.text+0xb8): undefined reference to `time'
+/usr/bin/ld: /home/root/libc-test/src/functional/stat.c:27:(.text+0x150): undefined reference to `stat'
+/usr/bin/ld: /home/root/libc-test/src/functional/stat.c:27:(.text+0x162): undefined reference to `strerror'
+/usr/bin/ld: /home/root/libc-test/src/functional/stat.c:34:(.text+0x204): undefined reference to `fstat'
+/usr/bin/ld: /home/root/libc-test/src/functional/stat.c:34:(.text+0x216): undefined reference to `strerror'
+BUILDERROR functional/strftime: link failed
+/home/root/libc-test/src/functional/strftime.c:11:(.text+0x32): undefined reference to `strftime'
+BUILDERROR functional/string: link failed
+/home/root/libc-test/src/functional/string.c:83:(.text+0xbff): undefined reference to `strlcpy'
+/usr/bin/ld: /home/root/libc-test/src/functional/string.c:88:(.text+0xcd1): undefined reference to `strlcpy'
+/usr/bin/ld: /home/root/libc-test/src/functional/string.c:93:(.text+0xda3): undefined reference to `strlcpy'
+/usr/bin/ld: /home/root/libc-test/src/functional/string.c:96:(.text+0xe25): undefined reference to `strlcpy'
+/usr/bin/ld: /home/root/libc-test/src/functional/string.c:99:(.text+0xe8c): undefined reference to `strlcat'
+/usr/bin/ld: /home/root/libc-test/src/functional/string.c:103:(.text+0xf39): undefined reference to `strlcat'
+/usr/bin/ld: /home/root/libc-test/src/functional/string.c:108:(.text+0x101e): undefined reference to `strlcat'
+/usr/bin/ld: /home/root/libc-test/src/functional/string.c:112:(.text+0x10cb): undefined reference to `strlcat'
+BUILDERROR functional/string_memcpy: link failed
+/home/root/libc-test/src/functional/string_memcpy.c:24:(.text+0x7b): undefined reference to `abort'
+BUILDERROR functional/string_memmem: link failed
+/home/root/libc-test/src/functional/string_memmem.c:26:(.text+0x4f): undefined reference to `memmem'
+/usr/bin/ld: /home/root/libc-test/src/functional/string_memmem.c:27:(.text+0xe8): undefined reference to `memmem'
+/usr/bin/ld: /home/root/libc-test/src/functional/string_memmem.c:28:(.text+0x181): undefined reference to `memmem'
+/usr/bin/ld: /home/root/libc-test/src/functional/string_memmem.c:29:(.text+0x21a): undefined reference to `memmem'
+/usr/bin/ld: /home/root/libc-test/src/functional/string_memmem.c:30:(.text+0x2b3): undefined reference to `memmem'
+/usr/bin/ld: /home/root/librc/libc-test-harness/build/functional/string_memmem.o:/home/root/libc-test/src/functional/string_memmem.c:31: more undefined references to `memmem' follow
+BUILDERROR functional/string_memset: link failed
+/home/root/libc-test/src/functional/string_memset.c:25:(.text+0x8f): undefined reference to `abort'
+PASS functional/string_strchr
+PASS functional/string_strcspn
+PASS functional/string_strstr
+BUILDERROR functional/strptime: link failed
+/home/root/libc-test/src/functional/strptime.c:21:(.text+0x4e): undefined reference to `strptime'
+/usr/bin/ld: /home/root/libc-test/src/functional/strptime.c:33:(.text+0x118): undefined reference to `strftime'
+/usr/bin/ld: /home/root/libc-test/src/functional/strptime.c:34:(.text+0x137): undefined reference to `strftime'
+/home/root/libc-test/src/functional/strptime.c:45:(.text+0x1c5): undefined reference to `strptime'
+BUILDERROR functional/strtod: link failed
+/home/root/libc-test/src/functional/strtod.c:72:(.text+0x36): undefined reference to `strtod'
+BUILDERROR functional/strtod_long: link failed
+/home/root/libc-test/src/functional/strtod_long.c:15:(.text+0x4c): undefined reference to `strtod'
+BUILDERROR functional/strtod_simple: link failed
+/home/root/libc-test/src/functional/strtod_simple.c:25:(.text+0x71): undefined reference to `strtod'
+/usr/bin/ld: /home/root/libc-test/src/functional/strtod_simple.c:28:(.text+0xf6): undefined reference to `strtod'
+/usr/bin/ld: /home/root/libc-test/src/functional/strtod_simple.c:29:(.text+0x179): undefined reference to `strtod'
+BUILDERROR functional/strtof: link failed
+/home/root/libc-test/src/functional/strtof.c:37:(.text+0x36): undefined reference to `strtof'
+PASS functional/strtol
+BUILDERROR functional/strtold: link failed
+/home/root/libc-test/src/functional/strtold.c:99:(.text+0x36): undefined reference to `strtold'
+BUILDERROR functional/swprintf: link failed
+/home/root/libc-test/src/functional/swprintf.c:115:(.text+0x12d): undefined reference to `swprintf'
+/usr/bin/ld: /home/root/libc-test/src/functional/swprintf.c:117:(.text+0x189): undefined reference to `swprintf'
+/usr/bin/ld: /home/root/libc-test/src/functional/swprintf.c:119:(.text+0x219): undefined reference to `swprintf'
+/usr/bin/ld: /home/root/libc-test/src/functional/swprintf.c:121:(.text+0x2ae): undefined reference to `swprintf'
+/usr/bin/ld: /home/root/libc-test/src/functional/swprintf.c:123:(.text+0x343): undefined reference to `swprintf'
+/usr/bin/ld: /home/root/libc-test/src/functional/swprintf.c:126:(.text+0x3c7): undefined reference to `wcscpy'
+/usr/bin/ld: /home/root/libc-test/src/functional/swprintf.c:127:(.text+0x3ec): undefined reference to `swprintf'
+/usr/bin/ld: /home/root/libc-test/src/functional/swprintf.c:128:(.text+0x43c): undefined reference to `wcscmp'
+/usr/bin/ld: /home/root/libc-test/src/functional/swprintf.c:132:(.text+0x50c): undefined reference to `swprintf'
+/usr/bin/ld: /home/root/libc-test/src/functional/swprintf.c:133:(.text+0x53e): undefined reference to `wcslen'
+/usr/bin/ld: /home/root/libc-test/src/functional/swprintf.c:134:(.text+0x570): undefined reference to `wcslen'
+/usr/bin/ld: /home/root/libc-test/src/functional/swprintf.c:137:(.text+0x608): undefined reference to `wcscmp'
+/usr/bin/ld: /home/root/libc-test/src/functional/swprintf.c:142:(.text+0x6e5): undefined reference to `swprintf'
+/usr/bin/ld: /home/root/libc-test/src/functional/swprintf.c:143:(.text+0x717): undefined reference to `wcslen'
+/usr/bin/ld: /home/root/libc-test/src/functional/swprintf.c:144:(.text+0x749): undefined reference to `wcslen'
+/usr/bin/ld: /home/root/libc-test/src/functional/swprintf.c:147:(.text+0x7e0): undefined reference to `wcscmp'
+BUILDERROR functional/tgmath: link failed
+/home/root/libc-test/src/functional/tgmath.c:8:(.text+0x13): undefined reference to `lrintf'
+/usr/bin/ld: /home/root/libc-test/src/functional/tgmath.c:11:(.text+0x52): undefined reference to `lrint'
+BUILDERROR functional/time: link failed
+/home/root/libc-test/src/functional/time.c:54:(.text+0x142): undefined reference to `gmtime'
+/usr/bin/ld: /home/root/libc-test/src/functional/time.c:56:(.text+0x15f): undefined reference to `strerror'
+/usr/bin/ld: /home/root/libc-test/src/functional/time.c:59:(.text+0x198): undefined reference to `mktime'
+/usr/bin/ld: /home/root/libc-test/src/functional/time.c:61:(.text+0x1b9): undefined reference to `strerror'
+/home/root/libc-test/src/functional/time.c:75:(.text+0x2ec): undefined reference to `mktime'
+/usr/bin/ld: /home/root/libc-test/src/functional/time.c:80:(.text+0x39b): undefined reference to `strerror'
+/usr/bin/ld: /home/root/libc-test/src/functional/time.c:80:(.text+0x3a8): undefined reference to `strerror'
+/usr/bin/ld: /home/root/libc-test/src/functional/time.c:86:(.text+0x4c0): undefined reference to `strerror'
+/usr/bin/ld: /home/root/libc-test/src/functional/time.c:88:(.text+0x53e): undefined reference to `gmtime'
+/home/root/libc-test/src/functional/time.c:99:(.text+0x6ca): undefined reference to `tzset'
+BUILDERROR functional/tls_align: link failed
+/home/root/libc-test/src/functional/tls_align.c:15:(.text+0x2d): undefined reference to `t'
+/usr/bin/ld: /home/root/libc-test/src/functional/tls_align.c:17:(.text+0x6c): undefined reference to `t'
+/usr/bin/ld: /home/root/libc-test/src/functional/tls_align.c:17:(.text+0x8d): undefined reference to `t'
+/usr/bin/ld: /home/root/libc-test/src/functional/tls_align.c:18:(.text+0xbe): undefined reference to `t'
+/usr/bin/ld: /home/root/libc-test/src/functional/tls_align.c:18:(.text+0xdf): undefined reference to `t'
+/usr/bin/ld: /home/root/librc/libc-test-harness/build/functional/tls_align.o:/home/root/libc-test/src/functional/tls_align.c:18: more undefined references to `t' follow
+BUILDERROR functional/tls_align_dlopen: skipped (dlopen)
+BUILDERROR functional/tls_align_dso: link failed
+./crt/crt1.c:18:(.text._start_c+0x1e): undefined reference to `main'
+PASS functional/tls_init
+BUILDERROR functional/tls_init_dlopen: skipped (dlopen)
+BUILDERROR functional/tls_init_dso: link failed
+./crt/crt1.c:18:(.text._start_c+0x1e): undefined reference to `main'
+PASS functional/tls_local_exec
+PASS functional/udiv
+BUILDERROR functional/ungetc: link failed
+/home/root/libc-test/src/functional/ungetc.c:22:(.text+0x3a): undefined reference to `strerror'
+/usr/bin/ld: /home/root/libc-test/src/functional/ungetc.c:26:(.text+0xb7): undefined reference to `strerror'
+/usr/bin/ld: /home/root/libc-test/src/functional/ungetc.c:27:(.text+0x11d): undefined reference to `strerror'
+/usr/bin/ld: /home/root/libc-test/src/functional/ungetc.c:29:(.text+0x179): undefined reference to `strerror'
+/usr/bin/ld: /home/root/libc-test/src/functional/ungetc.c:30:(.text+0x1d5): undefined reference to `strerror'
+/usr/bin/ld: /home/root/librc/libc-test-harness/build/functional/ungetc.o:/home/root/libc-test/src/functional/ungetc.c:31: more undefined references to `strerror' follow
+BUILDERROR functional/utime: link failed
+/home/root/libc-test/src/functional/utime.c:21:(.text+0x52): undefined reference to `utimensat'
+/usr/bin/ld: /home/root/libc-test/src/functional/utime.c:21:(.text+0x70): undefined reference to `strerror'
+/usr/bin/ld: /home/root/libc-test/src/functional/utime.c:23:(.text+0xc3): undefined reference to `futimens'
+/usr/bin/ld: /home/root/libc-test/src/functional/utime.c:23:(.text+0xe1): undefined reference to `strerror'
+/usr/bin/ld: /home/root/libc-test/src/functional/utime.c:29:(.text+0x16c): undefined reference to `futimens'
+/usr/bin/ld: /home/root/libc-test/src/functional/utime.c:30:(.text+0x198): undefined reference to `fstat'
+/usr/bin/ld: /home/root/libc-test/src/functional/utime.c:36:(.text+0x292): undefined reference to `futimens'
+/usr/bin/ld: /home/root/libc-test/src/functional/utime.c:37:(.text+0x2be): undefined reference to `fstat'
+/usr/bin/ld: /home/root/libc-test/src/functional/utime.c:43:(.text+0x370): undefined reference to `time'
+/usr/bin/ld: /home/root/libc-test/src/functional/utime.c:45:(.text+0x3b0): undefined reference to `futimens'
+/usr/bin/ld: /home/root/libc-test/src/functional/utime.c:46:(.text+0x3dc): undefined reference to `fstat'
+/usr/bin/ld: /home/root/libc-test/src/functional/utime.c:51:(.text+0x487): undefined reference to `futimens'
+/usr/bin/ld: /home/root/libc-test/src/functional/utime.c:52:(.text+0x4db): undefined reference to `futimens'
+/usr/bin/ld: /home/root/libc-test/src/functional/utime.c:53:(.text+0x507): undefined reference to `fstat'
+/usr/bin/ld: /home/root/libc-test/src/functional/utime.c:57:(.text+0x5a4): undefined reference to `futimens'
+/usr/bin/ld: /home/root/libc-test/src/functional/utime.c:58:(.text+0x5d0): undefined reference to `fstat'
+/usr/bin/ld: /home/root/libc-test/src/functional/utime.c:63:(.text+0x670): undefined reference to `futimens'
+/usr/bin/ld: /home/root/libc-test/src/functional/utime.c:63:(.text+0x682): undefined reference to `strerror'
+/usr/bin/ld: /home/root/libc-test/src/functional/utime.c:64:(.text+0x6c1): undefined reference to `fstat'
+BUILDERROR functional/vfork: link failed
+/home/root/libc-test/src/functional/vfork.c:15:(.text+0x34): undefined reference to `strerror'
+/home/root/libc-test/src/functional/vfork.c:26:(.text+0x8f): undefined reference to `vfork'
+/usr/bin/ld: /home/root/libc-test/src/functional/vfork.c:31:(.text+0xb6): undefined reference to `strerror'
+/home/root/libc-test/src/functional/vfork.c:42:(.text+0x13d): undefined reference to `vfork'
+/usr/bin/ld: /home/root/libc-test/src/functional/vfork.c:43:(.text+0x17b): undefined reference to `execl'
+/usr/bin/ld: /home/root/libc-test/src/functional/vfork.c:44:(.text+0x189): undefined reference to `strerror'
+/usr/bin/ld: /home/root/libc-test/src/functional/vfork.c:48:(.text+0x1be): undefined reference to `strerror'
+BUILDERROR functional/wcsstr: link failed
+/home/root/libc-test/src/functional/wcsstr.c:22:(.text+0x28): undefined reference to `wcsstr'
+/usr/bin/ld: /home/root/libc-test/src/functional/wcsstr.c:23:(.text+0x8b): undefined reference to `wcsstr'
+/usr/bin/ld: /home/root/libc-test/src/functional/wcsstr.c:24:(.text+0xee): undefined reference to `wcsstr'
+/usr/bin/ld: /home/root/libc-test/src/functional/wcsstr.c:25:(.text+0x151): undefined reference to `wcsstr'
+/usr/bin/ld: /home/root/libc-test/src/functional/wcsstr.c:26:(.text+0x1b4): undefined reference to `wcsstr'
+/usr/bin/ld: /home/root/librc/libc-test-harness/build/functional/wcsstr.o:/home/root/libc-test/src/functional/wcsstr.c:27: more undefined references to `wcsstr' follow
+BUILDERROR functional/wcstol: link failed
+/home/root/libc-test/src/functional/wcstol.c:24:(.text+0x3e): undefined reference to `wcstol'
+/usr/bin/ld: /home/root/libc-test/src/functional/wcstol.c:25:(.text+0xa5): undefined reference to `wcstoul'
+/usr/bin/ld: /home/root/libc-test/src/functional/wcstol.c:50:(.text+0x11d): undefined reference to `wcstol'
+/usr/bin/ld: /home/root/libc-test/src/functional/wcstol.c:53:(.text+0x20a): undefined reference to `wcstol'
+/usr/bin/ld: /home/root/libc-test/src/functional/wcstol.c:56:(.text+0x2f7): undefined reference to `wcstoul'
+/usr/bin/ld: /home/root/libc-test/src/functional/wcstol.c:59:(.text+0x3d5): undefined reference to `wcstoul'
+/usr/bin/ld: /home/root/libc-test/src/functional/wcstol.c:62:(.text+0x4b3): undefined reference to `wcstoul'
+/usr/bin/ld: /home/root/libc-test/src/functional/wcstol.c:65:(.text+0x591): undefined reference to `wcstoul'
+/usr/bin/ld: /home/root/libc-test/src/functional/wcstol.c:68:(.text+0x67e): undefined reference to `wcstoul'
+/usr/bin/ld: /home/root/libc-test/src/functional/wcstol.c:75:(.text+0x75e): undefined reference to `wcstol'
+/usr/bin/ld: /home/root/libc-test/src/functional/wcstol.c:76:(.text+0x7c2): undefined reference to `wcstol'
+/usr/bin/ld: /home/root/libc-test/src/functional/wcstol.c:78:(.text+0x836): undefined reference to `wcstol'
+/usr/bin/ld: /home/root/libc-test/src/functional/wcstol.c:81:(.text+0x8df): undefined reference to `wcstol'
+/usr/bin/ld: /home/root/libc-test/src/functional/wcstol.c:85:(.text+0x993): undefined reference to `wcstol'
