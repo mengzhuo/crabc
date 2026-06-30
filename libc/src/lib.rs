@@ -3166,7 +3166,7 @@ pub type locale_t = *mut c_void;
 static mut CURRENT_LOCALE: locale_t = core::ptr::null_mut();
 
 #[no_mangle]
-pub unsafe extern "C" fn newlocale(mask: c_int, name: *const c_char, base: locale_t) -> locale_t {
+pub unsafe extern "C" fn newlocale(_mask: c_int, name: *const c_char, _base: locale_t) -> locale_t {
     if !name.is_null() && *name != 0 {
         let n = name as *const u8;
         if strcmp(n, b"C\0".as_ptr()) != 0 && strcmp(n, b"POSIX\0".as_ptr()) != 0 {
@@ -4322,7 +4322,7 @@ unsafe extern "C" fn __stdio_close(f: *mut FILE) -> c_int {
 }
 
 unsafe fn fmodeflags(mode: *const c_char) -> c_int {
-    let mut flags: c_int = 0;
+    let mut flags: c_int;
     let m = *mode;
     if !strchr(mode as *const u8, b'+' as c_int).is_null() {
         flags = O_RDWR;
@@ -5248,12 +5248,12 @@ pub unsafe extern "C" fn sscanf(buf: *const c_char, fmt: *const c_char, mut args
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn fscanf(stream: *mut FILE, fmt: *const c_char, mut args: ...) -> c_int {
+pub unsafe extern "C" fn fscanf(stream: *mut FILE, fmt: *const c_char, args: ...) -> c_int {
     vfscanf(stream, fmt, args)
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn scanf(fmt: *const c_char, mut args: ...) -> c_int {
+pub unsafe extern "C" fn scanf(fmt: *const c_char, args: ...) -> c_int {
     vfscanf(stdin, fmt, args)
 }
 
@@ -5344,7 +5344,7 @@ pub unsafe extern "C" fn pclose(f: *mut FILE) -> c_int {
 // tmpfile / tmpnam / remove / rename
 // ============================================================
 
-const L_tmpnam: usize = 20;
+const L_TMPNAM: usize = 20;
 static mut TMPNAM_COUNTER: c_uint = 0;
 
 unsafe fn fill_tmpname(out: *mut c_char, seed: c_uint) {
@@ -5352,13 +5352,13 @@ unsafe fn fill_tmpname(out: *mut c_char, seed: c_uint) {
     let mut k = 0;
     while k < prefix.len() - 1 { *out.add(k) = prefix[k] as c_char; k += 1; }
     let (buf, len) = format_hex(seed as u64, false);
-    for j in 0..len.min(L_tmpnam - k - 1) { *out.add(k + j) = buf[16 - len + j] as c_char; k += 1; }
+    for j in 0..len.min(L_TMPNAM - k - 1) { *out.add(k + j) = buf[16 - len + j] as c_char; k += 1; }
     *out.add(k) = 0;
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn tmpfile() -> *mut FILE {
-    let mut name = [0u8; L_tmpnam];
+    let mut name = [0u8; L_TMPNAM];
     let mut ctr: c_uint = 0;
     loop {
         ctr = ctr.wrapping_add(1);
@@ -5379,7 +5379,7 @@ pub unsafe extern "C" fn tmpfile() -> *mut FILE {
 
 #[no_mangle]
 pub unsafe extern "C" fn tmpnam(s: *mut c_char) -> *mut c_char {
-    static mut BUF: [c_char; L_tmpnam] = [0; L_tmpnam];
+    static mut BUF: [c_char; L_TMPNAM] = [0; L_TMPNAM];
     let out = if s.is_null() { core::ptr::addr_of_mut!(BUF) as *mut c_char } else { s };
     TMPNAM_COUNTER = TMPNAM_COUNTER.wrapping_add(1);
     let mut ts: timespec = core::mem::zeroed();
@@ -6930,12 +6930,12 @@ pub unsafe extern "C" fn vswprintf(s: *mut wchar_t, n: usize, fmt: *const wchar_
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn swprintf(s: *mut wchar_t, n: usize, fmt: *const wchar_t, mut args: ...) -> c_int {
+pub unsafe extern "C" fn swprintf(s: *mut wchar_t, n: usize, fmt: *const wchar_t, args: ...) -> c_int {
     vswprintf(s, n, fmt, args)
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn vfwprintf(f: *mut FILE, fmt: *const wchar_t, mut args: VaListImpl) -> c_int {
+pub unsafe extern "C" fn vfwprintf(f: *mut FILE, fmt: *const wchar_t, args: VaListImpl) -> c_int {
     let mut buf = [0i32; 4096];
     let r = vswprintf(buf.as_mut_ptr(), 4096, fmt, args);
     if r < 0 { return r; }
@@ -6951,7 +6951,7 @@ pub unsafe extern "C" fn vfwprintf(f: *mut FILE, fmt: *const wchar_t, mut args: 
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn fwprintf(f: *mut FILE, fmt: *const wchar_t, mut args: ...) -> c_int {
+pub unsafe extern "C" fn fwprintf(f: *mut FILE, fmt: *const wchar_t, args: ...) -> c_int {
     vfwprintf(f, fmt, args)
 }
 
@@ -7003,7 +7003,7 @@ fn month_to_secs(month: i32, is_leap: bool) -> i32 {
 
 unsafe fn secs_to_tm(t: i64, tm: &mut tm) -> bool {
     if t < (i32::MIN as i64) * 31622400 || t > (i32::MAX as i64) * 31622400 { return false; }
-    let mut secs = t - LEAPOCH;
+    let secs = t - LEAPOCH;
     let mut days = secs / 86400;
     let mut remsecs = (secs % 86400) as i32;
     if remsecs < 0 { remsecs += 86400; days -= 1; }
@@ -7107,7 +7107,7 @@ pub unsafe extern "C" fn gmtime_r(t: *const TimeT, tm: *mut tm) -> *mut tm {
     if !secs_to_tm(*t as i64, &mut *tm) { ERRNO = EOVERFLOW; return core::ptr::null_mut(); }
     (*tm).tm_isdst = 0;
     (*tm).tm_gmtoff = 0;
-    (*tm).tm_zone = UTC_STR.as_ptr();
+    (*tm).tm_zone = core::ptr::addr_of!(UTC_STR).cast::<c_char>();
     tm
 }
 
@@ -7123,7 +7123,7 @@ pub unsafe extern "C" fn mktime(tm: *mut tm) -> TimeT {
     if !secs_to_tm(t, &mut *tm) { ERRNO = EOVERFLOW; return -1; }
     (*tm).tm_isdst = 0;
     (*tm).tm_gmtoff = 0;
-    (*tm).tm_zone = UTC_STR.as_ptr();
+    (*tm).tm_zone = core::ptr::addr_of!(UTC_STR).cast::<c_char>();
     t as TimeT
 }
 
@@ -7133,7 +7133,7 @@ pub unsafe extern "C" fn timegm(tm: *mut tm) -> TimeT {
     if !secs_to_tm(t, &mut *tm) { ERRNO = EOVERFLOW; return -1; }
     (*tm).tm_isdst = 0;
     (*tm).tm_gmtoff = 0;
-    (*tm).tm_zone = UTC_STR.as_ptr();
+    (*tm).tm_zone = core::ptr::addr_of!(UTC_STR).cast::<c_char>();
     t as TimeT
 }
 
@@ -7144,7 +7144,7 @@ const MON_NAMES: [&[u8]; 12] = [b"Jan\0", b"Feb\0", b"Mar\0", b"Apr\0", b"May\0"
 
 #[no_mangle]
 pub unsafe extern "C" fn asctime(tm: *const tm) -> *mut c_char {
-    asctime_r(tm, ASCTIME_BUF.as_mut_ptr())
+    asctime_r(tm, core::ptr::addr_of_mut!(ASCTIME_BUF).cast::<c_char>())
 }
 
 #[no_mangle]
@@ -8101,7 +8101,7 @@ pub unsafe extern "C" fn strerror(errnum: c_int) -> *mut c_char {
             i += 1;
         }
         UNKNOWN_BUF[i] = 0;
-        return UNKNOWN_BUF.as_mut_ptr();
+        return core::ptr::addr_of_mut!(UNKNOWN_BUF).cast::<c_char>();
     }
     ERR_STRS[errnum as usize].as_ptr() as *mut c_char
 }
@@ -9175,7 +9175,7 @@ pub unsafe extern "C" fn inet_ntoa(addr: u32) -> *mut c_char {
         for j in 0..len { NTOA_BUF[pos] = buf[20 - len + j] as c_char; pos += 1; }
     }
     NTOA_BUF[pos] = 0;
-    NTOA_BUF.as_mut_ptr()
+    core::ptr::addr_of_mut!(NTOA_BUF).cast::<c_char>()
 }
 
 #[no_mangle]
@@ -9518,7 +9518,7 @@ const HSEARCH_MINSIZE: usize = 8;
 
 #[repr(C)]
 #[derive(Copy, Clone)]
-struct HSearchEntry {
+pub struct HSearchEntry {
     key: *mut c_char,
     data: *mut c_void,
 }
@@ -9666,18 +9666,18 @@ unsafe fn hsearch_r_impl(item: HSearchEntry, action: c_int, retval: *mut *mut HS
 
 #[no_mangle]
 pub unsafe extern "C" fn hcreate(nel: usize) -> c_int {
-    hcreate_r_impl(nel, &mut HTAB_DATA)
+    hcreate_r_impl(nel, core::ptr::addr_of_mut!(HTAB_DATA))
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn hdestroy() {
-    hdestroy_r_impl(&mut HTAB_DATA);
+    hdestroy_r_impl(core::ptr::addr_of_mut!(HTAB_DATA));
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn hsearch(item: HSearchEntry, action: c_int) -> *mut HSearchEntry {
     let mut e: *mut HSearchEntry = core::ptr::null_mut();
-    hsearch_r_impl(item, action, &mut e, &mut HTAB_DATA);
+    hsearch_r_impl(item, action, &mut e, core::ptr::addr_of_mut!(HTAB_DATA));
     e
 }
 
@@ -9785,7 +9785,7 @@ pub unsafe extern "C" fn lfind(
 
 // ponytail: simple BST, no balancing; correct for tests, O(n) worst case
 #[repr(C)]
-struct TreeNode {
+pub struct TreeNode {
     key: *const c_void,
     left: *mut TreeNode,
     right: *mut TreeNode,
@@ -10502,7 +10502,7 @@ pub unsafe extern "C" fn getmntent_r(
     f: *mut FILE,
     mnt: *mut MntEnt,
     mut linebuf: *mut c_char,
-    buflen: c_int,
+    _buflen: c_int,
 ) -> *mut MntEnt {
     let use_internal = linebuf as usize == SENTINEL_PTR;
 
@@ -10514,7 +10514,7 @@ pub unsafe extern "C" fn getmntent_r(
 
     loop {
         if use_internal {
-            linebuf = INTERNAL_BUF.as_mut_ptr();
+            linebuf = core::ptr::addr_of_mut!(INTERNAL_BUF).cast::<c_char>();
         }
         let res = mntent_fgets(linebuf, 4096, f);
         if res.is_null() {
@@ -10536,7 +10536,7 @@ pub unsafe extern "C" fn getmntent_r(
 
 #[no_mangle]
 pub unsafe extern "C" fn getmntent(f: *mut FILE) -> *mut MntEnt {
-    getmntent_r(f, &mut MNTENT_MNT, SENTINEL_PTR as *mut c_char, 0)
+    getmntent_r(f, core::ptr::addr_of_mut!(MNTENT_MNT), SENTINEL_PTR as *mut c_char, 0)
 }
 
 #[no_mangle]
