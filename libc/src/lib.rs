@@ -1835,6 +1835,163 @@ pub unsafe extern "C" fn execl(path: *const c_char, arg: *const c_char, mut args
 }
 
 // ============================================================
+// spawn.h: posix_spawn family
+// ============================================================
+
+// Matches musl's posix_spawn_file_actions_t layout.
+// __pad0[0] = action count, __pad stores (type, fd, newfd) triples.
+// ponytail: max 5 actions, enough for all tests
+const SPAWN_FA_MAX: usize = 5;
+
+#[repr(C)]
+pub struct posix_spawn_file_actions_t {
+    __pad0: [c_int; 2],
+    __actions: *mut c_void,
+    __pad: [c_int; 16],
+}
+
+#[repr(C)]
+pub struct posix_spawnattr_t {
+    __flags: c_int,
+    __pgrp: c_int,
+    __def: [c_ulong; 16],
+    __mask: [c_ulong; 16],
+    __prio: c_int,
+    __pol: c_int,
+    __fn: *mut c_void,
+    __pad: [u8; 64 - core::mem::size_of::<*mut c_void>()],
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn posix_spawn_file_actions_init(fa: *mut posix_spawn_file_actions_t) -> c_int {
+    core::ptr::write_bytes(fa, 0, 1);
+    0
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn posix_spawn_file_actions_destroy(_fa: *mut posix_spawn_file_actions_t) -> c_int {
+    0
+}
+
+unsafe fn spawn_fa_add(fa: *mut posix_spawn_file_actions_t, action_type: c_int, fd: c_int, newfd: c_int) -> c_int {
+    let count = (*fa).__pad0[0] as usize;
+    if count >= SPAWN_FA_MAX { return ENOMEM; }
+    let base = count * 3;
+    (*fa).__pad[base] = action_type;
+    (*fa).__pad[base + 1] = fd;
+    (*fa).__pad[base + 2] = newfd;
+    (*fa).__pad0[0] += 1;
+    0
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn posix_spawn_file_actions_addclose(fa: *mut posix_spawn_file_actions_t, fd: c_int) -> c_int {
+    spawn_fa_add(fa, 0, fd, 0)
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn posix_spawn_file_actions_adddup2(fa: *mut posix_spawn_file_actions_t, oldfd: c_int, newfd: c_int) -> c_int {
+    spawn_fa_add(fa, 1, oldfd, newfd)
+}
+
+unsafe fn spawn_apply_actions(fa: *const posix_spawn_file_actions_t) {
+    if fa.is_null() { return; }
+    let count = (*fa).__pad0[0] as usize;
+    for i in 0..count {
+        let base = i * 3;
+        match (*fa).__pad[base] {
+            0 => { sys_close((*fa).__pad[base + 1] as i64); }
+            1 => { sys_dup2((*fa).__pad[base + 1], (*fa).__pad[base + 2]); }
+            _ => {}
+        }
+    }
+}
+
+// ponytail: PATH search using stack buffer, O(n) scan per entry
+unsafe fn spawn_execvp(file: *const c_char, argv: *const *const c_char, envp: *const *const c_char) -> ! {
+    let flen = strlen(file as *const u8);
+    let f = file as *const u8;
+    let mut has_slash = false;
+    for i in 0..flen {
+        if *f.add(i) == b'/' { has_slash = true; break; }
+    }
+    if has_slash {
+        sys_execve(file, argv, envp);
+        _exit(127);
+    }
+    let path = getenv(b"PATH\0".as_ptr() as *const c_char);
+    let default_path = b"/usr/local/bin:/usr/bin:/bin\0";
+    let p = if path.is_null() { default_path.as_ptr() } else { path as *const u8 };
+    let plen = strlen(p);
+    let mut buf: [u8; 4096] = [0; 4096];
+    let mut i: usize = 0;
+    while i <= plen {
+        let start = i;
+        while i < plen && *p.add(i) != b':' { i += 1; }
+        let dlen = i - start;
+        if dlen > 0 && dlen + 1 + flen < 4096 {
+            core::ptr::copy_nonoverlapping(p.add(start), buf.as_mut_ptr(), dlen);
+            *buf.as_mut_ptr().add(dlen) = b'/';
+            core::ptr::copy_nonoverlapping(f, buf.as_mut_ptr().add(dlen + 1), flen + 1);
+            sys_execve(buf.as_ptr() as *const c_char, argv, envp);
+            // execve failed, try next
+        }
+        i += 1; // skip ':'
+    }
+    _exit(127);
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn posix_spawnp(
+    pid: *mut c_int,
+    file: *const c_char,
+    fa: *const posix_spawn_file_actions_t,
+    _attrp: *const posix_spawnattr_t,
+    argv: *const *const c_char,
+    envp: *const *const c_char,
+) -> c_int {
+    let child = sys_fork();
+    if child < 0 {
+        ERRNO = EAGAIN;
+        return -1;
+    }
+    if child == 0 {
+        // child: apply file actions then exec
+        spawn_apply_actions(fa);
+        let actual_envp = if envp.is_null() { __environ as *const *const c_char } else { envp };
+        spawn_execvp(file, argv, actual_envp);
+        // unreachable: spawn_execvp always calls _exit
+    }
+    *pid = child as c_int;
+    0
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn posix_spawn(
+    pid: *mut c_int,
+    path: *const c_char,
+    fa: *const posix_spawn_file_actions_t,
+    attrp: *const posix_spawnattr_t,
+    argv: *const *const c_char,
+    envp: *const *const c_char,
+) -> c_int {
+    // ponytail: posix_spawn = posix_spawnp with a direct path (no PATH search needed,
+    // but posix_spawnp handles '/' in path by doing direct execve anyway)
+    posix_spawnp(pid, path, fa, attrp, argv, envp)
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn posix_spawnattr_init(attr: *mut posix_spawnattr_t) -> c_int {
+    core::ptr::write_bytes(attr, 0, 1);
+    0
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn posix_spawnattr_destroy(_attr: *mut posix_spawnattr_t) -> c_int {
+    0
+}
+
+// ============================================================
 // sys/stat.h: stat / fstat / utimensat / futimens
 // ============================================================
 
@@ -6002,104 +6159,283 @@ unsafe fn skip_ws(p: *const u8) -> *const u8 {
     q
 }
 
-unsafe fn vsscanf_inner(buf: *const u8, fmt: *const c_char, args: &mut VaListImpl) -> c_int {
-    let mut p = buf;
-    let mut i = 0usize;
+#[inline]
+fn is_ws_byte(c: u8) -> bool {
+    c == b' ' || c == b'\t' || c == b'\n' || c == b'\r' || c == 0x0b || c == 0x0c
+}
+
+// Scan integer with position tracking. Returns (value, is_negative, success).
+// base: 0=auto, 8=octal, 10=decimal, 16=hex
+unsafe fn scan_int_val(
+    buf: *const u8, pos: &mut usize, buf_len: usize, base: u32, width: usize,
+) -> (u64, bool, bool) {
+    let start = *pos;
+    let max = if width > 0 { (start + width).min(buf_len) } else { buf_len };
+    let neg = if *pos < max && *buf.add(*pos) == b'-' { *pos += 1; true }
+    else if *pos < max && *buf.add(*pos) == b'+' { *pos += 1; false }
+    else { false };
+    if *pos >= max { *pos = start; return (0, false, false); }
+    let mut base = base;
+    let mut val: u64 = 0;
+    // Auto-detect base / handle 0x prefix
+    if (base == 0 || base == 16) && *pos < max && *buf.add(*pos) == b'0' {
+        *pos += 1;
+        if *pos < max && (*buf.add(*pos) == b'x' || *buf.add(*pos) == b'X') {
+            *pos += 1;
+            if *pos < max {
+                if let Some(d) = hex_val(*buf.add(*pos)) {
+                    val = d as u64; *pos += 1;
+                    while *pos < max { if let Some(d) = hex_val(*buf.add(*pos)) { val = val.wrapping_mul(16).wrapping_add(d as u64); *pos += 1; } else { break; } }
+                    return (val, neg, true);
+                }
+            }
+            return (0, neg, false);
+        } else if base == 0 {
+            while *pos < max { let c = *buf.add(*pos); if c >= b'0' && c <= b'7' { val = val.wrapping_mul(8).wrapping_add((c - b'0') as u64); *pos += 1; } else { break; } }
+            return (val, neg, true);
+        } else {
+            return (0, neg, true); // base=16, '0' not followed by 'x'
+        }
+    }
+    if base == 0 { base = 10; }
+    let mut found = false;
+    while *pos < max {
+        let c = *buf.add(*pos);
+        let d: Option<u64> = match base {
+            8 => if c >= b'0' && c <= b'7' { Some((c - b'0') as u64) } else { None },
+            10 => if c >= b'0' && c <= b'9' { Some((c - b'0') as u64) } else { None },
+            16 => hex_val(c).map(|v| v as u64),
+            _ => None,
+        };
+        match d { Some(digit) => { val = val.wrapping_mul(base as u64).wrapping_add(digit); *pos += 1; found = true; } None => break }
+    }
+    if !found { *pos = start; return (0, false, false); }
+    (val, neg, true)
+}
+
+// Scan float with position tracking. Returns (value, success).
+unsafe fn scan_float_val(
+    buf: *const u8, pos: &mut usize, buf_len: usize, width: usize,
+) -> (f64, bool) {
+    let start = *pos;
+    let max = if width > 0 { (start + width).min(buf_len) } else { buf_len };
+    let neg = if *pos < max && *buf.add(*pos) == b'-' { *pos += 1; true }
+    else if *pos < max && *buf.add(*pos) == b'+' { *pos += 1; false }
+    else { false };
+    // inf/nan
+    if *pos + 2 < max {
+        let (c0,c1,c2) = (*buf.add(*pos), *buf.add(*pos+1), *buf.add(*pos+2));
+        if (c0==b'i'||c0==b'I')&&(c1==b'n'||c1==b'N')&&(c2==b'f'||c2==b'F') { *pos+=3; return (if neg{f64::NEG_INFINITY}else{f64::INFINITY}, true); }
+        if (c0==b'n'||c0==b'N')&&(c1==b'a'||c1==b'A')&&(c2==b'n'||c2==b'N') { *pos+=3; return (if neg{-f64::NAN}else{f64::NAN}, true); }
+    }
+    // hex float
+    if *pos+1 < max && *buf.add(*pos)==b'0' && (*buf.add(*pos+1)==b'x'||*buf.add(*pos+1)==b'X') {
+        *pos += 2;
+        let mut val: f64 = 0.0; let mut found = false; let mut frac_scale = 1.0f64; let mut in_frac = false;
+        while *pos < max {
+            if let Some(d) = hex_val(*buf.add(*pos)) {
+                if in_frac { frac_scale /= 16.0; val += d as f64 * frac_scale; } else { val = val * 16.0 + d as f64; }
+                *pos += 1; found = true;
+            } else if *buf.add(*pos)==b'.' && !in_frac { in_frac = true; *pos += 1; } else { break; }
+        }
+        if !found { *pos = start; return (0.0, false); }
+        // p exponent
+        if *pos < max && (*buf.add(*pos)==b'p'||*buf.add(*pos)==b'P') {
+            *pos += 1;
+            let mut eneg = false;
+            if *pos<max && *buf.add(*pos)==b'-' { eneg=true; *pos+=1; }
+            else if *pos<max && *buf.add(*pos)==b'+' { *pos+=1; }
+            let mut ev: i32 = 0; let mut ef = false;
+            while *pos<max && *buf.add(*pos)>=b'0' && *buf.add(*pos)<=b'9' { ev = ev*10+(*buf.add(*pos)-b'0') as i32; *pos+=1; ef=true; }
+            if !ef { return (0.0, false); }
+            if eneg { ev = -ev; }
+            val *= libm::pow(2.0, ev as f64);
+        }
+        return (if neg{-val}else{val}, true);
+    }
+    // decimal float
+    let mut val: f64 = 0.0; let mut found = false; let mut frac_scale = 1.0f64; let mut in_frac = false;
+    while *pos < max {
+        let c = *buf.add(*pos);
+        if c>=b'0' && c<=b'9' { let d=(c-b'0') as f64; if in_frac{frac_scale/=10.0; val+=d*frac_scale;} else{val=val*10.0+d;} *pos+=1; found=true; }
+        else if c==b'.' && !in_frac { in_frac=true; *pos+=1; } else { break; }
+    }
+    if !found { *pos = start; return (0.0, false); }
+    // e exponent
+    if *pos<max && (*buf.add(*pos)==b'e'||*buf.add(*pos)==b'E') {
+        *pos += 1;
+        let mut eneg = false;
+        if *pos<max && *buf.add(*pos)==b'-' { eneg=true; *pos+=1; }
+        else if *pos<max && *buf.add(*pos)==b'+' { *pos+=1; }
+        let mut ev: i32 = 0; let mut ef = false;
+        while *pos<max && *buf.add(*pos)>=b'0' && *buf.add(*pos)<=b'9' { ev = ev*10+(*buf.add(*pos)-b'0') as i32; *pos+=1; ef=true; }
+        if !ef { return (0.0, false); }
+        if eneg { ev = -ev; }
+        val *= libm::pow(10.0, ev as f64);
+    }
+    (if neg{-val}else{val}, true)
+}
+
+// Comprehensive scanf parser with position tracking.
+// consumed: if non-null, stores number of bytes consumed from buf.
+unsafe fn do_vsscanf(
+    buf: *const u8, buf_len: usize, fmt: *const c_char, args: &mut VaListImpl, consumed: *mut usize,
+) -> c_int {
+    let mut p = 0usize;
+    let mut fi = 0usize;
     let mut assigned = 0i32;
     loop {
-        let fc = *fmt.add(i) as u8;
+        let fc = *fmt.add(fi) as u8;
         if fc == 0 { break; }
-        if fc == b' ' || fc == b'\t' || fc == b'\n' || fc == b'\r' { p = skip_ws(p); i += 1; continue; }
-        if fc != b'%' { if *p != fc { break; } p = p.add(1); i += 1; continue; }
-        i += 1;
-        let spec = *fmt.add(i) as u8;
-        match spec {
-            b'd' | b'i' => {
-                p = skip_ws(p);
-                let neg = if *p == b'-' { p = p.add(1); true } else if *p == b'+' { p = p.add(1); false } else { false };
-                let mut val: u64 = 0;
-                let start = p;
-                while *p >= b'0' && *p <= b'9' { val = val.wrapping_mul(10).wrapping_add((*p - b'0') as u64); p = p.add(1); }
-                if p == start { break; }
-                let out = args.arg::<*mut c_int>();
-                if !out.is_null() { *out = if neg { -(val as i64) as c_int } else { val as c_int }; }
+        if is_ws_byte(fc) {
+            while is_ws_byte(*fmt.add(fi) as u8) { fi += 1; }
+            while p < buf_len && is_ws_byte(*buf.add(p)) { p += 1; }
+            continue;
+        }
+        if fc != b'%' {
+            if p >= buf_len || *buf.add(p) != fc { break; }
+            p += 1; fi += 1; continue;
+        }
+        fi += 1;
+        // %%
+        if *fmt.add(fi) as u8 == b'%' {
+            if p >= buf_len || *buf.add(p) != b'%' { break; }
+            p += 1; fi += 1; continue;
+        }
+        let suppress = if *fmt.add(fi) as u8 == b'*' { fi += 1; true } else { false };
+        let mut width: usize = 0;
+        while (*fmt.add(fi) as u8) >= b'0' && (*fmt.add(fi) as u8) <= b'9' {
+            width = width * 10 + ((*fmt.add(fi) as u8) - b'0') as usize; fi += 1;
+        }
+        if *fmt.add(fi) as u8 == b'm' { fi += 1; }
+        let mut len_mod = 0u8;
+        match *fmt.add(fi) as u8 {
+            b'h' => { fi += 1; if *fmt.add(fi) as u8 == b'h' { fi += 1; len_mod = 2; } else { len_mod = 1; } }
+            b'l' => { fi += 1; if *fmt.add(fi) as u8 == b'l' { fi += 1; len_mod = 4; } else { len_mod = 3; } }
+            b'j' => { fi += 1; len_mod = 4; }
+            b'z' | b't' => { fi += 1; len_mod = 3; }
+            b'L' => { fi += 1; len_mod = 5; }
+            _ => {}
+        }
+        let spec = *fmt.add(fi) as u8;
+        let (real_spec, _real_len) = if spec==b'C' {(b'c',3u8)} else if spec==b'S' {(b's',3u8)} else {(spec,len_mod)};
+        match real_spec {
+            b'n' => {
+                if !suppress { let out = args.arg::<*mut c_int>(); if !out.is_null() { *out = p as c_int; } }
+            }
+            b'd' | b'u' => {
+                while p < buf_len && is_ws_byte(*buf.add(p)) { p += 1; }
+                let dest = if !suppress { Some(args.arg::<*mut c_int>()) } else { None };
+                let (val, neg, ok) = scan_int_val(buf, &mut p, buf_len, 10, width);
+                if !ok { break; }
+                if let Some(out) = dest { if !out.is_null() {
+                    *out = if real_spec==b'd' && neg { -(val as i64) as c_int } else { val as c_int };
+                }}
                 assigned += 1;
             }
-            b'u' => {
-                p = skip_ws(p);
-                let mut val: u64 = 0;
-                let start = p;
-                while *p >= b'0' && *p <= b'9' { val = val.wrapping_mul(10).wrapping_add((*p - b'0') as u64); p = p.add(1); }
-                if p == start { break; }
-                let out = args.arg::<*mut c_uint>();
-                if !out.is_null() { *out = val as c_uint; }
+            b'i' => {
+                while p < buf_len && is_ws_byte(*buf.add(p)) { p += 1; }
+                let dest = if !suppress { Some(args.arg::<*mut c_int>()) } else { None };
+                let (val, neg, ok) = scan_int_val(buf, &mut p, buf_len, 0, width);
+                if !ok { break; }
+                if let Some(out) = dest { if !out.is_null() { *out = if neg { -(val as i64) as c_int } else { val as c_int }; } }
                 assigned += 1;
             }
-            b'x' => {
-                p = skip_ws(p);
-                let mut val: u64 = 0;
-                let start = p;
-                while (*p >= b'0' && *p <= b'9') || (*p >= b'a' && *p <= b'f') || (*p >= b'A' && *p <= b'F') {
-                    let d = if *p >= b'0' && *p <= b'9' { *p - b'0' }
-                    else if *p >= b'a' && *p <= b'f' { *p - b'a' + 10 }
-                    else { *p - b'A' + 10 };
-                    val = val.wrapping_mul(16).wrapping_add(d as u64);
-                    p = p.add(1);
+            b'o' => {
+                while p < buf_len && is_ws_byte(*buf.add(p)) { p += 1; }
+                let dest = if !suppress { Some(args.arg::<*mut c_int>()) } else { None };
+                let (val, _, ok) = scan_int_val(buf, &mut p, buf_len, 8, width);
+                if !ok { break; }
+                if let Some(out) = dest { if !out.is_null() { *out = val as c_int; } }
+                assigned += 1;
+            }
+            b'x' | b'X' => {
+                while p < buf_len && is_ws_byte(*buf.add(p)) { p += 1; }
+                let dest = if !suppress { Some(args.arg::<*mut c_int>()) } else { None };
+                let (val, _, ok) = scan_int_val(buf, &mut p, buf_len, 16, width);
+                if !ok { break; }
+                if let Some(out) = dest { if !out.is_null() { *out = val as c_int; } }
+                assigned += 1;
+            }
+            b'p' => {
+                while p < buf_len && is_ws_byte(*buf.add(p)) { p += 1; }
+                let dest = if !suppress { Some(args.arg::<*mut *mut c_void>()) } else { None };
+                let (val, _, ok) = scan_int_val(buf, &mut p, buf_len, 16, width);
+                if !ok { break; }
+                if let Some(out) = dest { if !out.is_null() { *out = val as usize as *mut c_void; } }
+                assigned += 1;
+            }
+            b'a' | b'e' | b'f' | b'g' | b'A' | b'E' | b'F' | b'G' => {
+                while p < buf_len && is_ws_byte(*buf.add(p)) { p += 1; }
+                let (val, ok) = scan_float_val(buf, &mut p, buf_len, width);
+                if !ok { break; }
+                if !suppress {
+                    // %f -> f32, %lf -> f64, %Lf -> f64
+                    if _real_len == 3 || _real_len == 5 {
+                        let out = args.arg::<*mut f64>(); if !out.is_null() { *out = val; }
+                    } else {
+                        let out = args.arg::<*mut f32>(); if !out.is_null() { *out = val as f32; }
+                    }
                 }
-                if p == start { break; }
-                let out = args.arg::<*mut c_uint>();
-                if !out.is_null() { *out = val as c_uint; }
-                assigned += 1;
-            }
-            b's' => {
-                p = skip_ws(p);
-                if *p == 0 { break; }
-                let out = args.arg::<*mut c_char>();
-                let mut j = 0usize;
-                while *p != 0 && *p != b' ' && *p != b'\t' && *p != b'\n' && *p != b'\r' {
-                    if !out.is_null() { *out.add(j) = *p as c_char; }
-                    j += 1; p = p.add(1);
-                }
-                if !out.is_null() { *out.add(j) = 0; }
                 assigned += 1;
             }
             b'c' => {
-                if *p == 0 { break; }
-                let out = args.arg::<*mut c_char>();
-                if !out.is_null() { *out = *p as c_char; }
-                p = p.add(1);
+                let w = if width > 0 { width } else { 1 };
+                let dest_ptr: *mut c_char = if !suppress { args.arg::<*mut c_char>() } else { core::ptr::null_mut() };
+                let mut j = 0usize;
+                while j < w && p < buf_len {
+                    if !dest_ptr.is_null() { *dest_ptr.add(j) = *buf.add(p) as c_char; }
+                    p += 1; j += 1;
+                }
+                if j == 0 { break; }
                 assigned += 1;
             }
-            b'n' => {
-                let out = args.arg::<*mut c_int>();
-                if !out.is_null() { *out = (p as usize - buf as usize) as c_int; }
-            }
-            b'%' => { if *p != b'%' { break; } p = p.add(1); }
-            b'[' => {
-                let mut negate = false;
-                i += 1;
-                let mut fc2 = *fmt.add(i) as u8;
-                if fc2 == b'^' { negate = true; i += 1; fc2 = *fmt.add(i) as u8; }
-                let mut charset = [0u8; 256];
-                loop { charset[fc2 as usize] = 1; i += 1; fc2 = *fmt.add(i) as u8; if fc2 == b']' || fc2 == 0 { break; } }
-                if *p == 0 { break; }
-                let out = args.arg::<*mut c_char>();
+            b's' => {
+                while p < buf_len && is_ws_byte(*buf.add(p)) { p += 1; }
+                if p >= buf_len || *buf.add(p) == 0 { break; }
+                let dest_ptr: *mut c_char = if !suppress { args.arg::<*mut c_char>() } else { core::ptr::null_mut() };
+                let w = if width > 0 { width } else { usize::MAX };
                 let mut j = 0usize;
-                loop {
-                    let c = *p; if c == 0 { break; }
+                while p < buf_len && *buf.add(p) != 0 && !is_ws_byte(*buf.add(p)) && j < w {
+                    if !dest_ptr.is_null() { *dest_ptr.add(j) = *buf.add(p) as c_char; }
+                    p += 1; j += 1;
+                }
+                if j == 0 { break; }
+                if !dest_ptr.is_null() { *dest_ptr.add(j) = 0; }
+                assigned += 1;
+            }
+            b'[' => {
+                fi += 1;
+                let negate = if *fmt.add(fi) as u8 == b'^' { fi += 1; true } else { false };
+                let mut charset = [0u8; 256];
+                if *fmt.add(fi) as u8 == b']' { charset[b']' as usize] = 1; fi += 1; }
+                loop { let c = *fmt.add(fi) as u8; if c == b']' || c == 0 { break; } charset[c as usize] = 1; fi += 1; }
+                if *fmt.add(fi) as u8 == b']' { fi += 1; }
+                let dest_ptr: *mut c_char = if !suppress { args.arg::<*mut c_char>() } else { core::ptr::null_mut() };
+                let w = if width > 0 { width } else { usize::MAX };
+                let mut j = 0usize;
+                while p < buf_len && *buf.add(p) != 0 && j < w {
+                    let c = *buf.add(p);
                     let in_set = charset[c as usize] != 0;
                     if negate { if in_set { break; } } else { if !in_set { break; } }
-                    if !out.is_null() { *out.add(j) = c as c_char; }
-                    j += 1; p = p.add(1);
+                    if !dest_ptr.is_null() { *dest_ptr.add(j) = c as c_char; }
+                    p += 1; j += 1;
                 }
-                if !out.is_null() { *out.add(j) = 0; }
-                if j > 0 { assigned += 1; } else { break; }
+                if j == 0 { break; }
+                if !dest_ptr.is_null() { *dest_ptr.add(j) = 0; }
+                assigned += 1;
             }
             _ => break,
         }
-        i += 1;
+        fi += 1;
     }
+    if !consumed.is_null() { *consumed = p; }
     assigned
+}
+
+unsafe fn vsscanf_inner(buf: *const u8, fmt: *const c_char, args: &mut VaListImpl) -> c_int {
+    let len = strlen(buf);
+    do_vsscanf(buf, len, fmt, args, core::ptr::null_mut())
 }
 
 #[no_mangle]
@@ -7949,6 +8285,87 @@ pub unsafe extern "C" fn vfwprintf(f: *mut FILE, fmt: *const wchar_t, args: VaLi
 #[no_mangle]
 pub unsafe extern "C" fn fwprintf(f: *mut FILE, fmt: *const wchar_t, args: ...) -> c_int {
     vfwprintf(f, fmt, args)
+}
+
+// ============================================================
+// wchar: vswscanf / swscanf / vfwscanf / fwscanf / vwscanf / wscanf
+// ============================================================
+
+// Convert wchar_t format to byte format (ASCII cast, format specifiers are ASCII)
+unsafe fn wcsfmt_to_mbs(dst: *mut u8, dst_len: usize, src: *const wchar_t) {
+    let mut i = 0usize;
+    loop {
+        let ch = *src.add(i) as u32;
+        if ch == 0 || i >= dst_len - 1 { break; }
+        *dst.add(i) = if ch < 128 { ch as u8 } else { b'?' };
+        i += 1;
+    }
+    *dst.add(i) = 0;
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn vswscanf(s: *const wchar_t, fmt: *const wchar_t, mut args: VaListImpl) -> c_int {
+    let mut mbs_buf = [0u8; 4096];
+    let mut i = 0usize;
+    let mut mb_pos = 0usize;
+    loop {
+        let wc = *s.add(i) as c_int;
+        if wc == 0 { break; }
+        let mut mb = [0u8; 4];
+        let n = wcrtomb(mb.as_mut_ptr() as *mut c_char, wc, core::ptr::null_mut());
+        if n == !0usize || n == 0 { break; }
+        if mb_pos + n >= mbs_buf.len() { break; }
+        let mut k = 0usize;
+        while k < n { mbs_buf[mb_pos + k] = mb[k]; k += 1; }
+        mb_pos += n;
+        i += 1;
+    }
+    mbs_buf[mb_pos] = 0;
+    let mut mbs_fmt = [0u8; 4096];
+    wcsfmt_to_mbs(mbs_fmt.as_mut_ptr(), mbs_fmt.len(), fmt);
+    do_vsscanf(mbs_buf.as_ptr(), mb_pos, mbs_fmt.as_ptr() as *const c_char, &mut args, core::ptr::null_mut())
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn swscanf(s: *const wchar_t, fmt: *const wchar_t, args: ...) -> c_int {
+    vswscanf(s, fmt, args)
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn vfwscanf(f: *mut FILE, fmt: *const wchar_t, mut args: VaListImpl) -> c_int {
+    let start_pos = ftello(f);
+    if start_pos < 0 { return -1; }
+    let mut buf = [0u8; 4096];
+    let mut n = 0usize;
+    loop {
+        if n >= buf.len() - 1 { break; }
+        let c = fgetc(f);
+        if c == -1 { break; }
+        buf[n] = c as u8;
+        n += 1;
+    }
+    buf[n] = 0;
+    let mut mbs_fmt = [0u8; 4096];
+    wcsfmt_to_mbs(mbs_fmt.as_mut_ptr(), mbs_fmt.len(), fmt);
+    let mut consumed = 0usize;
+    let result = do_vsscanf(buf.as_ptr(), n, mbs_fmt.as_ptr() as *const c_char, &mut args, &mut consumed);
+    let _ = fseeko(f, start_pos + consumed as i64, SEEK_SET);
+    result
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn fwscanf(f: *mut FILE, fmt: *const wchar_t, args: ...) -> c_int {
+    vfwscanf(f, fmt, args)
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn vwscanf(fmt: *const wchar_t, args: VaListImpl) -> c_int {
+    vfwscanf(stdin, fmt, args)
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn wscanf(fmt: *const wchar_t, args: ...) -> c_int {
+    vfwscanf(stdin, fmt, args)
 }
 
 // ============================================================
@@ -11580,9 +11997,7 @@ pub unsafe extern "C" fn hasmntopt(mnt: *const MntEnt, opt: *const c_char) -> *m
 //   shmget=29, shmat=30, shmctl=31, shmdt=67
 // ============================================================
 
-const EACCES: c_int = 13;
 const EEXIST: c_int = 17;
-const ENOENT: c_int = 2;
 const ENAMETOOLONG: c_int = 36;
 const EMFILE: c_int = 24;
 const EIDRM: c_int = 43;

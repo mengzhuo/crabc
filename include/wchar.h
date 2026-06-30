@@ -78,6 +78,14 @@ int vswprintf(wchar_t *, size_t, const wchar_t *, va_list);
 int fwprintf(FILE *, const wchar_t *, ...);
 int vfwprintf(FILE *, const wchar_t *, va_list);
 
+/* Wide scanf */
+int wscanf(const wchar_t *, ...);
+int fwscanf(FILE *, const wchar_t *, ...);
+int swscanf(const wchar_t *, const wchar_t *, ...);
+int vwscanf(const wchar_t *, va_list);
+int vfwscanf(FILE *, const wchar_t *, va_list);
+int vswscanf(const wchar_t *, const wchar_t *, va_list);
+
 #ifdef __cplusplus
 }
 #endif
