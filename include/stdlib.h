@@ -44,7 +44,15 @@ lldiv_t lldiv(long long, long long);
 void srand(unsigned);
 int rand(void);
 
-long random(void);
+long lrand48(void);
+long mrand48(void);
+long nrand48(unsigned short *);
+long jrand48(unsigned short *);
+void srand48(long);
+unsigned short *seed48(unsigned short *);
+double drand48(void);
+double erand48(unsigned short *);
+void lcong48(unsigned short *);
 void srandom(unsigned);
 char *initstate(unsigned, char *, size_t);
 char *setstate(char *);

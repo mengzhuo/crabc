@@ -1779,7 +1779,19 @@ unsafe fn sys_getegid() -> i64 {
 
 #[no_mangle]
 pub unsafe extern "C" fn fork() -> c_int {
-    sys_fork() as c_int
+    __fork_handler(-1);
+    let ret = sys_fork();
+    let errno_save = ERRNO;
+    if ret == 0 {
+        __fork_handler(1);
+    } else {
+        __fork_handler(0);
+    }
+    if ret < 0 {
+        ERRNO = errno_save;
+        return -1;
+    }
+    ret as c_int
 }
 
 #[no_mangle]
@@ -12361,3 +12373,10 @@ pub unsafe extern "C" fn __libc_start_main(
 }
 
 include!("crypt_impl.rs");
+include!("statvfs.rs");
+include!("../../wave1/daemon.rs");
+include!("../../wave1/dn_expand.rs");
+include!("../../wave1/lrand48.rs");
+include!("../../wave1/strverscmp.rs");
+include!("../../wave1/syscall.rs");
+include!("../../wave1/pthread_atfork.rs");
