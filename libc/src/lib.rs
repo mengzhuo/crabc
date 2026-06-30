@@ -6331,7 +6331,7 @@ unsafe fn do_vsscanf(
                 if let Some(out) = dest { if !out.is_null() {
                     *out = if real_spec==b'd' && neg { -(val as i64) as c_int } else { val as c_int };
                 }}
-                assigned += 1;
+                if !suppress { assigned += 1; }
             }
             b'i' => {
                 while p < buf_len && is_ws_byte(*buf.add(p)) { p += 1; }
@@ -6339,7 +6339,7 @@ unsafe fn do_vsscanf(
                 let (val, neg, ok) = scan_int_val(buf, &mut p, buf_len, 0, width);
                 if !ok { break; }
                 if let Some(out) = dest { if !out.is_null() { *out = if neg { -(val as i64) as c_int } else { val as c_int }; } }
-                assigned += 1;
+                if !suppress { assigned += 1; }
             }
             b'o' => {
                 while p < buf_len && is_ws_byte(*buf.add(p)) { p += 1; }
@@ -6347,7 +6347,7 @@ unsafe fn do_vsscanf(
                 let (val, _, ok) = scan_int_val(buf, &mut p, buf_len, 8, width);
                 if !ok { break; }
                 if let Some(out) = dest { if !out.is_null() { *out = val as c_int; } }
-                assigned += 1;
+                if !suppress { assigned += 1; }
             }
             b'x' | b'X' => {
                 while p < buf_len && is_ws_byte(*buf.add(p)) { p += 1; }
@@ -6355,7 +6355,7 @@ unsafe fn do_vsscanf(
                 let (val, _, ok) = scan_int_val(buf, &mut p, buf_len, 16, width);
                 if !ok { break; }
                 if let Some(out) = dest { if !out.is_null() { *out = val as c_int; } }
-                assigned += 1;
+                if !suppress { assigned += 1; }
             }
             b'p' => {
                 while p < buf_len && is_ws_byte(*buf.add(p)) { p += 1; }
@@ -6363,7 +6363,7 @@ unsafe fn do_vsscanf(
                 let (val, _, ok) = scan_int_val(buf, &mut p, buf_len, 16, width);
                 if !ok { break; }
                 if let Some(out) = dest { if !out.is_null() { *out = val as usize as *mut c_void; } }
-                assigned += 1;
+                if !suppress { assigned += 1; }
             }
             b'a' | b'e' | b'f' | b'g' | b'A' | b'E' | b'F' | b'G' => {
                 while p < buf_len && is_ws_byte(*buf.add(p)) { p += 1; }
@@ -6377,7 +6377,7 @@ unsafe fn do_vsscanf(
                         let out = args.arg::<*mut f32>(); if !out.is_null() { *out = val as f32; }
                     }
                 }
-                assigned += 1;
+                if !suppress { assigned += 1; }
             }
             b'c' => {
                 let w = if width > 0 { width } else { 1 };
@@ -6388,7 +6388,7 @@ unsafe fn do_vsscanf(
                     p += 1; j += 1;
                 }
                 if j == 0 { break; }
-                assigned += 1;
+                if !suppress { assigned += 1; }
             }
             b's' => {
                 while p < buf_len && is_ws_byte(*buf.add(p)) { p += 1; }
@@ -6402,7 +6402,7 @@ unsafe fn do_vsscanf(
                 }
                 if j == 0 { break; }
                 if !dest_ptr.is_null() { *dest_ptr.add(j) = 0; }
-                assigned += 1;
+                if !suppress { assigned += 1; }
             }
             b'[' => {
                 fi += 1;
@@ -6411,6 +6411,7 @@ unsafe fn do_vsscanf(
                 if *fmt.add(fi) as u8 == b']' { charset[b']' as usize] = 1; fi += 1; }
                 loop { let c = *fmt.add(fi) as u8; if c == b']' || c == 0 { break; } charset[c as usize] = 1; fi += 1; }
                 if *fmt.add(fi) as u8 == b']' { fi += 1; }
+                fi -= 1; // common fi += 1 will advance past the closing ]
                 let dest_ptr: *mut c_char = if !suppress { args.arg::<*mut c_char>() } else { core::ptr::null_mut() };
                 let w = if width > 0 { width } else { usize::MAX };
                 let mut j = 0usize;
@@ -6423,7 +6424,7 @@ unsafe fn do_vsscanf(
                 }
                 if j == 0 { break; }
                 if !dest_ptr.is_null() { *dest_ptr.add(j) = 0; }
-                assigned += 1;
+                if !suppress { assigned += 1; }
             }
             _ => break,
         }
