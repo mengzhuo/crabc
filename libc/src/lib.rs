@@ -12310,3 +12310,5 @@ pub unsafe extern "C" fn __libc_start_main(
 
     exit(result);
 }
+
+include!("crypt_impl.rs");
