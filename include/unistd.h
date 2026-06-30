@@ -53,6 +53,8 @@ int truncate(const char *, long long);
 int ftruncate(int, long long);
 long long lseek(int, long long, int);
 
+long syscall(long, ...);
+
 int nanosleep(const struct timespec *, struct timespec *);
 unsigned int alarm(unsigned int);
 int pause(void);
