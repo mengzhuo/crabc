@@ -90,8 +90,8 @@ struct sigaltstack {
 
 typedef struct sigaltstack stack_t;
 
-#ifndef _TIMESPEC_DEFINED
-#define _TIMESPEC_DEFINED
+#ifndef __DEFINED_struct_timespec
+#define __DEFINED_struct_timespec
 struct timespec {
     long tv_sec;
     long tv_nsec;

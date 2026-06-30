@@ -59,6 +59,7 @@ pub extern "C" fn rust_eh_personality() {}
 
 const PROT_READ: i32 = 1;
 const PROT_WRITE: i32 = 2;
+const MAP_SHARED: i32 = 0x01;
 const MAP_PRIVATE: i32 = 0x02;
 const MAP_ANONYMOUS: i32 = 0x20;
 
@@ -614,6 +615,7 @@ pub unsafe extern "C" fn strtok(s: *mut u8, delim: *const u8) -> *mut u8 {
 
 type SizeT = usize;
 type SSizeT = isize;
+type mode_t = c_uint;
 type TimeT = c_long;
 type ClockT = c_long;
 type wchar_t = c_int;
@@ -1552,6 +1554,26 @@ pub unsafe extern "C" fn longjmp(env: *const c_ulong, val: c_int) -> ! {
         in("edx") ret,
         options(noreturn),
     );
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn sigsetjmp(env: *mut c_ulong, savemask: c_int) -> c_int {
+    let ret = setjmp(env);
+    if ret == 0 {
+        *env.add(8) = savemask as c_ulong;
+        if savemask != 0 {
+            sigprocmask(SIG_BLOCK, core::ptr::null(), env.add(9) as *mut SigSetT);
+        }
+    }
+    ret
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn siglongjmp(env: *const c_ulong, val: c_int) -> ! {
+    if *env.add(8) != 0 {
+        sigprocmask(SIG_SETMASK, env.add(9) as *const SigSetT, core::ptr::null_mut());
+    }
+    longjmp(env, val);
 }
 
 // ============================================================
@@ -3231,6 +3253,332 @@ pub unsafe extern "C" fn sem_getvalue(sem: *mut sem_t, sval: *mut c_int) -> c_in
     0
 }
 
+// ============================================================
+// POSIX shared memory + named semaphores
+// ============================================================
+
+const NAME_MAX: usize = 255;
+const SEM_NSEMS_MAX: usize = 256;
+
+// ponytail: global spinlock for semtab, upgrade to per-entry if contention matters
+static SEMTAB_LOCK: AtomicI32 = AtomicI32::new(0);
+
+struct SemEntry {
+    ino: u64,
+    sem: *mut sem_t,
+    refcnt: u32,
+}
+
+// ponytail: zero-init is fine for static mut (all-zero = free slots)
+static mut SEMTAB: [SemEntry; SEM_NSEMS_MAX] = {
+    const ZERO: SemEntry = SemEntry { ino: 0, sem: core::ptr::null_mut(), refcnt: 0 };
+    [ZERO; SEM_NSEMS_MAX]
+};
+
+unsafe fn semtab_lock() {
+    while SEMTAB_LOCK.compare_exchange_weak(0, 1, Ordering::Acquire, Ordering::Relaxed).is_err() {
+        core::hint::spin_loop();
+    }
+}
+
+unsafe fn semtab_unlock() {
+    SEMTAB_LOCK.store(0, Ordering::Release);
+}
+
+// Validate shm/sem name and construct /dev/shm/<name> path.
+// Returns path length or -1 with ERRNO set.
+unsafe fn shm_mapname(name: *const c_char, buf: *mut u8) -> c_int {
+    let mut p = name;
+    // strip leading /
+    while *p == b'/' as c_char { p = p.add(1); }
+    let start = p;
+    // find end of first component
+    while *p != 0 && *p != b'/' as c_char { p = p.add(1); }
+    let len = p.offset_from(start) as usize;
+    // no trailing /, not empty, not "." or ".."
+    if len == 0 || *p != 0 {
+        ERRNO = EINVAL;
+        return -1;
+    }
+    if len == 1 && *start == b'.' as c_char {
+        ERRNO = EINVAL;
+        return -1;
+    }
+    if len == 2 && *start == b'.' as c_char && *start.add(1) == b'.' as c_char {
+        ERRNO = EINVAL;
+        return -1;
+    }
+    if len > NAME_MAX {
+        ERRNO = ENAMETOOLONG;
+        return -1;
+    }
+    // build /dev/shm/<name>
+    let prefix = b"/dev/shm/\0";
+    let mut i = 0;
+    while prefix[i] != 0 {
+        *buf.add(i) = prefix[i];
+        i += 1;
+    }
+    let mut j = 0;
+    while j < len {
+        *buf.add(i + j) = *start.add(j) as u8;
+        j += 1;
+    }
+    *buf.add(i + j) = 0;
+    (i + j) as c_int
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn shm_open(name: *const c_char, flags: c_int, mode: mode_t) -> c_int {
+    let mut buf = [0u8; 16 + NAME_MAX + 1];
+    if shm_mapname(name, buf.as_mut_ptr()) < 0 { return -1; }
+    let fd = sys_open(buf.as_ptr(), (flags | O_NOFOLLOW | O_CLOEXEC | O_NONBLOCK) as i64, mode as i64);
+    if fd < 0 { ERRNO = (-fd) as c_int; return -1; }
+    fd as c_int
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn shm_unlink(name: *const c_char) -> c_int {
+    let mut buf = [0u8; 16 + NAME_MAX + 1];
+    if shm_mapname(name, buf.as_mut_ptr()) < 0 { return -1; }
+    let r = sys_unlink(buf.as_ptr());
+    if r < 0 { ERRNO = (-r) as c_int; return -1; }
+    0
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn sem_open(name: *const c_char, flags: c_int, mut args: ...) -> *mut sem_t {
+    let mut buf = [0u8; 16 + NAME_MAX + 1];
+    if shm_mapname(name, buf.as_mut_ptr()).is_negative() {
+        return core::ptr::null_mut(); // SEM_FAILED
+    }
+
+    let oflags = flags & (O_CREAT | O_EXCL);
+
+    semtab_lock();
+
+    // find a free slot
+    let mut slot: c_int = -1;
+    for i in 0..SEMTAB_LEN {
+        if SEMTAB[i].sem.is_null() && slot < 0 { slot = i as c_int; }
+    }
+    if slot < 0 {
+        ERRNO = EMFILE;
+        semtab_unlock();
+        return core::ptr::null_mut();
+    }
+    // reserve slot
+    SEMTAB[slot as usize].sem = !0usize as *mut sem_t; // sentinel
+    semtab_unlock();
+
+    // extract va_args for O_CREAT
+    let mut mode: mode_t = 0;
+    let mut value: c_uint = 0;
+    if oflags & O_CREAT != 0 {
+        mode = args.arg::<mode_t>() & 0o666;
+        value = args.arg::<c_uint>();
+        if value > SEM_VALUE_MAX as c_uint {
+            ERRNO = EINVAL;
+            semtab_lock();
+            SEMTAB[slot as usize].sem = core::ptr::null_mut();
+            semtab_unlock();
+            return core::ptr::null_mut();
+        }
+    }
+
+    // try opening existing first (unless O_CREAT|O_EXCL)
+    if oflags != O_CREAT | O_EXCL {
+        let fd = sys_open(buf.as_ptr(), (O_RDWR | O_NOFOLLOW | O_CLOEXEC | O_NONBLOCK) as i64, 0);
+        if fd >= 0 {
+            let map = sys_mmap(
+                core::ptr::null_mut(),
+                core::mem::size_of::<sem_t>(),
+                PROT_READ | PROT_WRITE,
+                MAP_SHARED,
+                fd as i32,
+                0,
+            );
+            sys_close(fd);
+            if map != MMAP_FAILED {
+                let st_ino = get_ino(fd as c_int, buf.as_ptr());
+                return sem_register(map as *mut sem_t, st_ino, slot);
+            }
+        }
+        if oflags == 0 {
+            // no O_CREAT and file doesn't exist
+            semtab_lock();
+            SEMTAB[slot as usize].sem = core::ptr::null_mut();
+            semtab_unlock();
+            return core::ptr::null_mut();
+        }
+    }
+
+    // create: write sem_t to temp file, mmap, link
+    let mut tmp = [0u8; 32];
+    let tmpname = b"/dev/shm/tmp-XXXXXX\0";
+    tmp[..tmpname.len()].copy_from_slice(tmpname);
+    // use clock for unique name
+    let mut ts: timespec = core::mem::zeroed();
+    sys_clock_gettime(0, &mut ts);
+    // append ns to tmp name
+    let mut n = ts.tv_nsec;
+    let mut pos = tmpname.len() - 1;
+    tmp[pos] = 0;
+    pos -= 1;
+    loop {
+        tmp[pos] = b'0' + (n % 10) as u8;
+        n /= 10;
+        if n == 0 || pos == 0 { break; }
+        pos -= 1;
+    }
+    // shift to start of number part
+    let tmp_path = tmp.as_ptr().add(pos);
+
+    let mut newsem: sem_t = core::mem::zeroed();
+    newsem.__val[0] = value as c_int;
+    newsem.__val[1] = 0;
+    newsem.__val[2] = 128; // pshared=0 flag
+
+    loop {
+        let fd = sys_open(tmp_path as *const u8, (O_RDWR | O_CREAT | O_EXCL | O_CLOEXEC | O_NONBLOCK) as i64, mode as i64);
+        if fd < 0 {
+            if (-fd) as c_int == EEXIST { continue; }
+            semtab_lock();
+            SEMTAB[slot as usize].sem = core::ptr::null_mut();
+            semtab_unlock();
+            return core::ptr::null_mut();
+        }
+        let written = sys_write(fd, &newsem as *const sem_t as *const u8, core::mem::size_of::<sem_t>());
+        if written != core::mem::size_of::<sem_t>() as i64 {
+            sys_close(fd);
+            sys_unlink(tmp_path);
+            semtab_lock();
+            SEMTAB[slot as usize].sem = core::ptr::null_mut();
+            semtab_unlock();
+            return core::ptr::null_mut();
+        }
+        let map = sys_mmap(
+            core::ptr::null_mut(),
+            core::mem::size_of::<sem_t>(),
+            PROT_READ | PROT_WRITE,
+            MAP_SHARED,
+            fd as i32,
+            0,
+        );
+        sys_close(fd);
+        if map == MMAP_FAILED {
+            sys_unlink(tmp_path);
+            semtab_lock();
+            SEMTAB[slot as usize].sem = core::ptr::null_mut();
+            semtab_unlock();
+            return core::ptr::null_mut();
+        }
+        // link to final name
+        let r = sys_linkat(AT_FDCWD, tmp_path, AT_FDCWD, buf.as_ptr(), 0);
+        let e = if r < 0 { (-r) as c_int } else { 0 };
+        sys_unlink(tmp_path);
+        if e == 0 {
+            let st_ino = get_ino(-1, buf.as_ptr());
+            return sem_register(map as *mut sem_t, st_ino, slot);
+        }
+        sys_munmap(map, core::mem::size_of::<sem_t>());
+        if e != EEXIST || oflags == O_CREAT | O_EXCL {
+            ERRNO = e;
+            semtab_lock();
+            SEMTAB[slot as usize].sem = core::ptr::null_mut();
+            semtab_unlock();
+            return core::ptr::null_mut();
+        }
+        // EEXIST without O_EXCL: retry open existing
+        break;
+    }
+
+    // fallthrough: try opening the existing file that won the race
+    let fd = sys_open(buf.as_ptr(), (O_RDWR | O_NOFOLLOW | O_CLOEXEC | O_NONBLOCK) as i64, 0);
+    if fd < 0 {
+        semtab_lock();
+        SEMTAB[slot as usize].sem = core::ptr::null_mut();
+        semtab_unlock();
+        return core::ptr::null_mut();
+    }
+    let map = sys_mmap(
+        core::ptr::null_mut(),
+        core::mem::size_of::<sem_t>(),
+        PROT_READ | PROT_WRITE,
+        MAP_SHARED,
+        fd as i32,
+        0,
+    );
+    sys_close(fd);
+    if map == MMAP_FAILED {
+        semtab_lock();
+        SEMTAB[slot as usize].sem = core::ptr::null_mut();
+        semtab_unlock();
+        return core::ptr::null_mut();
+    }
+    let st_ino = get_ino(-1, buf.as_ptr());
+    sem_register(map as *mut sem_t, st_ino, slot)
+}
+
+unsafe fn get_ino(_fd_hint: c_int, path: *const u8) -> u64 {
+    let mut st: Stat = core::mem::zeroed();
+    if sys_newfstatat(AT_FDCWD, path as *const c_char, &mut st as *mut Stat as *mut u8, 0) == 0 {
+        st.st_ino
+    } else {
+        0
+    }
+}
+
+unsafe fn sem_register(map: *mut sem_t, ino: u64, slot_hint: c_int) -> *mut sem_t {
+    semtab_lock();
+    // check if already mapped (by inode)
+    for i in 0..SEMTAB_LEN {
+        if SEMTAB[i].ino == ino && !SEMTAB[i].sem.is_null() && SEMTAB[i].sem != !0usize as *mut sem_t {
+            // already mapped: unmap new, use existing, release hint slot
+            sys_munmap(map as *mut u8, core::mem::size_of::<sem_t>());
+            SEMTAB[slot_hint as usize].sem = core::ptr::null_mut();
+            SEMTAB[i].refcnt += 1;
+            let ret = SEMTAB[i].sem;
+            semtab_unlock();
+            return ret;
+        }
+    }
+    // new entry
+    SEMTAB[slot_hint as usize].sem = map;
+    SEMTAB[slot_hint as usize].ino = ino;
+    SEMTAB[slot_hint as usize].refcnt = 1;
+    semtab_unlock();
+    map
+}
+
+const SEMTAB_LEN: usize = SEM_NSEMS_MAX;
+
+#[no_mangle]
+pub unsafe extern "C" fn sem_close(sem: *mut sem_t) -> c_int {
+    semtab_lock();
+    for i in 0..SEMTAB_LEN {
+        if SEMTAB[i].sem == sem {
+            SEMTAB[i].refcnt -= 1;
+            if SEMTAB[i].refcnt == 0 {
+                SEMTAB[i].sem = core::ptr::null_mut();
+                SEMTAB[i].ino = 0;
+                semtab_unlock();
+                sys_munmap(sem as *mut u8, core::mem::size_of::<sem_t>());
+                return 0;
+            }
+            semtab_unlock();
+            return 0;
+        }
+    }
+    semtab_unlock();
+    0
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn sem_unlink(name: *const c_char) -> c_int {
+    shm_unlink(name)
+}
+
 // --- pthread_once ---
 #[no_mangle]
 pub unsafe extern "C" fn pthread_once(control: *mut pthread_once_t, init_routine: Option<unsafe extern "C" fn()>) -> c_int {
@@ -4325,6 +4673,8 @@ const O_CREAT: i32 = 64;
 const O_TRUNC: i32 = 512;
 const O_APPEND: i32 = 1024;
 const O_EXCL: i32 = 128;
+const O_NONBLOCK: i32 = 2048;
+const O_NOFOLLOW: i32 = 0x40000;
 const O_CLOEXEC: i32 = 0x80000;
 
 const F_GETFD: i32 = 1;
@@ -10961,6 +11311,8 @@ pub unsafe extern "C" fn hasmntopt(mnt: *const MntEnt, opt: *const c_char) -> *m
 const EACCES: c_int = 13;
 const EEXIST: c_int = 17;
 const ENOENT: c_int = 2;
+const ENAMETOOLONG: c_int = 36;
+const EMFILE: c_int = 24;
 const EIDRM: c_int = 43;
 
 #[inline]

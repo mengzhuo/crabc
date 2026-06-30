@@ -2,6 +2,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <setjmp.h>
+#include <signal.h>
 #include <search.h>
 #include <fnmatch.h>
 #include <mntent.h>
@@ -258,6 +260,39 @@ static void test_lrint_funcs(void) {
     if (lr != 4) { puts("llrint(3.7) fail"); exit(1); }
 }
 
+static void test_sigsetjmp(void) {
+    sigjmp_buf sjb;
+    sigset_t set, oldset;
+    sigemptyset(&set);
+    sigaddset(&set, SIGUSR1);
+    sigprocmask(SIG_UNBLOCK, &set, &oldset);
+
+    if (!sigsetjmp(sjb, 1)) {
+        sigemptyset(&set);
+        sigaddset(&set, SIGUSR1);
+        sigprocmask(SIG_BLOCK, &set, 0);
+        siglongjmp(sjb, 1);
+    }
+    sigprocmask(SIG_SETMASK, &oldset, &set);
+    if (sigismember(&set, SIGUSR1)) {
+        puts("sigsetjmp savemask=1: mask not restored");
+        exit(1);
+    }
+
+    if (!sigsetjmp(sjb, 0)) {
+        sigemptyset(&set);
+        sigaddset(&set, SIGUSR1);
+        sigprocmask(SIG_BLOCK, &set, 0);
+        siglongjmp(sjb, 1);
+    }
+    sigprocmask(SIG_SETMASK, &oldset, &set);
+    if (!sigismember(&set, SIGUSR1)) {
+        puts("sigsetjmp savemask=0: mask incorrectly restored");
+        exit(1);
+    }
+    sigprocmask(SIG_SETMASK, &oldset, 0);
+}
+
 int main(void) {
     test_hsearch();
     test_insque();
@@ -272,6 +307,7 @@ int main(void) {
     test_utimensat_futimens();
     test_rlimit();
     test_lrint_funcs();
+    test_sigsetjmp();
     puts("new_functions ok");
     return 0;
 }
