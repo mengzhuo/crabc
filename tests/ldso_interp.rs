@@ -7,12 +7,6 @@ fn ldso_runs_tiny_pie() {
     let tiny_src = fixtures.join("tiny.c");
     let tiny_bin = fixtures.join("tiny_ldso");
 
-    let build_status = Command::new("cargo")
-        .args(["build", "-p", "ldso"])
-        .status()
-        .expect("failed to run cargo build -p ldso");
-    assert!(build_status.success(), "cargo build -p ldso failed");
-
     let ldso_path = manifest_dir.join("target/debug/libldso.so");
     assert!(ldso_path.exists(), "libldso.so not found at {}", ldso_path.display());
 

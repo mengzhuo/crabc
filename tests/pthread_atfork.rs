@@ -7,18 +7,6 @@ fn pthread_atfork_handlers_fire_in_order() {
     let include = manifest_dir.join("include");
     let wave1 = manifest_dir.join("wave1");
 
-    let build_status = Command::new("cargo")
-        .args(["build", "-p", "ldso"])
-        .status()
-        .expect("failed to run cargo build -p ldso");
-    assert!(build_status.success(), "cargo build -p ldso failed");
-
-    let build_status = Command::new("cargo")
-        .args(["build", "-p", "libc"])
-        .status()
-        .expect("failed to run cargo build -p libc");
-    assert!(build_status.success(), "cargo build -p libc failed");
-
     let ldso_path = manifest_dir.join("target/debug/libldso.so");
     let lib_dir = manifest_dir.join("target/debug");
     assert!(ldso_path.exists(), "libldso.so not found");

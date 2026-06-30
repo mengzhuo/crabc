@@ -6,18 +6,6 @@ fn signal_functions_under_libc_so() {
     let fixtures = manifest_dir.join("tests/fixtures");
     let include = manifest_dir.join("include");
 
-    let build_status = Command::new("cargo")
-        .args(["build", "-p", "ldso"])
-        .status()
-        .expect("failed to run cargo build -p ldso");
-    assert!(build_status.success(), "cargo build -p ldso failed");
-
-    let build_status = Command::new("cargo")
-        .args(["build", "-p", "libc"])
-        .status()
-        .expect("failed to run cargo build -p libc");
-    assert!(build_status.success(), "cargo build -p libc failed");
-
     let ldso_path = manifest_dir.join("target/debug/libldso.so");
     let libc_path = manifest_dir.join("target/debug/libc.so");
     assert!(ldso_path.exists(), "libldso.so not found");

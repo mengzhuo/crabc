@@ -6,11 +6,6 @@ fn ldso_runs_pie_with_dependency() {
     let fixtures = manifest_dir.join("tests/fixtures");
 
     // Build ldso
-    let build_status = Command::new("cargo")
-        .args(["build", "-p", "ldso"])
-        .status()
-        .expect("failed to run cargo build -p ldso");
-    assert!(build_status.success(), "cargo build -p ldso failed");
 
     let ldso_path = manifest_dir.join("target/debug/libldso.so");
     assert!(ldso_path.exists(), "libldso.so not found at {}", ldso_path.display());
