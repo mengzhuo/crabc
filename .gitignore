@@ -24,3 +24,5 @@
 /tests/fixtures/stdio_full_test
 /tests/fixtures/new_functions_test
 tests/fixtures/startup_argv_env
+tests/fixtures/crypt_test
+tests/fixtures/va_list_abi_test
