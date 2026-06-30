@@ -31,6 +31,9 @@ char *strpbrk(const char *, const char *);
 char *strstr(const char *, const char *);
 char *strtok(char *, const char *);
 
+char *strerror(int);
+int strerror_r(int, char *, size_t);
+
 #ifdef __cplusplus
 }
 #endif
