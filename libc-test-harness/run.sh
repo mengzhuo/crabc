@@ -120,6 +120,13 @@ for dir in $DIRS; do
             continue
         fi
 
+        # API tests are compile-only checks (no main), skip link/run
+        if [ "$dir" = "api" ]; then
+            echo "PASS $dir/$base" >> "$RAW_REPORT"
+            PASS=$((PASS + 1))
+            continue
+        fi
+
         EXE="$DIR_BUILD/${base}.exe"
         LINK_RC=0
         musl-gcc -L"$FAKE_LIBS" -g -o "$EXE" \
