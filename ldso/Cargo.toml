@@ -5,3 +5,4 @@ edition = "2021"
 
 [lib]
 crate-type = ["cdylib"]
+test = false

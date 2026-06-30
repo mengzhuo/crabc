@@ -2,6 +2,7 @@
 #![no_main]
 #![allow(dead_code, deref_nullptr)]
 
+#[cfg(not(test))]
 #[panic_handler]
 fn panic(_: &core::panic::PanicInfo) -> ! {
     loop {}
@@ -115,6 +116,7 @@ static mut TLS_MODULE_COUNT: usize = 0;
 // _start: self-relocate ldso, then call run_main(sp)
 // ============================================================
 
+#[cfg(not(test))]
 core::arch::global_asm!(
     ".global _start",
     ".type _start, @function",
