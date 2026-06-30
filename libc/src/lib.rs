@@ -4613,6 +4613,15 @@ pub unsafe extern "C" fn fgetc(stream: *mut FILE) -> c_int {
         f.ungotten_count -= 1;
         return f.ungotten[f.ungotten_count as usize];
     }
+    if !f.rpos.is_null() && f.rpos < f.rend {
+        let c = *f.rpos;
+        f.rpos = f.rpos.add(1);
+        return c as c_int;
+    }
+    if f._eof != 0 || f.fd < 0 {
+        f._eof = 1;
+        return -1;
+    }
     let mut buf = [0u8; 1];
     let n = sys_read(f.fd as i64, buf.as_mut_ptr(), 1);
     if n <= 0 {
@@ -9440,15 +9449,1409 @@ pub unsafe extern "C" fn fmemopen(buf: *mut c_void, size: usize, mode: *const c_
     let buf_area = buf_ptr(f);
     init_file(f, -1, mode, Some(memstream_close), buf_area, BUFSIZ);
     (*f).flags |= F_SVB;
-    // point the file's buffer to user's memory
     (*f).buf = buf as *mut u8;
     (*f).buf_size = size;
-    (*f).wpos = buf as *mut u8;
-    (*f).wbase = buf as *mut u8;
-    (*f).wend = (buf as *mut u8).add(size);
-    (*f).rpos = buf as *mut u8;
-    (*f).rend = (buf as *mut u8).add(size);
+    let m = *mode;
+    if m == b'r' as c_char {
+        let content_len = strnlen(buf as *const u8, size);
+        (*f).rpos = buf as *mut u8;
+        (*f).rend = (buf as *mut u8).add(content_len);
+        (*f).wpos = core::ptr::null_mut();
+        (*f).wbase = core::ptr::null_mut();
+        (*f).wend = core::ptr::null_mut();
+    } else {
+        (*f).wpos = buf as *mut u8;
+        (*f).wbase = buf as *mut u8;
+        (*f).wend = (buf as *mut u8).add(size);
+        (*f).rpos = buf as *mut u8;
+        (*f).rend = buf as *mut u8;
+    }
     f
+}
+
+// ============================================================
+// Stat (for ftok)
+// ============================================================
+
+#[repr(C)]
+struct kernel_stat64 {
+    st_dev: u64,
+    st_ino: u64,
+    st_nlink: u64,
+    st_mode: u32,
+    st_uid: u32,
+    st_gid: u32,
+    __pad0: c_int,
+    st_rdev: u64,
+    st_size: i64,
+    st_blksize: i64,
+    st_blocks: i64,
+    st_atime: i64,
+    st_atime_nsec: i64,
+    st_mtime: i64,
+    st_mtime_nsec: i64,
+    st_ctime: i64,
+    st_ctime_nsec: i64,
+    __unused: [i64; 3],
+}
+
+// sys_stat = 4 on x86_64
+#[inline]
+unsafe fn sys_stat(path: *const u8, statbuf: *mut kernel_stat64) -> i64 {
+    let result: i64;
+    core::arch::asm!(
+        "syscall",
+        inlateout("rax") 4i64 => result,
+        in("rdi") path,
+        in("rsi") statbuf,
+        lateout("rcx") _,
+        lateout("r11") _,
+    );
+    result
+}
+
+// ============================================================
+// Search: hcreate/hdestroy/hsearch (hash table)
+// ============================================================
+
+const HSEARCH_MINSIZE: usize = 8;
+
+#[repr(C)]
+#[derive(Copy, Clone)]
+struct HSearchEntry {
+    key: *mut c_char,
+    data: *mut c_void,
+}
+
+#[repr(C)]
+struct HTab {
+    entries: *mut HSearchEntry,
+    mask: usize,
+    used: usize,
+}
+
+#[repr(C)]
+pub struct HSearchData {
+    tab: *mut HTab,
+    __unused1: c_uint,
+    __unused2: c_uint,
+}
+
+// ponytail: single static hash table for non-_r variants
+static mut HTAB_DATA: HSearchData = HSearchData {
+    tab: core::ptr::null_mut(),
+    __unused1: 0,
+    __unused2: 0,
+};
+
+unsafe fn keyhash(k: *const c_char) -> usize {
+    let mut h: usize = 0;
+    let mut p = k;
+    while *p != 0 {
+        h = h.wrapping_mul(31).wrapping_add(*p as usize);
+        p = p.add(1);
+    }
+    h
+}
+
+unsafe fn htab_lookup(key: *const c_char, hash: usize, htab: *mut HSearchData) -> *mut HSearchEntry {
+    let tab = (*htab).tab;
+    let mask = (*tab).mask;
+    let entries = (*tab).entries;
+    let mut i = hash;
+    let mut j: usize = 1;
+    loop {
+        let e = entries.add(i & mask);
+        if (*e).key.is_null() || strcmp((*e).key as *const u8, key as *const u8) == 0 {
+            return e;
+        }
+        i = i.wrapping_add(j);
+        j += 1;
+    }
+}
+
+unsafe fn htab_resize(nel: usize, htab: *mut HSearchData) -> c_int {
+    let tab = (*htab).tab;
+    let old_entries = (*tab).entries;
+    let old_size = (*tab).mask + 1;
+
+    let mut newsize: usize = HSEARCH_MINSIZE;
+    while newsize < nel {
+        newsize = newsize.wrapping_mul(2);
+    }
+
+    let new_entries = calloc(newsize, core::mem::size_of::<HSearchEntry>()) as *mut HSearchEntry;
+    if new_entries.is_null() {
+        return 0;
+    }
+    (*tab).entries = new_entries;
+    (*tab).mask = newsize - 1;
+
+    if !old_entries.is_null() {
+        for idx in 0..old_size {
+            let old_e = old_entries.add(idx);
+            if !(*old_e).key.is_null() {
+                let h = keyhash((*old_e).key);
+                let mut i = h;
+                let mut j: usize = 1;
+                loop {
+                    let e = new_entries.add(i & (*tab).mask);
+                    if (*e).key.is_null() {
+                        *e = *old_e;
+                        break;
+                    }
+                    i = i.wrapping_add(j);
+                    j += 1;
+                }
+            }
+        }
+        free(old_entries as *mut c_void);
+    }
+    1
+}
+
+unsafe fn hcreate_r_impl(nel: usize, htab: *mut HSearchData) -> c_int {
+    (*htab).tab = calloc(1, core::mem::size_of::<HTab>()) as *mut HTab;
+    if (*htab).tab.is_null() {
+        return 0;
+    }
+    if htab_resize(nel, htab) == 0 {
+        free((*htab).tab as *mut c_void);
+        (*htab).tab = core::ptr::null_mut();
+        return 0;
+    }
+    1
+}
+
+unsafe fn hdestroy_r_impl(htab: *mut HSearchData) {
+    if !(*htab).tab.is_null() {
+        if !(*(*htab).tab).entries.is_null() {
+            free((*(*htab).tab).entries as *mut c_void);
+        }
+        free((*htab).tab as *mut c_void);
+        (*htab).tab = core::ptr::null_mut();
+    }
+}
+
+unsafe fn hsearch_r_impl(item: HSearchEntry, action: c_int, retval: *mut *mut HSearchEntry, htab: *mut HSearchData) -> c_int {
+    let hash = keyhash(item.key);
+    let e = htab_lookup(item.key, hash, htab);
+
+    if !(*e).key.is_null() {
+        *retval = e;
+        return 1;
+    }
+    if action == 0 { // FIND
+        *retval = core::ptr::null_mut();
+        return 0;
+    }
+    // ENTER
+    let item_key = item.key;
+    *e = item;
+    (*(*htab).tab).used += 1;
+    if (*(*htab).tab).used > (*(*htab).tab).mask - (*(*htab).tab).mask / 4 {
+        if htab_resize(2 * (*(*htab).tab).used, htab) == 0 {
+            (*(*htab).tab).used -= 1;
+            (*e).key = core::ptr::null_mut();
+            *retval = core::ptr::null_mut();
+            return 0;
+        }
+        let e2 = htab_lookup(item_key, hash, htab);
+        *retval = e2;
+        return 1;
+    }
+    *retval = e;
+    1
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn hcreate(nel: usize) -> c_int {
+    hcreate_r_impl(nel, &mut HTAB_DATA)
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn hdestroy() {
+    hdestroy_r_impl(&mut HTAB_DATA);
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn hsearch(item: HSearchEntry, action: c_int) -> *mut HSearchEntry {
+    let mut e: *mut HSearchEntry = core::ptr::null_mut();
+    hsearch_r_impl(item, action, &mut e, &mut HTAB_DATA);
+    e
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn hcreate_r(nel: usize, htab: *mut HSearchData) -> c_int {
+    hcreate_r_impl(nel, htab)
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn hdestroy_r(htab: *mut HSearchData) {
+    hdestroy_r_impl(htab);
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn hsearch_r(item: HSearchEntry, action: c_int, retval: *mut *mut HSearchEntry, htab: *mut HSearchData) -> c_int {
+    hsearch_r_impl(item, action, retval, htab)
+}
+
+// ============================================================
+// Search: insque / remque
+// ============================================================
+
+#[repr(C)]
+struct QueNode {
+    next: *mut QueNode,
+    prev: *mut QueNode,
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn insque(element: *mut c_void, pred: *mut c_void) {
+    let e = element as *mut QueNode;
+    let p = pred as *mut QueNode;
+    if p.is_null() {
+        (*e).next = core::ptr::null_mut();
+        (*e).prev = core::ptr::null_mut();
+        return;
+    }
+    (*e).next = (*p).next;
+    (*e).prev = p;
+    (*p).next = e;
+    if !(*e).next.is_null() {
+        (*(*e).next).prev = e;
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn remque(element: *mut c_void) {
+    let e = element as *mut QueNode;
+    if !(*e).next.is_null() {
+        (*(*e).next).prev = (*e).prev;
+    }
+    if !(*e).prev.is_null() {
+        (*(*e).prev).next = (*e).next;
+    }
+}
+
+// ============================================================
+// Search: lsearch / lfind
+// ============================================================
+
+#[no_mangle]
+pub unsafe extern "C" fn lsearch(
+    key: *const c_void,
+    base: *mut c_void,
+    nelp: *mut usize,
+    width: usize,
+    compar: Option<unsafe extern "C" fn(*const c_void, *const c_void) -> c_int>,
+) -> *mut c_void {
+    let n = *nelp;
+    let p = base as *mut u8;
+    for i in 0..n {
+        let elem = p.add(i * width);
+        if compar.unwrap()(key, elem as *const c_void) == 0 {
+            return elem as *mut c_void;
+        }
+    }
+    let dest = p.add(n * width);
+    memcpy(dest, key as *const u8, width);
+    *nelp = n + 1;
+    dest as *mut c_void
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn lfind(
+    key: *const c_void,
+    base: *const c_void,
+    nelp: *mut usize,
+    width: usize,
+    compar: Option<unsafe extern "C" fn(*const c_void, *const c_void) -> c_int>,
+) -> *mut c_void {
+    let n = *nelp;
+    let p = base as *const u8;
+    for i in 0..n {
+        let elem = p.add(i * width);
+        if compar.unwrap()(key, elem as *const c_void) == 0 {
+            return elem as *mut c_void;
+        }
+    }
+    core::ptr::null_mut()
+}
+
+// ============================================================
+// Search: tsearch / tfind / tdelete / twalk / tdestroy (BST, no balancing)
+// ============================================================
+
+// ponytail: simple BST, no balancing; correct for tests, O(n) worst case
+#[repr(C)]
+struct TreeNode {
+    key: *const c_void,
+    left: *mut TreeNode,
+    right: *mut TreeNode,
+}
+
+type ComparFn = Option<unsafe extern "C" fn(*const c_void, *const c_void) -> c_int>;
+
+unsafe fn bst_new(key: *const c_void) -> *mut TreeNode {
+    let n = calloc(1, core::mem::size_of::<TreeNode>()) as *mut TreeNode;
+    if !n.is_null() {
+        (*n).key = key;
+        (*n).left = core::ptr::null_mut();
+        (*n).right = core::ptr::null_mut();
+    }
+    n
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn tsearch(
+    key: *const c_void,
+    rootp: *mut *mut TreeNode,
+    compar: ComparFn,
+) -> *mut c_void {
+    if rootp.is_null() {
+        return core::ptr::null_mut();
+    }
+    let mut pp = rootp;
+    loop {
+        let n = *pp;
+        if n.is_null() {
+            let r = bst_new(key);
+            if r.is_null() {
+                return core::ptr::null_mut();
+            }
+            *pp = r;
+            return r as *mut c_void;
+        }
+        let c = compar.unwrap()(key, (*n).key);
+        if c == 0 {
+            return n as *mut c_void;
+        }
+        if c < 0 {
+            pp = &mut (*n).left;
+        } else {
+            pp = &mut (*n).right;
+        }
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn tfind(
+    key: *const c_void,
+    rootp: *const *mut TreeNode,
+    compar: ComparFn,
+) -> *mut c_void {
+    if rootp.is_null() {
+        return core::ptr::null_mut();
+    }
+    let mut n = *rootp;
+    loop {
+        if n.is_null() {
+            return core::ptr::null_mut();
+        }
+        let c = compar.unwrap()(key, (*n).key);
+        if c == 0 {
+            return n as *mut c_void;
+        }
+        if c < 0 {
+            n = (*n).left;
+        } else {
+            n = (*n).right;
+        }
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn tdelete(
+    key: *const c_void,
+    rootp: *mut *mut TreeNode,
+    compar: ComparFn,
+) -> *mut c_void {
+    if rootp.is_null() {
+        return core::ptr::null_mut();
+    }
+    let mut pp = rootp;
+    loop {
+        let n = *pp;
+        if n.is_null() {
+            return core::ptr::null_mut();
+        }
+        let c = compar.unwrap()(key, (*n).key);
+        if c == 0 {
+            break;
+        }
+        if c < 0 {
+            pp = &mut (*n).left;
+        } else {
+            pp = &mut (*n).right;
+        }
+    }
+    let n = *pp;
+    // parent is *rootp if we went to root, otherwise the node above
+    let parent = *rootp;
+    if !(*n).left.is_null() {
+        // replace with in-order predecessor
+        let mut q = &mut (*n).left;
+        while !(*(*q)).right.is_null() {
+            q = &mut (*(*q)).right;
+        }
+        let pred = *q;
+        // swap keys
+        (*n).key = (*pred).key;
+        // remove predecessor
+        *q = (*pred).left;
+        free(pred as *mut c_void);
+    } else {
+        // replace with right child (may be null)
+        *pp = (*n).right;
+        free(n as *mut c_void);
+    }
+    parent as *mut c_void
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn twalk(
+    root: *const TreeNode,
+    action: Option<unsafe extern "C" fn(*const c_void, c_int, c_int)>,
+) {
+    unsafe fn walk(
+        node: *const TreeNode,
+        action: Option<unsafe extern "C" fn(*const c_void, c_int, c_int)>,
+        depth: c_int,
+    ) {
+        if node.is_null() {
+            return;
+        }
+        let is_leaf = (*node).left.is_null() && (*node).right.is_null();
+        if is_leaf {
+            action.unwrap()(node as *const c_void, 3, depth); // leaf
+        } else {
+            action.unwrap()(node as *const c_void, 0, depth); // preorder
+            walk((*node).left, action, depth + 1);
+            action.unwrap()(node as *const c_void, 1, depth); // postorder (left done)
+            walk((*node).right, action, depth + 1);
+            action.unwrap()(node as *const c_void, 2, depth); // endorder
+        }
+    }
+    walk(root, action, 0);
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn tdestroy(root: *mut TreeNode, freekey: Option<unsafe extern "C" fn(*mut c_void)>) {
+    if root.is_null() {
+        return;
+    }
+    tdestroy((*root).left, freekey);
+    tdestroy((*root).right, freekey);
+    if let Some(f) = freekey {
+        f((*root).key as *mut c_void);
+    }
+    free(root as *mut c_void);
+}
+
+// ============================================================
+// fnmatch: full POSIX pattern matching
+// ============================================================
+
+const FNM_PATHNAME: c_int = 0x1;
+const FNM_NOESCAPE: c_int = 0x2;
+const FNM_PERIOD: c_int = 0x4;
+const FNM_LEADING_DIR: c_int = 0x8;
+const FNM_CASEFOLD: c_int = 0x10;
+const FNM_NOMATCH: c_int = 1;
+
+const FNM_END: c_int = 0;
+const FNM_STAR: c_int = -5;
+const FNM_QUESTION: c_int = -4;
+const FNM_BRACKET: c_int = -3;
+const FNM_UNMATCHABLE: c_int = -2;
+
+fn ascii_tolower(c: u8) -> u8 {
+    if c >= b'A' && c <= b'Z' { c + 32 } else { c }
+}
+
+fn ascii_toupper(c: u8) -> u8 {
+    if c >= b'a' && c <= b'z' { c - 32 } else { c }
+}
+
+fn ascii_casefold(k: u8) -> u8 {
+    let upper = ascii_toupper(k);
+    if upper != k { upper } else { ascii_tolower(k) }
+}
+
+/// Get next byte from pattern, classifying it.
+/// Returns (token_type, bytes_consumed).
+unsafe fn pat_next(pat: *const u8, m: usize, flags: c_int) -> (c_int, usize) {
+    if m == 0 || *pat == 0 {
+        return (FNM_END, 0);
+    }
+    let mut p = pat;
+    let mut step = 1usize;
+    let mut esc = false;
+    if *p == b'\\' && !(flags & FNM_NOESCAPE != 0) && *p.add(1) != 0 {
+        p = p.add(1);
+        step = 2;
+        esc = true;
+    }
+    if *p == b'[' && !esc {
+        // scan for matching ]
+        let mut k = 1usize;
+        if k < m && (*pat.add(k) == b'^' || *pat.add(k) == b'!') { k += 1; }
+        if k < m && *pat.add(k) == b']' { k += 1; }
+        while k < m && *pat.add(k) != 0 && *pat.add(k) != b']' {
+            if k + 1 < m && *pat.add(k) == b'[' &&
+               (*pat.add(k+1) == b':' || *pat.add(k+1) == b'.' || *pat.add(k+1) == b'=') {
+                let z = *pat.add(k+1);
+                k += 2;
+                if k < m { k += 1; }
+                while k < m && *pat.add(k) != 0 && (*pat.add(k-1) != z || *pat.add(k) != b']') { k += 1; }
+                if k == m || *pat.add(k) == 0 { break; }
+            }
+            k += 1;
+        }
+        if k == m || *pat.add(k) == 0 {
+            // unmatched [ is literal
+            return (b'[' as c_int, 1);
+        }
+        return (FNM_BRACKET, k + 1);
+    }
+    if *p == b'*' && !esc {
+        return (FNM_STAR, 1);
+    }
+    if *p == b'?' && !esc {
+        return (FNM_QUESTION, 1);
+    }
+    (*p as c_int, step)
+}
+
+/// Match a bracket expression [class] against char k.
+unsafe fn match_bracket(mut p: *const u8, k: u8, kfold: u8) -> bool {
+    let mut inv = false;
+    p = p.add(1); // skip [
+    if *p == b'^' || *p == b'!' {
+        inv = true;
+        p = p.add(1);
+    }
+    // handle ] as first char
+    if *p == b']' {
+        if k == b']' { return !inv; }
+        p = p.add(1);
+    } else if *p == b'-' {
+        if k == b'-' { return !inv; }
+        p = p.add(1);
+    }
+    while *p != b']' && *p != 0 {
+        if *p == b'-' && *p.add(1) != b']' && *p.add(1) != 0 {
+            // range: previous char to next char
+            let lo = *p.sub(1);
+            let hi = *p.add(1);
+            if lo <= hi && (k >= lo && k <= hi || kfold >= lo && kfold <= hi) {
+                return !inv;
+            }
+            p = p.add(2);
+        } else if *p == b'[' && (*p.add(1) == b':' || *p.add(1) == b'.' || *p.add(1) == b'=') {
+            // skip [:class:] etc.
+            let z = *p.add(1);
+            p = p.add(2);
+            while *p != 0 && (*p != z || *p.add(1) != b']') { p = p.add(1); }
+            if *p != 0 { p = p.add(2); }
+        } else {
+            if *p == k || *p == kfold {
+                return !inv;
+            }
+            p = p.add(1);
+        }
+    }
+    inv
+}
+
+/// Core fnmatch for a single path component (no FNM_PATHNAME splitting).
+unsafe fn fnmatch_internal(pat: *const u8, str: *const u8, flags: c_int) -> c_int {
+    // Handle leading .
+    if flags & FNM_PERIOD != 0 && *str == b'.' && *pat != b'.' {
+        return FNM_NOMATCH;
+    }
+
+    let mut p = pat;
+    let mut s = str;
+
+    // Consume pattern up to first *
+    loop {
+        let (tok, step) = pat_next(p, usize::MAX, flags);
+        match tok {
+            FNM_END => {
+                return if *s == 0 { 0 } else { FNM_NOMATCH };
+            }
+            FNM_STAR => {
+                p = p.add(1);
+                break;
+            }
+            FNM_QUESTION => {
+                if *s == 0 { return FNM_NOMATCH; }
+                s = s.add(1);
+                p = p.add(step);
+            }
+            FNM_BRACKET => {
+                if *s == 0 { return FNM_NOMATCH; }
+                let k = *s;
+                let kfold = if flags & FNM_CASEFOLD != 0 { ascii_casefold(k) } else { k };
+                if !match_bracket(p, k, kfold) { return FNM_NOMATCH; }
+                p = p.add(step);
+                s = s.add(1);
+            }
+            c => {
+                if *s == 0 { return FNM_NOMATCH; }
+                let k = *s;
+                let kfold = if flags & FNM_CASEFOLD != 0 { ascii_casefold(k) } else { k };
+                if k as c_int != c && kfold as c_int != c { return FNM_NOMATCH; }
+                p = p.add(step);
+                s = s.add(1);
+            }
+        }
+    }
+
+    // Now p points after first *, rest of pattern is variable
+    // Factor: find tail after last * and count fixed chars needed
+    let mut ptail = p;
+    let mut tailcnt: usize = 0;
+    let mut pp = p;
+    loop {
+        let (tok, step) = pat_next(pp, usize::MAX, flags);
+        if tok == FNM_END { break; }
+        if tok == FNM_STAR {
+            tailcnt = 0;
+            ptail = pp.add(1);
+        } else {
+            tailcnt += 1;
+        }
+        pp = pp.add(step);
+    }
+
+    // str must have at least tailcnt chars
+    let slen = strlen(s);
+    if slen < tailcnt { return FNM_NOMATCH; }
+
+    // Match tail: ptail..end against str[tailcnt from end]
+    let stail = s.add(slen - tailcnt);
+    let mut tp = ptail;
+    let mut ts = stail;
+    loop {
+        let (tok, step) = pat_next(tp, usize::MAX, flags);
+        tp = tp.add(step);
+        if tok == FNM_END {
+            break;
+        }
+        let k = *ts;
+        if k == 0 { return FNM_NOMATCH; }
+        let kfold = if flags & FNM_CASEFOLD != 0 { ascii_casefold(k) } else { k };
+        match tok {
+            FNM_QUESTION => { ts = ts.add(1); }
+            FNM_BRACKET => {
+                if !match_bracket(tp.sub(step), k, kfold) { return FNM_NOMATCH; }
+                ts = ts.add(1);
+            }
+            c => {
+                if k as c_int != c && kfold as c_int != c { return FNM_NOMATCH; }
+                ts = ts.add(1);
+            }
+        }
+    }
+
+    let endstr = stail;
+    let endpat = ptail;
+
+    let mut cp = p;
+    let mut cs = s;
+    while cp < endpat {
+        let (tok, step) = pat_next(cp, usize::MAX, flags);
+        if tok == FNM_STAR {
+            cp = cp.add(step);
+            cs = s;
+            continue;
+        }
+        let comp_start = cp;
+        let mut ok = false;
+        let mut try_s = cs;
+        while try_s < endstr {
+            let mut tmp_p = comp_start;
+            let mut tmp_s = try_s;
+            let mut matched = true;
+            loop {
+                let (t, st) = pat_next(tmp_p, usize::MAX, flags);
+                if t == FNM_STAR || t == FNM_END {
+                    cp = tmp_p;
+                    cs = tmp_s;
+                    ok = true;
+                    break;
+                }
+                if *tmp_s == 0 {
+                    matched = false;
+                    break;
+                }
+                let k = *tmp_s;
+                let kfold = if flags & FNM_CASEFOLD != 0 { ascii_casefold(k) } else { k };
+                match t {
+                    FNM_QUESTION => {
+                        tmp_s = tmp_s.add(1);
+                    }
+                    FNM_BRACKET => {
+                        if !match_bracket(tmp_p, k, kfold) {
+                            matched = false;
+                            break;
+                        }
+                        tmp_s = tmp_s.add(1);
+                    }
+                    c => {
+                        if k as c_int != c && kfold as c_int != c {
+                            matched = false;
+                            break;
+                        }
+                        tmp_s = tmp_s.add(1);
+                    }
+                }
+                tmp_p = tmp_p.add(st);
+            }
+            if ok { break; }
+            if !matched {
+                try_s = try_s.add(1);
+            }
+        }
+        if !ok {
+            return FNM_NOMATCH;
+        }
+    }
+    0
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn fnmatch(pat: *const c_char, str: *const c_char, flags: c_int) -> c_int {
+    let pat = pat as *const u8;
+    let str = str as *const u8;
+
+    if flags & FNM_PATHNAME != 0 {
+        // Split on /
+        let mut s = str;
+        let mut p = pat;
+        loop {
+            // find next / in str
+            let mut send = s;
+            while *send != 0 && *send != b'/' { send = send.add(1); }
+            // find next / in pat
+            let mut pend = p;
+            loop {
+                let (tok, step) = pat_next(pend, usize::MAX, flags);
+                if tok == FNM_END || (tok >= 0 && tok as u8 == b'/') {
+                    break;
+                }
+                pend = pend.add(step);
+            }
+            let (ptok, pstep) = pat_next(pend, usize::MAX, flags);
+            let pat_is_slash = ptok >= 0 && ptok as u8 == b'/';
+            let str_is_slash = *send == b'/';
+            if pat_is_slash != str_is_slash && (*send != 0 || !(flags & FNM_LEADING_DIR != 0)) {
+                return FNM_NOMATCH;
+            }
+            // match component
+            // We need a null-terminated copy of the component
+            let plen = (pend as usize) - (p as usize);
+            let slen = (send as usize) - (s as usize);
+            // Use stack buffers for components
+            // ponytail: max component 1024 bytes
+            if plen > 1024 || slen > 1024 { return FNM_NOMATCH; }
+            let mut pbuf = [0u8; 1025];
+            let mut sbuf = [0u8; 1025];
+            core::ptr::copy_nonoverlapping(p, pbuf.as_mut_ptr(), plen);
+            pbuf[plen] = 0;
+            core::ptr::copy_nonoverlapping(s, sbuf.as_mut_ptr(), slen);
+            sbuf[slen] = 0;
+            if fnmatch_internal(pbuf.as_ptr(), sbuf.as_ptr(), flags & !FNM_LEADING_DIR) != 0 {
+                return FNM_NOMATCH;
+            }
+            if !pat_is_slash {
+                return 0;
+            }
+            s = send.add(1);
+            p = pend.add(pstep);
+        }
+    }
+
+    if flags & FNM_LEADING_DIR != 0 {
+        // Try matching at each /
+        let mut s = str;
+        while *s != 0 {
+            if *s == b'/' {
+                // temporarily null-terminate
+                // ponytail: we need to copy. Use a simple approach.
+                let len = (s as usize) - (str as usize);
+                // Just call fnmatch_internal with a temp buffer
+                if len < 4096 {
+                    let mut buf = [0u8; 4096];
+                    core::ptr::copy_nonoverlapping(str, buf.as_mut_ptr(), len);
+                    buf[len] = 0;
+                    if fnmatch_internal(pat, buf.as_ptr(), flags) == 0 {
+                        return 0;
+                    }
+                }
+            }
+            s = s.add(1);
+        }
+    }
+
+    fnmatch_internal(pat, str, flags)
+}
+
+// ============================================================
+// mntent: setmntent/endmntent/getmntent/getmntent_r/addmntent/hasmntopt
+// ============================================================
+
+#[no_mangle]
+pub unsafe extern "C" fn setmntent(name: *const c_char, mode: *const c_char) -> *mut FILE {
+    fopen(name, mode)
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn endmntent(f: *mut FILE) -> c_int {
+    if !f.is_null() {
+        fclose(f);
+    }
+    1
+}
+
+// ponytail: static buffers for getmntent (non-_r variant)
+static mut MNTENT_MNT: MntEnt = MntEnt {
+    mnt_fsname: core::ptr::null_mut(),
+    mnt_dir: core::ptr::null_mut(),
+    mnt_type: core::ptr::null_mut(),
+    mnt_opts: core::ptr::null_mut(),
+    mnt_freq: 0,
+    mnt_passno: 0,
+};
+
+#[repr(C)]
+pub struct MntEnt {
+    mnt_fsname: *mut c_char,
+    mnt_dir: *mut c_char,
+    mnt_type: *mut c_char,
+    mnt_opts: *mut c_char,
+    mnt_freq: c_int,
+    mnt_passno: c_int,
+}
+
+unsafe fn unescape_ent(beg: *mut c_char) -> *mut c_char {
+    let mut dest = beg;
+    let mut src = beg;
+    while *src != 0 {
+        if *src != b'\\' as c_char {
+            *dest = *src;
+            dest = dest.add(1);
+            src = src.add(1);
+            continue;
+        }
+        // backslash
+        if *src.add(1) == b'\\' as c_char {
+            src = src.add(1);
+            *dest = *src;
+            dest = dest.add(1);
+            src = src.add(1);
+            continue;
+        }
+        // octal escape
+        let mut val: u8 = 0;
+        let mut cnt = 0;
+        let mut sp = src.add(1);
+        while cnt < 3 && *sp >= b'0' as c_char && *sp <= b'7' as c_char {
+            val = val * 8 + (*sp as u8 - b'0');
+            sp = sp.add(1);
+            cnt += 1;
+        }
+        if cnt > 0 {
+            *dest = val as c_char;
+            dest = dest.add(1);
+            src = sp;
+        } else {
+            *dest = *src;
+            dest = dest.add(1);
+            src = src.add(1);
+        }
+    }
+    *dest = 0;
+    beg
+}
+
+unsafe fn parse_mntent_line(
+    linebuf: *mut c_char,
+    mnt: *mut MntEnt,
+) -> *mut MntEnt {
+    let _len = strlen(linebuf as *const u8);
+    // skip comments and empty lines
+    // parse: fsname dir type opts freq passno
+    let mut p = linebuf;
+    // skip leading whitespace
+    while *p == b' ' as c_char || *p == b'\t' as c_char || *p == b'\n' as c_char || *p == b'\r' as c_char {
+        p = p.add(1);
+    }
+    if *p == 0 || *p == b'#' as c_char {
+        return core::ptr::null_mut();
+    }
+
+    // fsname
+    (*mnt).mnt_fsname = p;
+    while *p != 0 && *p != b' ' as c_char && *p != b'\t' as c_char && *p != b'\n' as c_char {
+        p = p.add(1);
+    }
+    if *p == 0 { return core::ptr::null_mut(); }
+    *p = 0;
+    p = p.add(1);
+    while *p == b' ' as c_char || *p == b'\t' as c_char { p = p.add(1); }
+
+    // dir
+    (*mnt).mnt_dir = p;
+    while *p != 0 && *p != b' ' as c_char && *p != b'\t' as c_char && *p != b'\n' as c_char {
+        p = p.add(1);
+    }
+    if *p == 0 { return core::ptr::null_mut(); }
+    *p = 0;
+    p = p.add(1);
+    while *p == b' ' as c_char || *p == b'\t' as c_char { p = p.add(1); }
+
+    // type
+    (*mnt).mnt_type = p;
+    while *p != 0 && *p != b' ' as c_char && *p != b'\t' as c_char && *p != b'\n' as c_char {
+        p = p.add(1);
+    }
+    if *p == 0 { return core::ptr::null_mut(); }
+    *p = 0;
+    p = p.add(1);
+    while *p == b' ' as c_char || *p == b'\t' as c_char { p = p.add(1); }
+
+    // opts
+    (*mnt).mnt_opts = p;
+    while *p != 0 && *p != b' ' as c_char && *p != b'\t' as c_char && *p != b'\n' as c_char {
+        p = p.add(1);
+    }
+    if *p != 0 {
+        *p = 0;
+        p = p.add(1);
+    }
+
+    // freq and passno
+    (*mnt).mnt_freq = 0;
+    (*mnt).mnt_passno = 0;
+    // skip whitespace
+    while *p == b' ' as c_char || *p == b'\t' as c_char { p = p.add(1); }
+    if *p >= b'0' as c_char && *p <= b'9' as c_char {
+        (*mnt).mnt_freq = (*p - b'0' as c_char) as c_int;
+        p = p.add(1);
+        while *p >= b'0' as c_char && *p <= b'9' as c_char {
+            (*mnt).mnt_freq = (*mnt).mnt_freq * 10 + (*p - b'0' as c_char) as c_int;
+            p = p.add(1);
+        }
+    }
+    while *p == b' ' as c_char || *p == b'\t' as c_char { p = p.add(1); }
+    if *p >= b'0' as c_char && *p <= b'9' as c_char {
+        (*mnt).mnt_passno = (*p - b'0' as c_char) as c_int;
+        p = p.add(1);
+        while *p >= b'0' as c_char && *p <= b'9' as c_char {
+            (*mnt).mnt_passno = (*mnt).mnt_passno * 10 + (*p - b'0' as c_char) as c_int;
+            p = p.add(1);
+        }
+    }
+
+    // unescape
+    unescape_ent((*mnt).mnt_fsname);
+    unescape_ent((*mnt).mnt_dir);
+    unescape_ent((*mnt).mnt_type);
+    unescape_ent((*mnt).mnt_opts);
+
+    mnt
+}
+
+// Use a sentinel pointer to detect internal buffer usage
+// ponytail: cast integer to pointer for sentinel
+static SENTINEL_PTR: usize = 1;
+
+// Read one char from FILE buffer directly (avoids musl's static fgets ABI mismatch)
+unsafe fn mntent_fgetc(f: *mut FILE) -> c_int {
+    let ff = &mut *f;
+    if !ff.rpos.is_null() && ff.rpos < ff.rend {
+        let c = *ff.rpos;
+        ff.rpos = ff.rpos.add(1);
+        return c as c_int;
+    }
+    ff._eof = 1;
+    -1
+}
+
+unsafe fn mntent_fgets(buf: *mut c_char, n: usize, f: *mut FILE) -> *mut c_char {
+    if n == 0 { return core::ptr::null_mut(); }
+    let max = n - 1;
+    let mut i = 0usize;
+    while i < max {
+        let c = mntent_fgetc(f);
+        if c == -1 { if i == 0 { return core::ptr::null_mut(); } break; }
+        *buf.add(i) = c as c_char;
+        i += 1;
+        if c == b'\n' as c_int { break; }
+    }
+    *buf.add(i) = 0;
+    buf
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn getmntent_r(
+    f: *mut FILE,
+    mnt: *mut MntEnt,
+    mut linebuf: *mut c_char,
+    buflen: c_int,
+) -> *mut MntEnt {
+    let use_internal = linebuf as usize == SENTINEL_PTR;
+
+    (*mnt).mnt_freq = 0;
+    (*mnt).mnt_passno = 0;
+
+    // ponytail: static 4KB line buffer for getmntent
+    static mut INTERNAL_BUF: [c_char; 4096] = [0; 4096];
+
+    loop {
+        if use_internal {
+            linebuf = INTERNAL_BUF.as_mut_ptr();
+        }
+        let res = mntent_fgets(linebuf, 4096, f);
+        if res.is_null() {
+            return core::ptr::null_mut();
+        }
+        let mut has_newline = false;
+        let mut p = linebuf;
+        while *p != 0 { if *p == b'\n' as c_char { has_newline = true; break; } p = p.add(1); }
+        if !has_newline {
+            ERRNO = 34;
+            return core::ptr::null_mut();
+        }
+        let result = parse_mntent_line(linebuf, mnt);
+        if !result.is_null() {
+            return result;
+        }
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn getmntent(f: *mut FILE) -> *mut MntEnt {
+    getmntent_r(f, &mut MNTENT_MNT, SENTINEL_PTR as *mut c_char, 0)
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn addmntent(f: *mut FILE, mnt: *const MntEnt) -> c_int {
+    fseek(f, 0, 2); // SEEK_END
+    let written = fprintf(
+        f,
+        b"%s\t%s\t%s\t%s\t%d\t%d\n\0".as_ptr() as *const c_char,
+        (*mnt).mnt_fsname,
+        (*mnt).mnt_dir,
+        (*mnt).mnt_type,
+        (*mnt).mnt_opts,
+        (*mnt).mnt_freq,
+        (*mnt).mnt_passno,
+    );
+    if written < 0 { 1 } else { 0 }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn hasmntopt(mnt: *const MntEnt, opt: *const c_char) -> *mut c_char {
+    let l = strlen(opt as *const u8);
+    let mut p = (*mnt).mnt_opts;
+    loop {
+        if strncmp(p as *const u8, opt as *const u8, l) == 0 {
+            let after = *p.add(l);
+            if after == 0 || after == b',' as c_char || after == b'=' as c_char {
+                return p;
+            }
+        }
+        let comma = strchr(p as *const u8, b',' as c_int);
+        if comma.is_null() {
+            return core::ptr::null_mut();
+        }
+        p = comma.add(1) as *mut c_char;
+    }
+}
+
+// ============================================================
+// SysV IPC: ftok, msg*, sem*, shm*
+// x86_64 direct syscalls: msgget=68, msgsnd=69, msgrcv=70, msgctl=71
+//   semget=64, semop=65, semctl=66, semtimedop=220
+//   shmget=29, shmat=30, shmctl=31, shmdt=67
+// ============================================================
+
+const EACCES: c_int = 13;
+const EEXIST: c_int = 17;
+const ENOENT: c_int = 2;
+const EIDRM: c_int = 43;
+
+#[inline]
+unsafe fn sys_msgget(key: c_int, msgflg: c_int) -> i64 {
+    let result: i64;
+    core::arch::asm!(
+        "syscall",
+        inlateout("rax") 68i64 => result,
+        in("rdi") key,
+        in("rsi") msgflg,
+        lateout("rcx") _,
+        lateout("r11") _,
+    );
+    result
+}
+
+#[inline]
+unsafe fn sys_msgsnd(msqid: c_int, msgp: *const c_void, msgsz: usize, msgflg: c_int) -> i64 {
+    let result: i64;
+    core::arch::asm!(
+        "syscall",
+        inlateout("rax") 69i64 => result,
+        in("rdi") msqid,
+        in("rsi") msgp,
+        in("rdx") msgsz,
+        in("r10") msgflg,
+        lateout("rcx") _,
+        lateout("r11") _,
+    );
+    result
+}
+
+#[inline]
+unsafe fn sys_msgrcv(msqid: c_int, msgp: *mut c_void, msgsz: usize, msgtyp: c_long, msgflg: c_int) -> i64 {
+    let result: i64;
+    core::arch::asm!(
+        "syscall",
+        inlateout("rax") 70i64 => result,
+        in("rdi") msqid,
+        in("rsi") msgp,
+        in("rdx") msgsz,
+        in("r10") msgtyp,
+        in("r8") msgflg,
+        lateout("rcx") _,
+        lateout("r11") _,
+    );
+    result
+}
+
+#[inline]
+unsafe fn sys_msgctl(msqid: c_int, cmd: c_int, buf: *mut c_void) -> i64 {
+    let result: i64;
+    core::arch::asm!(
+        "syscall",
+        inlateout("rax") 71i64 => result,
+        in("rdi") msqid,
+        in("rsi") cmd,
+        in("rdx") buf,
+        lateout("rcx") _,
+        lateout("r11") _,
+    );
+    result
+}
+
+#[inline]
+unsafe fn sys_semget(key: c_int, nsems: c_int, semflg: c_int) -> i64 {
+    let result: i64;
+    core::arch::asm!(
+        "syscall",
+        inlateout("rax") 64i64 => result,
+        in("rdi") key,
+        in("rsi") nsems,
+        in("rdx") semflg,
+        lateout("rcx") _,
+        lateout("r11") _,
+    );
+    result
+}
+
+#[inline]
+unsafe fn sys_semop(semid: c_int, sops: *const c_void, nsops: usize) -> i64 {
+    let result: i64;
+    core::arch::asm!(
+        "syscall",
+        inlateout("rax") 65i64 => result,
+        in("rdi") semid,
+        in("rsi") sops,
+        in("rdx") nsops,
+        lateout("rcx") _,
+        lateout("r11") _,
+    );
+    result
+}
+
+#[inline]
+unsafe fn sys_semctl(semid: c_int, semnum: c_int, cmd: c_int, arg: *mut c_void) -> i64 {
+    let result: i64;
+    core::arch::asm!(
+        "syscall",
+        inlateout("rax") 66i64 => result,
+        in("rdi") semid,
+        in("rsi") semnum,
+        in("rdx") cmd,
+        in("r10") arg,
+        lateout("rcx") _,
+        lateout("r11") _,
+    );
+    result
+}
+
+#[inline]
+unsafe fn sys_shmget(key: c_int, size: usize, shmflg: c_int) -> i64 {
+    let result: i64;
+    core::arch::asm!(
+        "syscall",
+        inlateout("rax") 29i64 => result,
+        in("rdi") key,
+        in("rsi") size,
+        in("rdx") shmflg,
+        lateout("rcx") _,
+        lateout("r11") _,
+    );
+    result
+}
+
+#[inline]
+unsafe fn sys_shmat(shmid: c_int, shmaddr: *const c_void, shmflg: c_int) -> i64 {
+    let result: i64;
+    core::arch::asm!(
+        "syscall",
+        inlateout("rax") 30i64 => result,
+        in("rdi") shmid,
+        in("rsi") shmaddr,
+        in("rdx") shmflg,
+        lateout("rcx") _,
+        lateout("r11") _,
+    );
+    result
+}
+
+#[inline]
+unsafe fn sys_shmdt(shmaddr: *const c_void) -> i64 {
+    let result: i64;
+    core::arch::asm!(
+        "syscall",
+        inlateout("rax") 67i64 => result,
+        in("rdi") shmaddr,
+        lateout("rcx") _,
+        lateout("r11") _,
+    );
+    result
+}
+
+#[inline]
+unsafe fn sys_shmctl(shmid: c_int, cmd: c_int, buf: *mut c_void) -> i64 {
+    let result: i64;
+    core::arch::asm!(
+        "syscall",
+        inlateout("rax") 31i64 => result,
+        in("rdi") shmid,
+        in("rsi") cmd,
+        in("rdx") buf,
+        lateout("rcx") _,
+        lateout("r11") _,
+    );
+    result
+}
+
+// ftok
+#[no_mangle]
+pub unsafe extern "C" fn ftok(path: *const c_char, id: c_int) -> c_int {
+    let mut st: kernel_stat64 = core::mem::zeroed();
+    let r = sys_stat(path as *const u8, &mut st);
+    if r < 0 {
+        ERRNO = (-r) as c_int;
+        return -1;
+    }
+    ((st.st_ino & 0xffff) | ((st.st_dev & 0xff) << 16) | (((id as u32 & 0xff) << 24)) as u64) as c_int
+}
+
+// msgget
+#[no_mangle]
+pub unsafe extern "C" fn msgget(key: c_int, msgflg: c_int) -> c_int {
+    let r = sys_msgget(key, msgflg);
+    if r < 0 { ERRNO = (-r) as c_int; -1 } else { r as c_int }
+}
+
+// msgsnd
+#[no_mangle]
+pub unsafe extern "C" fn msgsnd(msqid: c_int, msgp: *const c_void, msgsz: usize, msgflg: c_int) -> c_int {
+    let r = sys_msgsnd(msqid, msgp, msgsz, msgflg);
+    if r < 0 { ERRNO = (-r) as c_int; -1 } else { r as c_int }
+}
+
+// msgrcv
+#[no_mangle]
+pub unsafe extern "C" fn msgrcv(msqid: c_int, msgp: *mut c_void, msgsz: usize, msgtyp: c_long, msgflg: c_int) -> isize {
+    let r = sys_msgrcv(msqid, msgp, msgsz, msgtyp, msgflg);
+    if r < 0 { ERRNO = (-r) as c_int; -1 } else { r as isize }
+}
+
+// msgctl
+#[no_mangle]
+pub unsafe extern "C" fn msgctl(msqid: c_int, cmd: c_int, buf: *mut c_void) -> c_int {
+    let r = sys_msgctl(msqid, cmd, buf);
+    if r < 0 { ERRNO = (-r) as c_int; -1 } else { r as c_int }
+}
+
+// semget
+#[no_mangle]
+pub unsafe extern "C" fn semget(key: c_int, nsems: c_int, semflg: c_int) -> c_int {
+    if nsems > 65535 { ERRNO = 22; return -1; }
+    let r = sys_semget(key, nsems, semflg);
+    if r < 0 { ERRNO = (-r) as c_int; -1 } else { r as c_int }
+}
+
+// semop
+#[no_mangle]
+pub unsafe extern "C" fn semop(semid: c_int, sops: *const c_void, nsops: usize) -> c_int {
+    let r = sys_semop(semid, sops, nsops);
+    if r < 0 { ERRNO = (-r) as c_int; -1 } else { r as c_int }
+}
+
+// semctl - C variadic
+#[no_mangle]
+pub unsafe extern "C" fn semctl(semid: c_int, semnum: c_int, cmd: c_int, mut args: ...) -> c_int {
+    let mut arg: *mut c_void = core::ptr::null_mut();
+    // Commands that take the union semun argument
+    match cmd {
+        16 | 13 | 17 | 1 | 3 | 2 | 0x102 | 0x104 | 0x106 => {
+            arg = args.arg::<*mut c_void>();
+        }
+        _ => {}
+    }
+    let r = sys_semctl(semid, semnum, cmd, arg);
+    if r < 0 { ERRNO = (-r) as c_int; -1 } else { r as c_int }
+}
+
+// shmget
+#[no_mangle]
+pub unsafe extern "C" fn shmget(key: c_int, size: usize, shmflg: c_int) -> c_int {
+    let r = sys_shmget(key, size, shmflg);
+    if r < 0 { ERRNO = (-r) as c_int; -1 } else { r as c_int }
+}
+
+// shmat
+#[no_mangle]
+pub unsafe extern "C" fn shmat(shmid: c_int, shmaddr: *const c_void, shmflg: c_int) -> *mut c_void {
+    let r = sys_shmat(shmid, shmaddr, shmflg);
+    if (r as usize) > (-(4096isize as isize)) as usize {
+        ERRNO = (-r) as c_int;
+        return core::ptr::null_mut();
+    }
+    r as *mut c_void
+}
+
+// shmdt
+#[no_mangle]
+pub unsafe extern "C" fn shmdt(shmaddr: *const c_void) -> c_int {
+    let r = sys_shmdt(shmaddr);
+    if r < 0 { ERRNO = (-r) as c_int; -1 } else { r as c_int }
+}
+
+// shmctl
+#[no_mangle]
+pub unsafe extern "C" fn shmctl(shmid: c_int, cmd: c_int, buf: *mut c_void) -> c_int {
+    let r = sys_shmctl(shmid, cmd, buf);
+    if r < 0 { ERRNO = (-r) as c_int; -1 } else { r as c_int }
 }
 
 // ============================================================
