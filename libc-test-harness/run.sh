@@ -10,6 +10,7 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 LIBRC_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 LIBC_TEST_DIR="${LIBC_TEST_DIR:-/home/root/libc-test}"
 LIBC_SO="${LIBRC_DIR}/target/debug/libc.so"
+LDSO_SO="${LIBRC_DIR}/target/debug/libldso.so"
 FAKE_LIBS="${SCRIPT_DIR}/fake-libs"
 BUILD_DIR="${SCRIPT_DIR}/build"
 REPORT_DIR="${SCRIPT_DIR}/reports"
@@ -19,11 +20,12 @@ SUBSET="${1:-functional}"
 mkdir -p "$FAKE_LIBS" "$BUILD_DIR" "$REPORT_DIR"
 
 
-if [ ! -f "$LIBC_SO" ]; then
+if [ ! -f "$LIBC_SO" ] || [ ! -f "$LDSO_SO" ]; then
     echo ">>> Building librc..."
     (cd "$LIBRC_DIR" && cargo build 2>&1) || { echo "FATAL: cargo build failed"; exit 1; }
 fi
 echo ">>> Using libc.so: $LIBC_SO"
+echo ">>> Using libldso.so: $LDSO_SO"
 
 echo ">>> Setting up fake-libs..."
 for lib in libc libpthread libm librt libcrypt libdl libresolv libutil; do
@@ -121,6 +123,7 @@ for dir in $DIRS; do
         EXE="$DIR_BUILD/${base}.exe"
         LINK_RC=0
         musl-gcc -L"$FAKE_LIBS" -g -o "$EXE" \
+            -Wl,--dynamic-linker="$LDSO_SO" \
             "$OBJ" "$COMMON_BUILD/libtest.a" \
             -lpthread -lm -lrt -lcrypt -ldl -lresolv -lutil \
             2>"$DIR_BUILD/${base}.ld.err" || LINK_RC=$?
