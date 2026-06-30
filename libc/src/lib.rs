@@ -339,6 +339,28 @@ pub unsafe extern "C" fn strncat(dst: *mut u8, src: *const u8, n: usize) -> *mut
 }
 
 #[no_mangle]
+pub unsafe extern "C" fn strlcpy(dst: *mut u8, src: *const u8, n: usize) -> usize {
+    let l = strlen(src);
+    if n > 0 {
+        let c = if l < n { l } else { n - 1 };
+        core::ptr::copy_nonoverlapping(src, dst, c);
+        *dst.add(c) = 0;
+    }
+    l
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn strlcat(dst: *mut u8, src: *const u8, n: usize) -> usize {
+    let dl = strlen(dst);
+    let sl = strlen(src);
+    if dl >= n { return n + sl; }
+    let c = if sl < n - dl { sl } else { n - dl - 1 };
+    core::ptr::copy_nonoverlapping(src, dst.add(dl), c);
+    *dst.add(dl + c) = 0;
+    dl + sl
+}
+
+#[no_mangle]
 pub unsafe extern "C" fn strchr(s: *const u8, c: c_int) -> *mut u8 {
     let target = c as u8;
     let mut i = 0;
@@ -503,6 +525,24 @@ pub unsafe extern "C" fn memrchr(s: *const u8, c: c_int, n: usize) -> *mut u8 {
         i -= 1;
         if *s.add(i) == target {
             return s.add(i) as *mut u8;
+        }
+    }
+    null_mut()
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn memmem(
+    haystack: *const c_void, haystacklen: usize,
+    needle: *const c_void, needlelen: usize,
+) -> *mut c_void {
+    if needlelen == 0 { return haystack as *mut c_void; }
+    if haystacklen < needlelen { return null_mut(); }
+    let h = haystack as *const u8;
+    let n = needle as *const u8;
+    let last = haystacklen - needlelen;
+    for i in 0..=last {
+        if *h.add(i) == *n && memcmp(h.add(i), n, needlelen) == 0 {
+            return h.add(i) as *mut c_void;
         }
     }
     null_mut()
@@ -1515,6 +1555,84 @@ pub unsafe extern "C" fn longjmp(env: *const c_ulong, val: c_int) -> ! {
 }
 
 // ============================================================
+// syscall wrappers: fstat/newfstatat/getrlimit/setrlimit/utimensat
+// ============================================================
+
+#[inline]
+unsafe fn sys_newfstatat(dirfd: i32, path: *const c_char, buf: *mut u8, flags: i32) -> i64 {
+    let result: i64;
+    core::arch::asm!(
+        "syscall",
+        inlateout("rax") 262i64 => result,
+        in("rdi") dirfd as i64,
+        in("rsi") path,
+        in("rdx") buf,
+        in("r10") flags as i64,
+        lateout("rcx") _,
+        lateout("r11") _,
+    );
+    result
+}
+
+#[inline]
+unsafe fn sys_fstat(fd: i32, buf: *mut u8) -> i64 {
+    let result: i64;
+    core::arch::asm!(
+        "syscall",
+        inlateout("rax") 5i64 => result,
+        in("rdi") fd as i64,
+        in("rsi") buf,
+        lateout("rcx") _,
+        lateout("r11") _,
+    );
+    result
+}
+
+#[inline]
+unsafe fn sys_getrlimit(resource: i32, rlim: *mut u8) -> i64 {
+    let result: i64;
+    core::arch::asm!(
+        "syscall",
+        inlateout("rax") 97i64 => result,
+        in("rdi") resource as i64,
+        in("rsi") rlim,
+        lateout("rcx") _,
+        lateout("r11") _,
+    );
+    result
+}
+
+#[inline]
+unsafe fn sys_setrlimit(resource: i32, rlim: *const u8) -> i64 {
+    let result: i64;
+    core::arch::asm!(
+        "syscall",
+        inlateout("rax") 160i64 => result,
+        in("rdi") resource as i64,
+        in("rsi") rlim,
+        lateout("rcx") _,
+        lateout("r11") _,
+    );
+    result
+}
+
+#[inline]
+unsafe fn sys_utimensat(dirfd: i32, path: *const c_char, times: *const u8, flags: i32) -> i64 {
+    let result: i64;
+    core::arch::asm!(
+        "syscall",
+        inlateout("rax") 280i64 => result,
+        in("rdi") dirfd as i64,
+        in("rsi") path,
+        in("rdx") times,
+        in("r10") flags as i64,
+        lateout("rcx") _,
+        lateout("r11") _,
+    );
+    result
+}
+
+// ============================================================
 // unistd.h: process primitives
 // ============================================================
 
@@ -1668,6 +1786,130 @@ pub unsafe extern "C" fn geteuid() -> c_uint {
 #[no_mangle]
 pub unsafe extern "C" fn getegid() -> c_uint {
     sys_getegid() as c_uint
+}
+
+// ponytail: vfork forwards to fork; real vfork optimization not needed for tests
+#[no_mangle]
+pub unsafe extern "C" fn vfork() -> c_int {
+    sys_fork() as c_int
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn execl(path: *const c_char, arg: *const c_char, mut args: ...) -> c_int {
+    let mut argv: [*const c_char; 256] = [core::ptr::null(); 256];
+    argv[0] = arg;
+    let mut n: usize = 1;
+    loop {
+        let a: *const c_char = args.arg();
+        if a.is_null() { break; }
+        if n >= 255 { return -1; }
+        argv[n] = a;
+        n += 1;
+    }
+    argv[n] = core::ptr::null();
+    sys_execve(path, argv.as_ptr(), __environ as *const *const c_char) as c_int
+}
+
+// ============================================================
+// sys/stat.h: stat / fstat / utimensat / futimens
+// ============================================================
+
+#[repr(C)]
+pub struct Stat {
+    pub st_dev: u64,
+    pub st_ino: u64,
+    pub st_nlink: u64,
+    pub st_mode: u32,
+    pub st_uid: u32,
+    pub st_gid: u32,
+    _pad0: u32,
+    pub st_rdev: u64,
+    pub st_size: i64,
+    pub st_blksize: i64,
+    pub st_blocks: i64,
+    pub st_atim: timespec,
+    pub st_mtim: timespec,
+    pub st_ctim: timespec,
+    _unused: [i64; 3],
+}
+
+pub const S_IFMT: u32 = 0o170000;
+pub const S_IFDIR: u32 = 0o040000;
+pub const S_IFCHR: u32 = 0o020000;
+pub const S_IFBLK: u32 = 0o060000;
+pub const S_IFREG: u32 = 0o100000;
+pub const S_IFLNK: u32 = 0o120000;
+pub const S_IFIFO: u32 = 0o010000;
+pub const S_IFSOCK: u32 = 0o140000;
+
+pub const AT_FDCWD: i32 = -100;
+
+#[no_mangle]
+pub unsafe extern "C" fn stat(path: *const c_char, buf: *mut Stat) -> c_int {
+    let r = sys_newfstatat(AT_FDCWD, path, buf as *mut u8, 0);
+    if r < 0 { ERRNO = (-r) as c_int; -1 } else { 0 }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn fstat(fd: c_int, buf: *mut Stat) -> c_int {
+    let r = sys_fstat(fd, buf as *mut u8);
+    if r < 0 { ERRNO = (-r) as c_int; -1 } else { 0 }
+}
+
+// ============================================================
+// sys/resource.h: getrlimit / setrlimit
+// ============================================================
+
+#[repr(C)]
+pub struct Rlimit {
+    pub rlim_cur: u64,
+    pub rlim_max: u64,
+}
+
+pub const RLIMIT_NOFILE: c_int = 7;
+pub const RLIMIT_STACK: c_int = 3;
+pub const RLIMIT_DATA: c_int = 2;
+pub const RLIMIT_AS: c_int = 9;
+pub const RLIMIT_CPU: c_int = 0;
+pub const RLIMIT_FSIZE: c_int = 1;
+pub const RLIMIT_CORE: c_int = 4;
+pub const RLIMIT_RSS: c_int = 5;
+pub const RLIMIT_NPROC: c_int = 6;
+pub const RLIMIT_MEMLOCK: c_int = 8;
+pub const RLIMIT_LOCKS: c_int = 10;
+pub const RLIMIT_SIGPENDING: c_int = 11;
+pub const RLIMIT_MSGQUEUE: c_int = 12;
+pub const RLIMIT_NICE: c_int = 13;
+pub const RLIMIT_RTPRIO: c_int = 14;
+pub const RLIMIT_RTTIME: c_int = 15;
+pub const RLIM_INFINITY: u64 = !0u64;
+
+#[no_mangle]
+pub unsafe extern "C" fn getrlimit(resource: c_int, rlim: *mut Rlimit) -> c_int {
+    let r = sys_getrlimit(resource, rlim as *mut u8);
+    if r < 0 { ERRNO = (-r) as c_int; -1 } else { 0 }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn setrlimit(resource: c_int, rlim: *const Rlimit) -> c_int {
+    let r = sys_setrlimit(resource, rlim as *const u8);
+    if r < 0 { ERRNO = (-r) as c_int; -1 } else { 0 }
+}
+
+// ============================================================
+// utimensat / futimens
+// ============================================================
+
+#[no_mangle]
+pub unsafe extern "C" fn utimensat(dirfd: c_int, path: *const c_char, times: *const timespec, flags: c_int) -> c_int {
+    let r = sys_utimensat(dirfd, path, times as *const u8, flags);
+    if r < 0 { ERRNO = (-r) as c_int; -1 } else { 0 }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn futimens(fd: c_int, times: *const timespec) -> c_int {
+    let r = sys_utimensat(fd, core::ptr::null(), times as *const u8, 0);
+    if r < 0 { ERRNO = (-r) as c_int; -1 } else { 0 }
 }
 
 // ============================================================
@@ -4017,6 +4259,31 @@ pub extern "C" fn hypotf(x: f32, y: f32) -> f32 {
     libm::hypotf(x, y)
 }
 
+#[no_mangle]
+pub extern "C" fn lrint(x: f64) -> c_long {
+    libm::rint(x) as c_long
+}
+#[no_mangle]
+pub extern "C" fn lrintf(x: f32) -> c_long {
+    libm::rintf(x) as c_long
+}
+#[no_mangle]
+pub extern "C" fn lrintl(x: f64) -> c_long {
+    libm::rint(x) as c_long
+}
+#[no_mangle]
+pub extern "C" fn llrint(x: f64) -> c_longlong {
+    libm::rint(x) as c_longlong
+}
+#[no_mangle]
+pub extern "C" fn llrintf(x: f32) -> c_longlong {
+    libm::rintf(x) as c_longlong
+}
+#[no_mangle]
+pub extern "C" fn llrintl(x: f64) -> c_longlong {
+    libm::rint(x) as c_longlong
+}
+
 // ============================================================
 // Syscall wrappers as public C ABI
 // ============================================================
@@ -4065,8 +4332,6 @@ const F_SETFD: i32 = 2;
 const F_GETFL: i32 = 3;
 const F_SETFL: i32 = 4;
 const FD_CLOEXEC: i32 = 1;
-
-const AT_FDCWD: i32 = -100;
 
 const TIOCGWINSZ: u32 = 0x5413;
 
@@ -5506,6 +5771,12 @@ pub unsafe extern "C" fn exit(code: c_int) -> ! {
     _exit(code);
 }
 
+#[no_mangle]
+pub unsafe extern "C" fn abort() -> ! {
+    raise(6); // SIGABRT
+    _exit(128 + 6);
+}
+
 // ============================================================
 // qsort / qsort_r (smoothsort, O(1) aux, adaptive)
 // ============================================================
@@ -5945,6 +6216,7 @@ unsafe fn putenv_internal(s: *mut c_char, l: usize, r: *mut c_char) -> c_int {
     *newenv.add(i + 1) = core::ptr::null_mut();
     // ponytail: don't free old __environ (may not be from our malloc)
     __environ = newenv;
+    environ = __environ;
     if !r.is_null() {
         env_rm_add(core::ptr::null_mut(), r);
     }
@@ -5992,6 +6264,7 @@ pub unsafe extern "C" fn unsetenv(name: *const c_char) -> c_int {
     if eo != e {
         *eo = core::ptr::null_mut();
     }
+    environ = __environ;
     0
 }
 
@@ -5999,6 +6272,7 @@ pub unsafe extern "C" fn unsetenv(name: *const c_char) -> c_int {
 pub unsafe extern "C" fn clearenv() -> c_int {
     let e = __environ;
     __environ = core::ptr::null_mut();
+    environ = core::ptr::null_mut();
     if !e.is_null() {
         let mut p = e;
         while !(*p).is_null() {
@@ -6007,6 +6281,106 @@ pub unsafe extern "C" fn clearenv() -> c_int {
         }
     }
     0
+}
+
+// ============================================================
+// random / srandom / initstate / setstate (BSD lagged fibonacci)
+// ponytail: single-threaded, no locking; add lock if concurrency matters
+// ============================================================
+
+static mut RANDOM_INIT: [u32; 32] = [
+    0x00000000,0x5851f42d,0xc0b18ccf,0xcbb5f646,
+    0xc7033129,0x30705b04,0x20fd5db4,0x9a8b7f78,
+    0x502959d8,0xab894868,0x6c0356a7,0x88cdb7ff,
+    0xb477d43f,0x70a3a52b,0xa8e4baf1,0xfd8341fc,
+    0x8ae16fd9,0x742d2f7a,0x0d1f0796,0x76035e09,
+    0x40f7702c,0x6fa72ca5,0xaaa84157,0x58a0df74,
+    0xc74a0364,0xae533cc4,0x04185faf,0x6de3b115,
+    0x0cab8628,0xf043bfa4,0x398150e9,0x37521657,
+];
+
+static mut RANDOM_N: i32 = 31;
+static mut RANDOM_I: i32 = 3;
+static mut RANDOM_J: i32 = 0;
+static mut RANDOM_X: *mut u32 = unsafe { core::ptr::addr_of_mut!(RANDOM_INIT).cast::<u32>().add(1) };
+
+unsafe fn random_lcg31(x: u32) -> u32 {
+    (1103515245u32.wrapping_mul(x).wrapping_add(12345)) & 0x7fffffff
+}
+
+unsafe fn random_lcg64(x: u64) -> u64 {
+    6364136223846793005u64.wrapping_mul(x).wrapping_add(1)
+}
+
+unsafe fn random_savestate() -> *mut u8 {
+    (*RANDOM_X.offset(-1)) = ((RANDOM_N as u32) << 16) | ((RANDOM_I as u32) << 8) | (RANDOM_J as u32);
+    RANDOM_X.offset(-1) as *mut u8
+}
+
+unsafe fn random_loadstate(state: *mut u32) {
+    RANDOM_X = state.add(1);
+    RANDOM_N = ((*RANDOM_X.offset(-1)) >> 16) as i32;
+    RANDOM_I = (((*RANDOM_X.offset(-1)) >> 8) & 0xff) as i32;
+    RANDOM_J = ((*RANDOM_X.offset(-1)) & 0xff) as i32;
+}
+
+unsafe fn random_srandom_inner(seed: u32) {
+    let mut s = seed as u64;
+    if RANDOM_N == 0 {
+        *RANDOM_X = s as u32;
+        return;
+    }
+    RANDOM_I = if RANDOM_N == 31 || RANDOM_N == 7 { 3 } else { 1 };
+    RANDOM_J = 0;
+    for k in 0..RANDOM_N as usize {
+        s = random_lcg64(s);
+        *RANDOM_X.add(k) = (s >> 32) as u32;
+    }
+    *RANDOM_X |= 1;
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn srandom(seed: c_uint) {
+    random_srandom_inner(seed);
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn initstate(seed: c_uint, state: *mut c_char, size: usize) -> *mut c_char {
+    if size < 8 { return core::ptr::null_mut(); }
+    let old = random_savestate();
+    RANDOM_N = if size < 32 { 0 }
+        else if size < 64 { 7 }
+        else if size < 128 { 15 }
+        else if size < 256 { 31 }
+        else { 63 };
+    RANDOM_X = (state as *mut u32).add(1);
+    random_srandom_inner(seed);
+    random_savestate();
+    old as *mut c_char
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn setstate(state: *mut c_char) -> *mut c_char {
+    let old = random_savestate();
+    random_loadstate(state as *mut u32);
+    old as *mut c_char
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn random() -> c_long {
+    let k: c_long;
+    if RANDOM_N == 0 {
+        *RANDOM_X = random_lcg31(*RANDOM_X);
+        k = *RANDOM_X as c_long;
+    } else {
+        *RANDOM_X.add(RANDOM_I as usize) = (*RANDOM_X.add(RANDOM_I as usize)).wrapping_add(*RANDOM_X.add(RANDOM_J as usize));
+        k = (*RANDOM_X.add(RANDOM_I as usize) >> 1) as c_long;
+        RANDOM_I += 1;
+        if RANDOM_I == RANDOM_N { RANDOM_I = 0; }
+        RANDOM_J += 1;
+        if RANDOM_J == RANDOM_N { RANDOM_J = 0; }
+    }
+    k
 }
 
 // ============================================================
@@ -10432,6 +10806,9 @@ unsafe fn parse_mntent_line(
     if *p != 0 {
         *p = 0;
         p = p.add(1);
+    }
+    if *(*mnt).mnt_opts == 0 {
+        (*mnt).mnt_opts = b"defaults\0".as_ptr() as *mut c_char;
     }
 
     // freq and passno

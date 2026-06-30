@@ -73,6 +73,13 @@ float tanhf(float);
 float truncf(float);
 float hypotf(float, float);
 
+long lrint(double);
+long lrintf(float);
+long lrintl(long double);
+long long llrint(double);
+long long llrintf(float);
+long long llrintl(long double);
+
 #ifdef __cplusplus
 }
 #endif
