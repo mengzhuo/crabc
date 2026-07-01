@@ -47,7 +47,11 @@ CFLAGS="-I${LIBC_TEST_DIR}/src/common -pipe -std=c99 -D_POSIX_C_SOURCE=200809L -
 
 for f in "${LIBC_TEST_DIR}"/src/common/*.c; do
     base=$(basename "$f" .c)
-    musl-gcc $CFLAGS -c -o "$COMMON_BUILD/$base.o" "$f" 2>"$COMMON_BUILD/$base.o.err" || true
+    if [ "$base" = "mtest" ]; then
+        musl-gcc $CFLAGS -I"${LIBRC_DIR}/include" -c -o "$COMMON_BUILD/$base.o" "$f" 2>"$COMMON_BUILD/$base.o.err" || true
+    else
+        musl-gcc $CFLAGS -c -o "$COMMON_BUILD/$base.o" "$f" 2>"$COMMON_BUILD/$base.o.err" || true
+    fi
 done
 
 ar rc "$COMMON_BUILD/libtest.a" \
@@ -111,7 +115,11 @@ for dir in $DIRS; do
 
         OBJ="$DIR_BUILD/${base}.o"
         COMPILE_RC=0
-        musl-gcc $CFLAGS -c -o "$OBJ" "$cfile" 2>"$DIR_BUILD/${base}.o.err" || COMPILE_RC=$?
+        EXTRA_CFLAGS=""
+        if [ "$dir" = "math" ]; then
+            EXTRA_CFLAGS="-I${LIBRC_DIR}/include"
+        fi
+        musl-gcc $CFLAGS $EXTRA_CFLAGS -c -o "$OBJ" "$cfile" 2>"$DIR_BUILD/${base}.o.err" || COMPILE_RC=$?
 
         if [ $COMPILE_RC -ne 0 ]; then
             echo "BUILDERROR $dir/$base: compile failed" >> "$RAW_REPORT"

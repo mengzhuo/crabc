@@ -8,6 +8,8 @@ use core::ptr::null_mut;
 use core::sync::atomic::{AtomicI32, AtomicUsize, Ordering};
 
 include!("encoding_tables.rs");
+include!("math_helpers.rs");
+include!("math_bitmanip.rs");
 
 // ============================================================
 // errno
@@ -5089,10 +5091,6 @@ pub extern "C" fn atan2(y: f64, x: f64) -> f64 {
     libm::atan2(y, x)
 }
 #[no_mangle]
-pub extern "C" fn ceil(x: f64) -> f64 {
-    libm::ceil(x)
-}
-#[no_mangle]
 pub extern "C" fn cos(x: f64) -> f64 {
     libm::cos(x)
 }
@@ -5105,28 +5103,8 @@ pub extern "C" fn exp(x: f64) -> f64 {
     libm::exp(x)
 }
 #[no_mangle]
-pub extern "C" fn fabs(x: f64) -> f64 {
-    libm::fabs(x)
-}
-#[no_mangle]
-pub extern "C" fn floor(x: f64) -> f64 {
-    libm::floor(x)
-}
-#[no_mangle]
 pub extern "C" fn fmod(x: f64, y: f64) -> f64 {
     libm::fmod(x, y)
-}
-#[no_mangle]
-pub extern "C" fn frexp(x: f64, exp: *mut c_int) -> f64 {
-    let (frac, e) = libm::frexp(x);
-    if !exp.is_null() {
-        unsafe { *exp = e };
-    }
-    frac
-}
-#[no_mangle]
-pub extern "C" fn ldexp(x: f64, exp: c_int) -> f64 {
-    libm::ldexp(x, exp)
 }
 #[no_mangle]
 pub extern "C" fn log(x: f64) -> f64 {
@@ -5141,20 +5119,8 @@ pub extern "C" fn log2(x: f64) -> f64 {
     libm::log2(x)
 }
 #[no_mangle]
-pub extern "C" fn modf(x: f64, iptr: *mut f64) -> f64 {
-    let (frac, int) = libm::modf(x);
-    if !iptr.is_null() {
-        unsafe { *iptr = int };
-    }
-    frac
-}
-#[no_mangle]
 pub extern "C" fn pow(x: f64, y: f64) -> f64 {
     libm::pow(x, y)
-}
-#[no_mangle]
-pub extern "C" fn round(x: f64) -> f64 {
-    libm::round(x)
 }
 #[no_mangle]
 pub extern "C" fn sin(x: f64) -> f64 {
@@ -5175,10 +5141,6 @@ pub extern "C" fn tan(x: f64) -> f64 {
 #[no_mangle]
 pub extern "C" fn tanh(x: f64) -> f64 {
     libm::tanh(x)
-}
-#[no_mangle]
-pub extern "C" fn trunc(x: f64) -> f64 {
-    libm::trunc(x)
 }
 #[no_mangle]
 pub extern "C" fn hypot(x: f64, y: f64) -> f64 {
@@ -5202,10 +5164,6 @@ pub extern "C" fn atan2f(y: f32, x: f32) -> f32 {
     libm::atan2f(y, x)
 }
 #[no_mangle]
-pub extern "C" fn ceilf(x: f32) -> f32 {
-    libm::ceilf(x)
-}
-#[no_mangle]
 pub extern "C" fn cosf(x: f32) -> f32 {
     libm::cosf(x)
 }
@@ -5218,28 +5176,8 @@ pub extern "C" fn expf(x: f32) -> f32 {
     libm::expf(x)
 }
 #[no_mangle]
-pub extern "C" fn fabsf(x: f32) -> f32 {
-    libm::fabsf(x)
-}
-#[no_mangle]
-pub extern "C" fn floorf(x: f32) -> f32 {
-    libm::floorf(x)
-}
-#[no_mangle]
 pub extern "C" fn fmodf(x: f32, y: f32) -> f32 {
     libm::fmodf(x, y)
-}
-#[no_mangle]
-pub extern "C" fn frexpf(x: f32, exp: *mut c_int) -> f32 {
-    let (frac, e) = libm::frexpf(x);
-    if !exp.is_null() {
-        unsafe { *exp = e };
-    }
-    frac
-}
-#[no_mangle]
-pub extern "C" fn ldexpf(x: f32, exp: c_int) -> f32 {
-    libm::ldexpf(x, exp)
 }
 #[no_mangle]
 pub extern "C" fn logf(x: f32) -> f32 {
@@ -5254,20 +5192,8 @@ pub extern "C" fn log2f(x: f32) -> f32 {
     libm::log2f(x)
 }
 #[no_mangle]
-pub extern "C" fn modff(x: f32, iptr: *mut f32) -> f32 {
-    let (frac, int) = libm::modff(x);
-    if !iptr.is_null() {
-        unsafe { *iptr = int };
-    }
-    frac
-}
-#[no_mangle]
 pub extern "C" fn powf(x: f32, y: f32) -> f32 {
     libm::powf(x, y)
-}
-#[no_mangle]
-pub extern "C" fn roundf(x: f32) -> f32 {
-    libm::roundf(x)
 }
 #[no_mangle]
 pub extern "C" fn sinf(x: f32) -> f32 {
@@ -5288,10 +5214,6 @@ pub extern "C" fn tanf(x: f32) -> f32 {
 #[no_mangle]
 pub extern "C" fn tanhf(x: f32) -> f32 {
     libm::tanhf(x)
-}
-#[no_mangle]
-pub extern "C" fn truncf(x: f32) -> f32 {
-    libm::truncf(x)
 }
 #[no_mangle]
 pub extern "C" fn hypotf(x: f32, y: f32) -> f32 {
