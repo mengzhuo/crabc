@@ -3,6 +3,7 @@ members = ["ldso", "libc"]
 
 [profile.dev]
 panic = "abort"
+overflow-checks = false
 
 [profile.dev.package.ldso]
 opt-level = 2

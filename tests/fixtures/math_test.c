@@ -57,6 +57,18 @@ int main(void) {
     if (checkf(modff(-3.75f, &iptrf), -0.75f, 1e-6f)) return 37;
     if (checkf(iptrf, -3.0f, 1e-6f)) return 38;
 
+    if (check(sqrt(2.0), 1.4142135623730951, 1e-12)) return 39;
+    if (checkf(sqrtf(2.0f), 1.4142135f, 1e-5f)) return 40;
+    if (check(fmod(5.5, 2.0), 1.5, 1e-12)) return 41;
+    if (checkf(fmodf(5.5f, 2.0f), 1.5f, 1e-6f)) return 42;
+    if (check(sin(0.5235987755982989), 0.5, 1e-12)) return 43;
+    if (check(cos(0.5235987755982989), 0.8660254037844386, 1e-12)) return 44;
+    if (check(tan(0.7853981633974483), 1.0, 1e-12)) return 45;
+    if (check(sin(-0x1.5f9f1bdb17192p+749), 0.623779899189803, 1e-12)) return 46;
+    if (checkf(sinf(-0x1.a206fp+2f), -0.24593880772590637f, 1e-5f)) return 47;
+    if (checkf(cosf(-0x1.a206fp+2f), 0.9692853689193726f, 1e-5f)) return 48;
+    if (checkf(tanf(-0x1.a206fp+2f), -0.2537320852279663f, 1e-5f)) return 49;
+
     printf("math ok\n");
     return 0;
 }

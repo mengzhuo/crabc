@@ -10,6 +10,8 @@ use core::sync::atomic::{AtomicI32, AtomicUsize, Ordering};
 include!("encoding_tables.rs");
 include!("math_helpers.rs");
 include!("math_bitmanip.rs");
+include!("math_sqrtfmod.rs");
+include!("math_trig.rs");
 
 // ============================================================
 // errno
@@ -5091,20 +5093,12 @@ pub extern "C" fn atan2(y: f64, x: f64) -> f64 {
     libm::atan2(y, x)
 }
 #[no_mangle]
-pub extern "C" fn cos(x: f64) -> f64 {
-    libm::cos(x)
-}
-#[no_mangle]
 pub extern "C" fn cosh(x: f64) -> f64 {
     libm::cosh(x)
 }
 #[no_mangle]
 pub extern "C" fn exp(x: f64) -> f64 {
     libm::exp(x)
-}
-#[no_mangle]
-pub extern "C" fn fmod(x: f64, y: f64) -> f64 {
-    libm::fmod(x, y)
 }
 #[no_mangle]
 pub extern "C" fn log(x: f64) -> f64 {
@@ -5123,20 +5117,8 @@ pub extern "C" fn pow(x: f64, y: f64) -> f64 {
     libm::pow(x, y)
 }
 #[no_mangle]
-pub extern "C" fn sin(x: f64) -> f64 {
-    libm::sin(x)
-}
-#[no_mangle]
 pub extern "C" fn sinh(x: f64) -> f64 {
     libm::sinh(x)
-}
-#[no_mangle]
-pub extern "C" fn sqrt(x: f64) -> f64 {
-    libm::sqrt(x)
-}
-#[no_mangle]
-pub extern "C" fn tan(x: f64) -> f64 {
-    libm::tan(x)
 }
 #[no_mangle]
 pub extern "C" fn tanh(x: f64) -> f64 {
@@ -5164,20 +5146,12 @@ pub extern "C" fn atan2f(y: f32, x: f32) -> f32 {
     libm::atan2f(y, x)
 }
 #[no_mangle]
-pub extern "C" fn cosf(x: f32) -> f32 {
-    libm::cosf(x)
-}
-#[no_mangle]
 pub extern "C" fn coshf(x: f32) -> f32 {
     libm::coshf(x)
 }
 #[no_mangle]
 pub extern "C" fn expf(x: f32) -> f32 {
     libm::expf(x)
-}
-#[no_mangle]
-pub extern "C" fn fmodf(x: f32, y: f32) -> f32 {
-    libm::fmodf(x, y)
 }
 #[no_mangle]
 pub extern "C" fn logf(x: f32) -> f32 {
@@ -5196,20 +5170,8 @@ pub extern "C" fn powf(x: f32, y: f32) -> f32 {
     libm::powf(x, y)
 }
 #[no_mangle]
-pub extern "C" fn sinf(x: f32) -> f32 {
-    libm::sinf(x)
-}
-#[no_mangle]
 pub extern "C" fn sinhf(x: f32) -> f32 {
     libm::sinhf(x)
-}
-#[no_mangle]
-pub extern "C" fn sqrtf(x: f32) -> f32 {
-    libm::sqrtf(x)
-}
-#[no_mangle]
-pub extern "C" fn tanf(x: f32) -> f32 {
-    libm::tanf(x)
 }
 #[no_mangle]
 pub extern "C" fn tanhf(x: f32) -> f32 {
