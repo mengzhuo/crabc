@@ -120,6 +120,7 @@ int main(void) {
     if (llrintf(2.7f) != 3) return 95;
     if (lrintl(2.3L) != 2) return 96;
     if (llrintl(2.7L) != 3) return 97;
+    if (check(sinh(0x1.d3e0d2f5d98d6p-2), 0x1.e45428082fb8cp-2, 1e-15)) return 98;
 
     printf("math ok\n");
     return 0;

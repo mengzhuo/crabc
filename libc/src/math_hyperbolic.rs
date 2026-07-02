@@ -18,6 +18,42 @@ const HYP_EPM1_Q3: f64 = asdouble(0xBF14CE199EAADBB7);
 const HYP_EPM1_Q4: f64 = asdouble(0x3ED0CFCA86E65239);
 const HYP_EPM1_Q5: f64 = asdouble(0xBE8AFDB76E09C32D);
 
+#[cfg(target_arch = "x86_64")]
+core::arch::global_asm!(
+    ".intel_syntax noprefix",
+    ".text",
+    ".global __librc_sinh_small_x87",
+    ".type __librc_sinh_small_x87, @function",
+    "__librc_sinh_small_x87:",
+    "movsd qword ptr [rsp - 8], xmm0",
+    "fld qword ptr [rsp - 8]",
+    "fldl2e",
+    "fmulp st(1), st(0)",
+    "fld st(0)",
+    "fchs",
+    "fxch st(1)",
+    "f2xm1",
+    "fld1",
+    "faddp st(1), st(0)",
+    "fxch st(1)",
+    "f2xm1",
+    "fld1",
+    "faddp st(1), st(0)",
+    "fsubp st(1), st(0)",
+    "fmul qword ptr [rip + .Lsinh_half]",
+    "fstp qword ptr [rsp - 8]",
+    "movsd xmm0, qword ptr [rsp - 8]",
+    "ret",
+    ".align 8",
+    ".Lsinh_half:",
+    ".quad 0x3fe0000000000000",
+);
+
+#[cfg(target_arch = "x86_64")]
+extern "C" {
+    fn __librc_sinh_small_x87(x: f64) -> f64;
+}
+
 // ============================================================
 // Constants for hyper_expm1f (float precision)
 // ============================================================
@@ -299,6 +335,14 @@ pub extern "C" fn sinh(x: f64) -> f64 {
 
     // |x| < log(DBL_MAX)
     if w < 0x40862e42 {
+        #[cfg(target_arch = "x86_64")]
+        if w >= 0x3f500000 && w < 0x3fe62e42 {
+            let mut r = unsafe { __librc_sinh_small_x87(absx) };
+            if asuint64(x) >> 63 != 0 {
+                r = -r;
+            }
+            return r;
+        }
         let t = hyper_expm1(absx);
         if w < 0x3ff00000 {
             if w < 0x3ff00000 - (26 << 20) {
