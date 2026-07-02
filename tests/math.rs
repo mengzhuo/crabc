@@ -17,6 +17,9 @@ fn math_functions_under_libc_so() {
         .args([
             "-fPIE",
             "-pie",
+            "-fno-builtin",
+            "-frounding-math",
+            "-mlong-double-64",
             "-I",
             include.to_str().unwrap(),
             "-Wl,--dynamic-linker",
@@ -25,7 +28,7 @@ fn math_functions_under_libc_so() {
             manifest_dir.join("target/debug").to_str().unwrap(),
             src.to_str().unwrap(),
             "-Wl,--allow-shlib-undefined",
-                        "-lc",
+            "-lc",
             "-o",
             bin.to_str().unwrap(),
         ])

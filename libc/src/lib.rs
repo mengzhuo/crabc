@@ -15,6 +15,10 @@ include!("math_trig.rs");
 include!("math_exp.rs");
 include!("math_log.rs");
 include!("math_pow.rs");
+include!("math_hypot.rs");
+include!("math_hyperbolic.rs");
+include!("math_invtrig.rs");
+include!("math_lrint.rs");
 
 // ============================================================
 // errno
@@ -5078,91 +5082,6 @@ pub unsafe extern "C" fn iconv(
 
 #[no_mangle]
 pub unsafe extern "C" fn iconv_close(_cd: IconvT) -> c_int { 0 }
-
-#[no_mangle]
-pub extern "C" fn acos(x: f64) -> f64 {
-    libm::acos(x)
-}
-#[no_mangle]
-pub extern "C" fn asin(x: f64) -> f64 {
-    libm::asin(x)
-}
-#[no_mangle]
-pub extern "C" fn atan(x: f64) -> f64 {
-    libm::atan(x)
-}
-#[no_mangle]
-pub extern "C" fn cosh(x: f64) -> f64 {
-    libm::cosh(x)
-}
-
-#[no_mangle]
-pub extern "C" fn sinh(x: f64) -> f64 {
-    libm::sinh(x)
-}
-#[no_mangle]
-pub extern "C" fn tanh(x: f64) -> f64 {
-    libm::tanh(x)
-}
-#[no_mangle]
-pub extern "C" fn hypot(x: f64, y: f64) -> f64 {
-    libm::hypot(x, y)
-}
-
-#[no_mangle]
-pub extern "C" fn acosf(x: f32) -> f32 {
-    libm::acosf(x)
-}
-#[no_mangle]
-pub extern "C" fn asinf(x: f32) -> f32 {
-    libm::asinf(x)
-}
-#[no_mangle]
-pub extern "C" fn atanf(x: f32) -> f32 {
-    libm::atanf(x)
-}
-#[no_mangle]
-pub extern "C" fn coshf(x: f32) -> f32 {
-    libm::coshf(x)
-}
-
-#[no_mangle]
-pub extern "C" fn sinhf(x: f32) -> f32 {
-    libm::sinhf(x)
-}
-#[no_mangle]
-pub extern "C" fn tanhf(x: f32) -> f32 {
-    libm::tanhf(x)
-}
-#[no_mangle]
-pub extern "C" fn hypotf(x: f32, y: f32) -> f32 {
-    libm::hypotf(x, y)
-}
-
-#[no_mangle]
-pub extern "C" fn lrint(x: f64) -> c_long {
-    libm::rint(x) as c_long
-}
-#[no_mangle]
-pub extern "C" fn lrintf(x: f32) -> c_long {
-    libm::rintf(x) as c_long
-}
-#[no_mangle]
-pub extern "C" fn lrintl(x: f64) -> c_long {
-    libm::rint(x) as c_long
-}
-#[no_mangle]
-pub extern "C" fn llrint(x: f64) -> c_longlong {
-    libm::rint(x) as c_longlong
-}
-#[no_mangle]
-pub extern "C" fn llrintf(x: f32) -> c_longlong {
-    libm::rintf(x) as c_longlong
-}
-#[no_mangle]
-pub extern "C" fn llrintl(x: f64) -> c_longlong {
-    libm::rint(x) as c_longlong
-}
 
 // ============================================================
 // Syscall wrappers as public C ABI

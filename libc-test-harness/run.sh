@@ -117,7 +117,7 @@ for dir in $DIRS; do
         COMPILE_RC=0
         EXTRA_CFLAGS=""
         if [ "$dir" = "math" ]; then
-            EXTRA_CFLAGS="-I${LIBRC_DIR}/include"
+            EXTRA_CFLAGS="-I${LIBRC_DIR}/include -mlong-double-64"
         fi
         musl-gcc $CFLAGS $EXTRA_CFLAGS -c -o "$OBJ" "$cfile" 2>"$DIR_BUILD/${base}.o.err" || COMPILE_RC=$?
 
