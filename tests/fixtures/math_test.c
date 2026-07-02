@@ -90,6 +90,37 @@ int main(void) {
     if (checkf(powf(-2.0f, 3.0f), -8.0f, 1e-5f)) return 67;
     if (checkf(powf(0x1p-63f, 2.0f), 0x1p-126f, 1e-7f)) return 68;
 
+    /* Wave 4: hyperbolic, inverse trig, hypot, lrint family */
+    if (check(hypot(3.0, 4.0), 5.0, 1e-12)) return 69;
+    if (check(hypot(1e200, 1e200), 1.4142135623730951e200, 1e185)) return 70;
+    if (checkf(hypotf(3.0f, 4.0f), 5.0f, 1e-6f)) return 71;
+    if (check(sinh(0.0), 0.0, 1e-12)) return 72;
+    if (check(cosh(0.0), 1.0, 1e-12)) return 73;
+    if (check(tanh(0.0), 0.0, 1e-12)) return 74;
+    if (check(sinh(0.881373587019543), 1.0, 1e-12)) return 75;
+    if (check(cosh(0.881373587019543), 1.4142135623730951, 1e-12)) return 76;
+    if (check(tanh(0.5493061443340549), 0.5, 1e-12)) return 77;
+    if (checkf(sinhf(0.0f), 0.0f, 1e-6f)) return 78;
+    if (checkf(coshf(0.0f), 1.0f, 1e-6f)) return 79;
+    if (checkf(tanhf(0.0f), 0.0f, 1e-6f)) return 80;
+    if (check(asin(0.0), 0.0, 1e-12)) return 81;
+    if (check(asin(1.0), 1.5707963267948966, 1e-12)) return 82;
+    if (check(acos(1.0), 0.0, 1e-12)) return 83;
+    if (check(acos(0.0), 1.5707963267948966, 1e-12)) return 84;
+    if (check(atan(1.0), 0.7853981633974483, 1e-12)) return 85;
+    if (check(atan2(1.0, 0.0), 1.5707963267948966, 1e-12)) return 86;
+    if (checkf(asinf(0.0f), 0.0f, 1e-6f)) return 87;
+    if (checkf(acosf(1.0f), 0.0f, 1e-6f)) return 88;
+    if (checkf(atanf(1.0f), 0.7853981633974483f, 1e-6f)) return 89;
+    if (checkf(atan2f(1.0f, 0.0f), 1.5707963267948966f, 1e-6f)) return 90;
+    if (lrint(2.3) != 2) return 91;
+    if (lrint(2.7) != 3) return 92;
+    if (llrint(2.7) != 3) return 93;
+    if (lrintf(2.3f) != 2) return 94;
+    if (llrintf(2.7f) != 3) return 95;
+    if (lrintl(2.3L) != 2) return 96;
+    if (llrintl(2.7L) != 3) return 97;
+
     printf("math ok\n");
     return 0;
 }
