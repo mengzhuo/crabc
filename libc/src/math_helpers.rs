@@ -147,14 +147,21 @@ pub fn __math_divzerof(sign: u32) -> f32 {
 
 #[inline]
 pub fn __math_xflow(sign: u32, y: f64) -> f64 {
-    let x = if sign != 0 { -y } else { y };
-    x * x
+    // musl: (sign ? -y : y) * y  (preserves sign of infinity/zero)
+    if sign != 0 {
+        -y * y
+    } else {
+        y * y
+    }
 }
 
 #[inline]
 pub fn __math_xflowf(sign: u32, y: f32) -> f32 {
-    let x = if sign != 0 { -y } else { y };
-    x * x
+    if sign != 0 {
+        -y * y
+    } else {
+        y * y
+    }
 }
 
 #[inline]
