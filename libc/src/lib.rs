@@ -12,6 +12,9 @@ include!("math_helpers.rs");
 include!("math_bitmanip.rs");
 include!("math_sqrtfmod.rs");
 include!("math_trig.rs");
+include!("math_exp.rs");
+include!("math_log.rs");
+include!("math_pow.rs");
 
 // ============================================================
 // errno
@@ -5089,33 +5092,10 @@ pub extern "C" fn atan(x: f64) -> f64 {
     libm::atan(x)
 }
 #[no_mangle]
-pub extern "C" fn atan2(y: f64, x: f64) -> f64 {
-    libm::atan2(y, x)
-}
-#[no_mangle]
 pub extern "C" fn cosh(x: f64) -> f64 {
     libm::cosh(x)
 }
-#[no_mangle]
-pub extern "C" fn exp(x: f64) -> f64 {
-    libm::exp(x)
-}
-#[no_mangle]
-pub extern "C" fn log(x: f64) -> f64 {
-    libm::log(x)
-}
-#[no_mangle]
-pub extern "C" fn log10(x: f64) -> f64 {
-    libm::log10(x)
-}
-#[no_mangle]
-pub extern "C" fn log2(x: f64) -> f64 {
-    libm::log2(x)
-}
-#[no_mangle]
-pub extern "C" fn pow(x: f64, y: f64) -> f64 {
-    libm::pow(x, y)
-}
+
 #[no_mangle]
 pub extern "C" fn sinh(x: f64) -> f64 {
     libm::sinh(x)
@@ -5142,33 +5122,10 @@ pub extern "C" fn atanf(x: f32) -> f32 {
     libm::atanf(x)
 }
 #[no_mangle]
-pub extern "C" fn atan2f(y: f32, x: f32) -> f32 {
-    libm::atan2f(y, x)
-}
-#[no_mangle]
 pub extern "C" fn coshf(x: f32) -> f32 {
     libm::coshf(x)
 }
-#[no_mangle]
-pub extern "C" fn expf(x: f32) -> f32 {
-    libm::expf(x)
-}
-#[no_mangle]
-pub extern "C" fn logf(x: f32) -> f32 {
-    libm::logf(x)
-}
-#[no_mangle]
-pub extern "C" fn log10f(x: f32) -> f32 {
-    libm::log10f(x)
-}
-#[no_mangle]
-pub extern "C" fn log2f(x: f32) -> f32 {
-    libm::log2f(x)
-}
-#[no_mangle]
-pub extern "C" fn powf(x: f32, y: f32) -> f32 {
-    libm::powf(x, y)
-}
+
 #[no_mangle]
 pub extern "C" fn sinhf(x: f32) -> f32 {
     libm::sinhf(x)

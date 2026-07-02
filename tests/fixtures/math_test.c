@@ -69,6 +69,27 @@ int main(void) {
     if (checkf(cosf(-0x1.a206fp+2f), 0.9692853689193726f, 1e-5f)) return 48;
     if (checkf(tanf(-0x1.a206fp+2f), -0.2537320852279663f, 1e-5f)) return 49;
 
+    /* Wave 3: exp/log/pow exact identities and edge cases */
+    if (check(exp(0.0), 1.0, 1e-12)) return 50;
+    if (check(exp(1.0), 2.718281828459045, 1e-12)) return 51;
+    if (check(log(1.0), 0.0, 1e-12)) return 52;
+    if (check(log2(1.0), 0.0, 1e-12)) return 53;
+    if (check(log10(1.0), 0.0, 1e-12)) return 54;
+    if (check(pow(2.0, 10.0), 1024.0, 1e-9)) return 55;
+    if (check(pow(0.0, 3.0), 0.0, 1e-9)) return 56;
+    if (check(pow(-2.0, 3.0), -8.0, 1e-9)) return 57;
+    if (check(pow(2.0, -1074.0), 0x1p-1074, 1e-20)) return 58;
+    if (check(pow(2.0, -1075.0), 0.0, 1e-20)) return 59;
+    if (check(pow(0x1p-1072, 1.0), 0x1p-1072, 1e-20)) return 60;
+    if (check(pow(0x1p-537, 2.0), 0x1p-1074, 1e-20)) return 61;
+    if (check(pow(0x1p+1023, -1.0), 0x1p-1023, 1e-20)) return 62;
+    if (checkf(expf(0.0f), 1.0f, 1e-6f)) return 63;
+    if (checkf(logf(1.0f), 0.0f, 1e-6f)) return 64;
+    if (checkf(log2f(1.0f), 0.0f, 1e-6f)) return 65;
+    if (checkf(powf(2.0f, 10.0f), 1024.0f, 1e-3f)) return 66;
+    if (checkf(powf(-2.0f, 3.0f), -8.0f, 1e-5f)) return 67;
+    if (checkf(powf(0x1p-63f, 2.0f), 0x1p-126f, 1e-7f)) return 68;
+
     printf("math ok\n");
     return 0;
 }
