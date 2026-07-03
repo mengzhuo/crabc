@@ -49,6 +49,7 @@ const AT_ENTRY: u64 = 9;
 const PROT_READ: i32 = 1;
 const PROT_WRITE: i32 = 2;
 const PROT_EXEC: i32 = 4;
+const PROT_NONE: i32 = 0;
 const MAP_PRIVATE: i32 = 0x02;
 const MAP_FIXED: i32 = 0x10;
 const MAP_ANONYMOUS: i32 = 0x20;
@@ -509,24 +510,53 @@ unsafe fn find_library_fd(
 
 /// Load a shared object from an already-open fd at the given base address.
 /// Registers it in the LOADED array. Returns true on success.
-unsafe fn load_dso_from_fd(fd: i64, base: u64) -> bool {
+fn sys_munmap(addr: *mut u8, length: usize) -> i64 {
+    let result: i64;
+    unsafe {
+        core::arch::asm!(
+            "syscall",
+            inlateout("rax") 11i64 => result,
+            in("rdi") addr,
+            in("rsi") length,
+            lateout("rcx") _,
+            lateout("r11") _,
+        );
+    }
+    result
+}
+
+unsafe fn load_dso_from_fd(fd: i64, desired_base: u64) -> Option<u64> {
     let mut buf = [0u8; 4096];
     let n = sys_read(fd, buf.as_mut_ptr(), buf.len());
     if n < 64 {
-        return false;
+        return None;
     }
     if buf[0] != 0x7f || buf[1] != b'E' {
-        return false;
+        return None;
     }
 
     let e_phoff = u64::from_le_bytes(buf[32..40].try_into().unwrap());
     let e_phnum = u16::from_le_bytes(buf[56..58].try_into().unwrap()) as usize;
     let phdr_end = e_phoff as usize + e_phnum * PHDR_SIZE;
     if phdr_end > n as usize {
-        return false;
+        return None;
     }
 
-    let mut tls_image: *const u8 = core::ptr::null();
+    #[derive(Copy, Clone)]
+    struct LoadSeg {
+        p_offset: u64,
+        p_vaddr: u64,
+        p_filesz: u64,
+        p_memsz: u64,
+        p_flags: u32,
+    }
+
+    let mut segs: [LoadSeg; 8] = [LoadSeg { p_offset: 0, p_vaddr: 0, p_filesz: 0, p_memsz: 0, p_flags: 0 }; 8];
+    let mut seg_count: usize = 0;
+    let mut min_vaddr = u64::MAX;
+    let mut max_vaddr_end = 0u64;
+
+    let mut tls_vaddr: u64 = 0;
     let mut tls_filesz: u64 = 0;
     let mut tls_memsz: u64 = 0;
     let mut tls_align: u64 = 0;
@@ -535,29 +565,71 @@ unsafe fn load_dso_from_fd(fd: i64, base: u64) -> bool {
         let ph = buf.as_ptr().add(e_phoff as usize + i * PHDR_SIZE);
         let p_type = u32::from_le_bytes(core::ptr::read_unaligned(ph as *const [u8; 4]));
         if p_type == PT_TLS {
-            let _p_offset = u64::from_le_bytes(core::ptr::read_unaligned(ph.add(PH_OFFSET) as *const [u8; 8]));
-            let p_vaddr = u64::from_le_bytes(core::ptr::read_unaligned(ph.add(PH_VADDR) as *const [u8; 8]));
+            tls_vaddr = u64::from_le_bytes(core::ptr::read_unaligned(ph.add(PH_VADDR) as *const [u8; 8]));
             tls_filesz = u64::from_le_bytes(core::ptr::read_unaligned(ph.add(PH_FILESZ) as *const [u8; 8]));
             tls_memsz = u64::from_le_bytes(core::ptr::read_unaligned(ph.add(PH_MEMSZ) as *const [u8; 8]));
             tls_align = u64::from_le_bytes(core::ptr::read_unaligned(ph.add(PH_ALIGN) as *const [u8; 8]));
-            tls_image = (base + p_vaddr) as *const u8;
             continue;
         }
         if p_type != PT_LOAD {
             continue;
+        }
+        if seg_count >= segs.len() {
+            return None;
         }
         let p_flags = u32::from_le_bytes(core::ptr::read_unaligned(ph.add(PH_FLAGS) as *const [u8; 4]));
         let p_offset = u64::from_le_bytes(core::ptr::read_unaligned(ph.add(PH_OFFSET) as *const [u8; 8]));
         let p_vaddr = u64::from_le_bytes(core::ptr::read_unaligned(ph.add(PH_VADDR) as *const [u8; 8]));
         let p_filesz = u64::from_le_bytes(core::ptr::read_unaligned(ph.add(PH_FILESZ) as *const [u8; 8]));
         let p_memsz = u64::from_le_bytes(core::ptr::read_unaligned(ph.add(PH_MEMSZ) as *const [u8; 8]));
+        segs[seg_count] = LoadSeg { p_offset, p_vaddr, p_filesz, p_memsz, p_flags };
+        seg_count += 1;
+        if p_vaddr < min_vaddr { min_vaddr = p_vaddr; }
+        let end = p_vaddr + p_memsz;
+        if end > max_vaddr_end { max_vaddr_end = end; }
+    }
 
-        let page = 4096u64;
-        let adj = p_vaddr & (page - 1);
-        let map_addr = base + p_vaddr - adj;
-        let map_off = p_offset - adj;
-        let map_len = ((p_memsz + adj + page - 1) & !(page - 1)) as usize;
-        let prot = prot_from_flags(p_flags);
+    if seg_count == 0 || min_vaddr == u64::MAX {
+        return None;
+    }
+
+    const PAGE: u64 = 4096;
+    let total_size = ((max_vaddr_end + PAGE - 1) & !(PAGE - 1)) as usize;
+
+    // ponytail: ASLR may place our own stack or the executable at the
+    // desired base. Probe for a free span before committing with MAP_FIXED.
+    let mut base = desired_base;
+    let actual_base = loop {
+        let probe = sys_mmap(
+            base as *mut u8,
+            total_size,
+            PROT_NONE,
+            MAP_PRIVATE | MAP_ANONYMOUS,
+            -1,
+            0,
+        );
+        if probe as usize == base as usize {
+            sys_munmap(probe, total_size);
+            break base;
+        }
+        if probe as usize != MAP_FAILED {
+            sys_munmap(probe, total_size);
+        }
+        base += DSO_BASE_STRIDE;
+        if base > desired_base + DSO_BASE_STRIDE * 16 {
+            return None;
+        }
+    };
+
+    let tls_image = (actual_base + tls_vaddr) as *const u8;
+
+    for i in 0..seg_count {
+        let seg = segs[i];
+        let adj = seg.p_vaddr & (PAGE - 1);
+        let map_addr = actual_base + seg.p_vaddr - adj;
+        let map_off = seg.p_offset - adj;
+        let map_len = ((seg.p_memsz + adj + PAGE - 1) & !(PAGE - 1)) as usize;
+        let prot = prot_from_flags(seg.p_flags);
 
         let ptr = sys_mmap(
             map_addr as *mut u8,
@@ -568,12 +640,12 @@ unsafe fn load_dso_from_fd(fd: i64, base: u64) -> bool {
             map_off as i64,
         );
         if ptr as usize == MAP_FAILED {
-            return false;
+            return None;
         }
 
-        if p_memsz > p_filesz {
-            let bss_start = (base + p_vaddr + p_filesz) as *mut u8;
-            let bss_len = (p_memsz - p_filesz) as usize;
+        if seg.p_memsz > seg.p_filesz {
+            let bss_start = (actual_base + seg.p_vaddr + seg.p_filesz) as *mut u8;
+            let bss_len = (seg.p_memsz - seg.p_filesz) as usize;
             core::ptr::write_bytes(bss_start, 0, bss_len);
         }
     }
@@ -591,10 +663,10 @@ unsafe fn load_dso_from_fd(fd: i64, base: u64) -> bool {
         }
     }
     if dyn_vaddr == 0 {
-        return false;
+        return None;
     }
 
-    let dyn_addr = (base + dyn_vaddr) as usize;
+    let dyn_addr = (actual_base + dyn_vaddr) as usize;
     let dyn_end = dyn_addr + dyn_memsz as usize;
 
     // Parse DT_SYMTAB, DT_STRTAB, DT_STRSZ
@@ -617,11 +689,10 @@ unsafe fn load_dso_from_fd(fd: i64, base: u64) -> bool {
         dp += 16;
     }
 
-    let symtab_ptr = (base + dt_symtab) as *const u8;
-    let strtab_ptr = (base + dt_strtab) as *const u8;
+    let symtab_ptr = (actual_base + dt_symtab) as *const u8;
+    let strtab_ptr = (actual_base + dt_strtab) as *const u8;
     let strsz = dt_strsz as usize;
 
-    // sym_count: entries between symtab and strtab (adjacent in typical ELF layout)
     let sym_count = if dt_strtab > dt_symtab && dt_strtab - dt_symtab >= SYMTAB_ENT_SIZE as u64 {
         ((dt_strtab - dt_symtab) / SYMTAB_ENT_SIZE as u64) as usize
     } else {
@@ -630,7 +701,7 @@ unsafe fn load_dso_from_fd(fd: i64, base: u64) -> bool {
 
     if LOADED_COUNT < MAX_LOADED {
         LOADED[LOADED_COUNT] = LoadedObject {
-            base,
+            base: actual_base,
             symtab: symtab_ptr,
             sym_count,
             strtab: strtab_ptr,
@@ -645,7 +716,7 @@ unsafe fn load_dso_from_fd(fd: i64, base: u64) -> bool {
         LOADED_COUNT += 1;
     }
 
-    true
+    Some(actual_base)
 }
 
 // ============================================================
@@ -1187,8 +1258,8 @@ unsafe fn load_and_jump(sp: usize) -> ! {
         if lib_fd < 0 {
             sys_exit(89);
         }
-        let base = DSO_BASE_START + (i as u64) * DSO_BASE_STRIDE;
-        if !load_dso_from_fd(lib_fd, base) {
+        let desired_base = DSO_BASE_START + (i as u64) * DSO_BASE_STRIDE;
+        if load_dso_from_fd(lib_fd, desired_base).is_none() {
             sys_close(lib_fd);
             sys_exit(88);
         }
