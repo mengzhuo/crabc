@@ -3,7 +3,7 @@
 #![feature(linkage)]
 #![allow(dead_code, non_camel_case_types)]
 
-use core::ffi::{c_char, c_int, c_long, c_longlong, c_uint, c_ulong, c_ulonglong, c_void, VaList, VaListImpl};
+use core::ffi::{c_char, c_int, c_long, c_longlong, c_uint, c_ulong, c_ulonglong, c_void, VaList};
 use core::ptr::null_mut;
 use core::sync::atomic::{AtomicI32, AtomicUsize, Ordering};
 
@@ -1873,7 +1873,7 @@ pub unsafe extern "C" fn execl(path: *const c_char, arg: *const c_char, mut args
     argv[0] = arg;
     let mut n: usize = 1;
     loop {
-        let a: *const c_char = args.arg();
+        let a: *const c_char = args.next_arg();
         if a.is_null() { break; }
         if n >= 255 { return -1; }
         argv[n] = a;
@@ -2637,17 +2637,17 @@ core::arch::global_asm!(
     "mov rdx, r8",
     "mov r10, [rsp + 8]",
     "mov r8, r9",
-    "mov r9, rcx",
+    "mov r9, rax",
     "and rsi, -16",
     "sub rsi, 8",
-    "mov [rsi], r9",
-    "mov [rsi + 8], rax",
+    "mov [rsi], rcx",
     "mov eax, 56",
     "syscall",
     "test rax, rax",
     "jnz 1f",
     "pop rdi",
-    "ret",
+    "call r9",
+    "hlt",
     "1:",
     "ret",
 );
@@ -3824,8 +3824,8 @@ pub unsafe extern "C" fn sem_open(name: *const c_char, flags: c_int, mut args: .
     let mut mode: mode_t = 0;
     let mut value: c_uint = 0;
     if oflags & O_CREAT != 0 {
-        mode = args.arg::<mode_t>() & 0o666;
-        value = args.arg::<c_uint>();
+        mode = args.next_arg::<mode_t>() & 0o666;
+        value = args.next_arg::<c_uint>();
         if value > SEM_VALUE_MAX as c_uint {
             ERRNO = EINVAL;
             semtab_lock();
@@ -5947,7 +5947,7 @@ macro_rules! impl_format {
             // Parse width
             let mut width: usize = 0;
             if *fmt.add(i) as u8 == b'*' {
-                width = args.arg::<c_int>() as usize; i += 1;
+                width = args.next_arg::<c_int>() as usize; i += 1;
             } else {
                 while (*fmt.add(i) as u8) >= b'0' && (*fmt.add(i) as u8) <= b'9' {
                     width = width * 10 + ((*fmt.add(i) as u8) - b'0') as usize; i += 1;
@@ -5958,7 +5958,7 @@ macro_rules! impl_format {
             if *fmt.add(i) as u8 == b'.' {
                 i += 1;
                 if *fmt.add(i) as u8 == b'*' {
-                    precision = args.arg::<c_int>(); i += 1;
+                    precision = args.next_arg::<c_int>(); i += 1;
                 } else {
                     precision = 0;
                     while (*fmt.add(i) as u8) >= b'0' && (*fmt.add(i) as u8) <= b'9' {
@@ -5978,22 +5978,22 @@ macro_rules! impl_format {
                     // Handle double-length modifiers
                     match (len_mod, len_mod2, spec) {
                         (b'h', b'h', b'n') => {
-                            let p = args.arg::<*mut c_void>();
+                            let p = args.next_arg::<*mut c_void>();
                             if !p.is_null() { *(p as *mut u8) = count as u8; }
                         }
                         (b'l', b'l', b'n') => {
-                            let p = args.arg::<*mut c_void>();
+                            let p = args.next_arg::<*mut c_void>();
                             if !p.is_null() { *(p as *mut c_longlong) = count as c_longlong; }
                         }
                         (b'l', b'l', b'd') | (b'l', b'l', b'i') => {
-                            let val = args.arg::<c_longlong>();
+                            let val = args.next_arg::<c_longlong>();
                             let b = format_i64(val as i64);
                             let mut fbuf = [0u8; 32];
                             let len = apply_width_flags(fbuf.as_mut_ptr(), b.0.as_ptr(), b.1, width, flags);
                             ($write_str)(fbuf.as_ptr(), len); count += len;
                         }
                         (b'l', b'l', b'u') => {
-                            let val = args.arg::<c_ulonglong>();
+                            let val = args.next_arg::<c_ulonglong>();
                             let b = format_u64(val as u64);
                             let mut fbuf = [0u8; 32];
                             let len = apply_width_flags(fbuf.as_mut_ptr(), b.0.as_ptr(), b.1, width, flags);
@@ -6005,44 +6005,44 @@ macro_rules! impl_format {
                     spec = len_mod2;
                     match (len_mod, spec) {
                         (b'h', b'n') => {
-                            let p = args.arg::<*mut c_void>();
+                            let p = args.next_arg::<*mut c_void>();
                             if !p.is_null() { *(p as *mut u16) = count as u16; }
                         }
                         (b'l', b'n') => {
-                            let p = args.arg::<*mut c_void>();
+                            let p = args.next_arg::<*mut c_void>();
                             if !p.is_null() { *(p as *mut c_long) = count as c_long; }
                         }
                         (b'z', b'n') | (b't', b'n') => {
-                            let p = args.arg::<*mut c_void>();
+                            let p = args.next_arg::<*mut c_void>();
                             if !p.is_null() { *(p as *mut usize) = count; }
                         }
                         (b'j', b'n') => {
-                            let p = args.arg::<*mut c_void>();
+                            let p = args.next_arg::<*mut c_void>();
                             if !p.is_null() { *(p as *mut c_ulonglong) = count as c_ulonglong; }
                         }
                         (b'l', b'd') | (b'l', b'i') => {
-                            let val = args.arg::<c_long>();
+                            let val = args.next_arg::<c_long>();
                             let b = format_i64(val as i64);
                             let mut fbuf = [0u8; 32];
                             let len = apply_width_flags(fbuf.as_mut_ptr(), b.0.as_ptr(), b.1, width, flags);
                             ($write_str)(fbuf.as_ptr(), len); count += len;
                         }
                         (b'l', b'u') => {
-                            let val = args.arg::<c_ulong>();
+                            let val = args.next_arg::<c_ulong>();
                             let b = format_u64(val as u64);
                             let mut fbuf = [0u8; 32];
                             let len = apply_width_flags(fbuf.as_mut_ptr(), b.0.as_ptr(), b.1, width, flags);
                             ($write_str)(fbuf.as_ptr(), len); count += len;
                         }
                         (b'l', b'x') => {
-                            let val = args.arg::<c_ulong>();
+                            let val = args.next_arg::<c_ulong>();
                             let b = format_hex(val as u64, false);
                             let mut fbuf = [0u8; 32];
                             let len = apply_width_flags(fbuf.as_mut_ptr(), b.0.as_ptr(), b.1, width, flags);
                             ($write_str)(fbuf.as_ptr(), len); count += len;
                         }
                         (b'l', b'X') => {
-                            let val = args.arg::<c_ulong>();
+                            let val = args.next_arg::<c_ulong>();
                             let b = format_hex(val as u64, true);
                             let mut fbuf = [0u8; 32];
                             let len = apply_width_flags(fbuf.as_mut_ptr(), b.0.as_ptr(), b.1, width, flags);
@@ -6050,7 +6050,7 @@ macro_rules! impl_format {
                         }
                         (b'l', b'f') | (b'l', b'F') | (b'l', b'e') | (b'l', b'E')
                         | (b'l', b'g') | (b'l', b'G') | (b'l', b'a') | (b'l', b'A') => {
-                            let val = args.arg::<f64>();
+                            let val = args.next_arg::<f64>();
                             let ucase = spec == b'F' || spec == b'E' || spec == b'G' || spec == b'A';
                             let ftype = match spec | 0x20 { b'f' => FMT_F, b'e' => FMT_E, b'g' => FMT_G, b'a' => FMT_A, _ => FMT_F };
                             let mut fbuf = [0u8; 4224];
@@ -6062,7 +6062,7 @@ macro_rules! impl_format {
                         (b'L', b'f') | (b'L', b'F') | (b'L', b'e') | (b'L', b'E')
                         | (b'L', b'g') | (b'L', b'G') | (b'L', b'a') | (b'L', b'A') => {
                             // Long double = double for this implementation
-                            let val = args.arg::<f64>();
+                            let val = args.next_arg::<f64>();
                             let ucase = spec == b'F' || spec == b'E' || spec == b'G' || spec == b'A';
                             let ftype = match spec | 0x20 { b'f' => FMT_F, b'e' => FMT_E, b'g' => FMT_G, b'a' => FMT_A, _ => FMT_F };
                             let mut fbuf = [0u8; 4224];
@@ -6078,7 +6078,7 @@ macro_rules! impl_format {
                 spec = *fmt.add(i) as u8;
                 match spec {
                     b's' => {
-                        let s = args.arg::<*const c_char>();
+                        let s = args.next_arg::<*const c_char>();
                         if s.is_null() {
                             let slen = if precision >= 0 { (precision as usize).min(6) } else { 6 };
                             let padded_len = if width > slen { width } else { slen };
@@ -6107,35 +6107,35 @@ macro_rules! impl_format {
                         }
                     }
                     b'd' | b'i' => {
-                        let d = args.arg::<c_int>();
+                        let d = args.next_arg::<c_int>();
                         let b = format_i64(d as i64);
                         let mut fbuf = [0u8; 32];
                         let len = apply_width_flags(fbuf.as_mut_ptr(), b.0.as_ptr(), b.1, width, flags);
                         ($write_str)(fbuf.as_ptr(), len); count += len;
                     }
                     b'u' => {
-                        let u = args.arg::<c_uint>();
+                        let u = args.next_arg::<c_uint>();
                         let b = format_u64(u as u64);
                         let mut fbuf = [0u8; 32];
                         let len = apply_width_flags(fbuf.as_mut_ptr(), b.0.as_ptr(), b.1, width, flags);
                         ($write_str)(fbuf.as_ptr(), len); count += len;
                     }
                     b'x' => {
-                        let x = args.arg::<c_uint>();
+                        let x = args.next_arg::<c_uint>();
                         let b = format_hex(x as u64, false);
                         let mut fbuf = [0u8; 32];
                         let len = apply_width_flags(fbuf.as_mut_ptr(), b.0.as_ptr(), b.1, width, flags);
                         ($write_str)(fbuf.as_ptr(), len); count += len;
                     }
                     b'X' => {
-                        let x = args.arg::<c_uint>();
+                        let x = args.next_arg::<c_uint>();
                         let b = format_hex(x as u64, true);
                         let mut fbuf = [0u8; 32];
                         let len = apply_width_flags(fbuf.as_mut_ptr(), b.0.as_ptr(), b.1, width, flags);
                         ($write_str)(fbuf.as_ptr(), len); count += len;
                     }
                     b'c' => {
-                        let ch = args.arg::<c_int>();
+                        let ch = args.next_arg::<c_int>();
                         if width > 1 {
                             let pad = width - 1;
                             if flags & FLAG_MINUS != 0 {
@@ -6150,7 +6150,7 @@ macro_rules! impl_format {
                         }
                     }
                     b'p' => {
-                        let p = args.arg::<*const c_void>();
+                        let p = args.next_arg::<*const c_void>();
                         let mut fbuf = [0u8; 20];
                         fbuf[0] = b'0'; fbuf[1] = b'x';
                         let b = format_hex(p as u64, false);
@@ -6158,7 +6158,7 @@ macro_rules! impl_format {
                         ($write_str)(fbuf.as_ptr(), b.1 + 2); count += b.1 + 2;
                     }
                     b'f' | b'F' | b'e' | b'E' | b'g' | b'G' | b'a' | b'A' => {
-                        let val = args.arg::<f64>();
+                        let val = args.next_arg::<f64>();
                         let ucase = spec == b'F' || spec == b'E' || spec == b'G' || spec == b'A';
                         let ftype = match spec | 0x20 { b'f' => FMT_F, b'e' => FMT_E, b'g' => FMT_G, b'a' => FMT_A, _ => FMT_F };
                         let mut fbuf = [0u8; 4224];
@@ -6169,7 +6169,7 @@ macro_rules! impl_format {
                     }
                     b'%' => { ($write_char)(b'%'); count += 1; }
                     b'n' => {
-                        let p = args.arg::<*mut c_void>();
+                        let p = args.next_arg::<*mut c_void>();
                         if !p.is_null() { *(p as *mut c_int) = count as c_int; }
                     }
                     _ => { ($write_char)(b'%'); ($write_char)(spec); count += 2; }
@@ -6655,7 +6655,7 @@ pub unsafe extern "C" fn vdprintf(fd: c_int, fmt: *const c_char, mut args: VaLis
 // sprintf / snprintf / vsprintf / vsnprintf
 // ============================================================
 
-unsafe fn format_to_buf(buf: *mut u8, cap: usize, fmt: *const c_char, args: &mut VaListImpl) -> c_int {
+unsafe fn format_to_buf(buf: *mut u8, cap: usize, fmt: *const c_char, args: &mut VaList<'_>) -> c_int {
     let mut pos = 0usize;
     let mut i = 0usize;
     let mut count = 0usize;
@@ -6698,7 +6698,7 @@ unsafe fn format_to_buf(buf: *mut u8, cap: usize, fmt: *const c_char, args: &mut
         // Parse width
         let mut width: usize = 0;
         if *fmt.add(i) as u8 == b'*' {
-            width = args.arg::<c_int>() as usize; i += 1;
+            width = args.next_arg::<c_int>() as usize; i += 1;
         } else {
             while (*fmt.add(i) as u8) >= b'0' && (*fmt.add(i) as u8) <= b'9' {
                 width = width * 10 + ((*fmt.add(i) as u8) - b'0') as usize; i += 1;
@@ -6709,7 +6709,7 @@ unsafe fn format_to_buf(buf: *mut u8, cap: usize, fmt: *const c_char, args: &mut
         if *fmt.add(i) as u8 == b'.' {
             i += 1;
             if *fmt.add(i) as u8 == b'*' {
-                precision = args.arg::<c_int>(); i += 1;
+                precision = args.next_arg::<c_int>(); i += 1;
             } else {
                 precision = 0;
                 while (*fmt.add(i) as u8) >= b'0' && (*fmt.add(i) as u8) <= b'9' {
@@ -6728,22 +6728,22 @@ unsafe fn format_to_buf(buf: *mut u8, cap: usize, fmt: *const c_char, args: &mut
                 spec = *fmt.add(i) as u8;
                 match (len_mod, len_mod2, spec) {
                     (b'h', b'h', b'n') => {
-                        let p = args.arg::<*mut c_void>();
+                        let p = args.next_arg::<*mut c_void>();
                         if !p.is_null() { *(p as *mut u8) = count as u8; }
                     }
                     (b'l', b'l', b'n') => {
-                        let p = args.arg::<*mut c_void>();
+                        let p = args.next_arg::<*mut c_void>();
                         if !p.is_null() { *(p as *mut c_longlong) = count as c_longlong; }
                     }
                     (b'l', b'l', b'd') | (b'l', b'l', b'i') => {
-                        let val = args.arg::<c_longlong>();
+                        let val = args.next_arg::<c_longlong>();
                         let b = format_i64(val as i64);
                         let mut fbuf = [0u8; 32];
                         let len = apply_width_flags(fbuf.as_mut_ptr(), b.0.as_ptr(), b.1, width, flags);
                         ws_buf!(fbuf.as_ptr(), len);
                     }
                     (b'l', b'l', b'u') => {
-                        let val = args.arg::<c_ulonglong>();
+                        let val = args.next_arg::<c_ulonglong>();
                         let b = format_u64(val as u64);
                         let mut fbuf = [0u8; 32];
                         let len = apply_width_flags(fbuf.as_mut_ptr(), b.0.as_ptr(), b.1, width, flags);
@@ -6755,44 +6755,44 @@ unsafe fn format_to_buf(buf: *mut u8, cap: usize, fmt: *const c_char, args: &mut
                 spec = len_mod2;
                 match (len_mod, spec) {
                     (b'h', b'n') => {
-                        let p = args.arg::<*mut c_void>();
+                        let p = args.next_arg::<*mut c_void>();
                         if !p.is_null() { *(p as *mut u16) = count as u16; }
                     }
                     (b'l', b'n') => {
-                        let p = args.arg::<*mut c_void>();
+                        let p = args.next_arg::<*mut c_void>();
                         if !p.is_null() { *(p as *mut c_long) = count as c_long; }
                     }
                     (b'z', b'n') | (b't', b'n') => {
-                        let p = args.arg::<*mut c_void>();
+                        let p = args.next_arg::<*mut c_void>();
                         if !p.is_null() { *(p as *mut usize) = count; }
                     }
                     (b'j', b'n') => {
-                        let p = args.arg::<*mut c_void>();
+                        let p = args.next_arg::<*mut c_void>();
                         if !p.is_null() { *(p as *mut c_ulonglong) = count as c_ulonglong; }
                     }
                     (b'l', b'd') | (b'l', b'i') => {
-                        let val = args.arg::<c_long>();
+                        let val = args.next_arg::<c_long>();
                         let b = format_i64(val as i64);
                         let mut fbuf = [0u8; 32];
                         let len = apply_width_flags(fbuf.as_mut_ptr(), b.0.as_ptr(), b.1, width, flags);
                         ws_buf!(fbuf.as_ptr(), len);
                     }
                     (b'l', b'u') => {
-                        let val = args.arg::<c_ulong>();
+                        let val = args.next_arg::<c_ulong>();
                         let b = format_u64(val as u64);
                         let mut fbuf = [0u8; 32];
                         let len = apply_width_flags(fbuf.as_mut_ptr(), b.0.as_ptr(), b.1, width, flags);
                         ws_buf!(fbuf.as_ptr(), len);
                     }
                     (b'l', b'x') => {
-                        let val = args.arg::<c_ulong>();
+                        let val = args.next_arg::<c_ulong>();
                         let b = format_hex(val as u64, false);
                         let mut fbuf = [0u8; 32];
                         let len = apply_width_flags(fbuf.as_mut_ptr(), b.0.as_ptr(), b.1, width, flags);
                         ws_buf!(fbuf.as_ptr(), len);
                     }
                     (b'l', b'X') => {
-                        let val = args.arg::<c_ulong>();
+                        let val = args.next_arg::<c_ulong>();
                         let b = format_hex(val as u64, true);
                         let mut fbuf = [0u8; 32];
                         let len = apply_width_flags(fbuf.as_mut_ptr(), b.0.as_ptr(), b.1, width, flags);
@@ -6802,7 +6802,7 @@ unsafe fn format_to_buf(buf: *mut u8, cap: usize, fmt: *const c_char, args: &mut
                     | (b'l', b'g') | (b'l', b'G') | (b'l', b'a') | (b'l', b'A')
                     | (b'L', b'f') | (b'L', b'F') | (b'L', b'e') | (b'L', b'E')
                     | (b'L', b'g') | (b'L', b'G') | (b'L', b'a') | (b'L', b'A') => {
-                        let val = args.arg::<f64>();
+                        let val = args.next_arg::<f64>();
                         let ucase = spec == b'F' || spec == b'E' || spec == b'G' || spec == b'A';
                         let ftype = match spec | 0x20 { b'f' => FMT_F, b'e' => FMT_E, b'g' => FMT_G, b'a' => FMT_A, _ => FMT_F };
                         let mut fbuf = [0u8; 4224];
@@ -6818,7 +6818,7 @@ unsafe fn format_to_buf(buf: *mut u8, cap: usize, fmt: *const c_char, args: &mut
             spec = *fmt.add(i) as u8;
             match spec {
                 b's' => {
-                    let s = args.arg::<*const c_char>();
+                    let s = args.next_arg::<*const c_char>();
                     if s.is_null() {
                         let slen = if precision >= 0 { (precision as usize).min(6) } else { 6 };
                         let padded_len = if width > slen { width } else { slen };
@@ -6845,35 +6845,35 @@ unsafe fn format_to_buf(buf: *mut u8, cap: usize, fmt: *const c_char, args: &mut
                     }
                 }
                 b'd' | b'i' => {
-                    let d = args.arg::<c_int>();
+                    let d = args.next_arg::<c_int>();
                     let b = format_i64(d as i64);
                     let mut fbuf = [0u8; 32];
                     let len = apply_width_flags(fbuf.as_mut_ptr(), b.0.as_ptr(), b.1, width, flags);
                     ws_buf!(fbuf.as_ptr(), len);
                 }
                 b'u' => {
-                    let u = args.arg::<c_uint>();
+                    let u = args.next_arg::<c_uint>();
                     let b = format_u64(u as u64);
                     let mut fbuf = [0u8; 32];
                     let len = apply_width_flags(fbuf.as_mut_ptr(), b.0.as_ptr(), b.1, width, flags);
                     ws_buf!(fbuf.as_ptr(), len);
                 }
                 b'x' => {
-                    let x = args.arg::<c_uint>();
+                    let x = args.next_arg::<c_uint>();
                     let b = format_hex(x as u64, false);
                     let mut fbuf = [0u8; 32];
                     let len = apply_width_flags(fbuf.as_mut_ptr(), b.0.as_ptr(), b.1, width, flags);
                     ws_buf!(fbuf.as_ptr(), len);
                 }
                 b'X' => {
-                    let x = args.arg::<c_uint>();
+                    let x = args.next_arg::<c_uint>();
                     let b = format_hex(x as u64, true);
                     let mut fbuf = [0u8; 32];
                     let len = apply_width_flags(fbuf.as_mut_ptr(), b.0.as_ptr(), b.1, width, flags);
                     ws_buf!(fbuf.as_ptr(), len);
                 }
                 b'c' => {
-                    let ch = args.arg::<c_int>();
+                    let ch = args.next_arg::<c_int>();
                     if width > 1 {
                         let pad = width - 1;
                         if flags & FLAG_MINUS != 0 {
@@ -6889,12 +6889,12 @@ unsafe fn format_to_buf(buf: *mut u8, cap: usize, fmt: *const c_char, args: &mut
                 }
                 b'p' => {
                     wc!(b'0'); wc!(b'x');
-                    let p = args.arg::<*const c_void>();
+                    let p = args.next_arg::<*const c_void>();
                     let b = format_hex(p as u64, false);
                     ws!(b.0.as_ptr(), b.1);
                 }
                 b'f' | b'F' | b'e' | b'E' | b'g' | b'G' | b'a' | b'A' => {
-                    let val = args.arg::<f64>();
+                    let val = args.next_arg::<f64>();
                     let ucase = spec == b'F' || spec == b'E' || spec == b'G' || spec == b'A';
                     let ftype = match spec | 0x20 { b'f' => FMT_F, b'e' => FMT_E, b'g' => FMT_G, b'a' => FMT_A, _ => FMT_F };
                     let mut fbuf = [0u8; 4224];
@@ -6905,7 +6905,7 @@ unsafe fn format_to_buf(buf: *mut u8, cap: usize, fmt: *const c_char, args: &mut
                 }
                 b'%' => { wc!(b'%'); }
                 b'n' => {
-                    let p = args.arg::<*mut c_void>();
+                    let p = args.next_arg::<*mut c_void>();
                     if !p.is_null() { *(p as *mut c_int) = count as c_int; }
                 }
                 _ => { wc!(b'%'); wc!(spec); }
@@ -6919,12 +6919,12 @@ unsafe fn format_to_buf(buf: *mut u8, cap: usize, fmt: *const c_char, args: &mut
 
 #[no_mangle]
 pub unsafe extern "C" fn vsprintf(buf: *mut c_char, fmt: *const c_char, mut args: VaList) -> c_int {
-    format_to_buf(buf as *mut u8, usize::MAX, fmt, &mut *args)
+    format_to_buf(buf as *mut u8, usize::MAX, fmt, &mut args)
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn vsnprintf(buf: *mut c_char, size: usize, fmt: *const c_char, mut args: VaList) -> c_int {
-    format_to_buf(buf as *mut u8, size, fmt, &mut *args)
+    format_to_buf(buf as *mut u8, size, fmt, &mut args)
 }
 
 #[no_mangle]
@@ -7067,7 +7067,7 @@ unsafe fn scan_float_val(
 // Comprehensive scanf parser with position tracking.
 // consumed: if non-null, stores number of bytes consumed from buf.
 unsafe fn do_vsscanf(
-    buf: *const u8, buf_len: usize, fmt: *const c_char, args: &mut VaListImpl, consumed: *mut usize,
+    buf: *const u8, buf_len: usize, fmt: *const c_char, args: &mut VaList<'_>, consumed: *mut usize,
 ) -> c_int {
     let mut p = 0usize;
     let mut fi = 0usize;
@@ -7112,11 +7112,11 @@ unsafe fn do_vsscanf(
         let (real_spec, _real_len) = if spec==b'C' {(b'c',3u8)} else if spec==b'S' {(b's',3u8)} else {(spec,len_mod)};
         match real_spec {
             b'n' => {
-                if !suppress { let out = args.arg::<*mut c_int>(); if !out.is_null() { *out = p as c_int; } }
+                if !suppress { let out = args.next_arg::<*mut c_int>(); if !out.is_null() { *out = p as c_int; } }
             }
             b'd' | b'u' => {
                 while p < buf_len && is_ws_byte(*buf.add(p)) { p += 1; }
-                let dest = if !suppress { Some(args.arg::<*mut c_int>()) } else { None };
+                let dest = if !suppress { Some(args.next_arg::<*mut c_int>()) } else { None };
                 let (val, neg, ok) = scan_int_val(buf, &mut p, buf_len, 10, width);
                 if !ok { break; }
                 if let Some(out) = dest { if !out.is_null() {
@@ -7126,7 +7126,7 @@ unsafe fn do_vsscanf(
             }
             b'i' => {
                 while p < buf_len && is_ws_byte(*buf.add(p)) { p += 1; }
-                let dest = if !suppress { Some(args.arg::<*mut c_int>()) } else { None };
+                let dest = if !suppress { Some(args.next_arg::<*mut c_int>()) } else { None };
                 let (val, neg, ok) = scan_int_val(buf, &mut p, buf_len, 0, width);
                 if !ok { break; }
                 if let Some(out) = dest { if !out.is_null() { *out = if neg { -(val as i64) as c_int } else { val as c_int }; } }
@@ -7134,7 +7134,7 @@ unsafe fn do_vsscanf(
             }
             b'o' => {
                 while p < buf_len && is_ws_byte(*buf.add(p)) { p += 1; }
-                let dest = if !suppress { Some(args.arg::<*mut c_int>()) } else { None };
+                let dest = if !suppress { Some(args.next_arg::<*mut c_int>()) } else { None };
                 let (val, _, ok) = scan_int_val(buf, &mut p, buf_len, 8, width);
                 if !ok { break; }
                 if let Some(out) = dest { if !out.is_null() { *out = val as c_int; } }
@@ -7142,7 +7142,7 @@ unsafe fn do_vsscanf(
             }
             b'x' | b'X' => {
                 while p < buf_len && is_ws_byte(*buf.add(p)) { p += 1; }
-                let dest = if !suppress { Some(args.arg::<*mut c_int>()) } else { None };
+                let dest = if !suppress { Some(args.next_arg::<*mut c_int>()) } else { None };
                 let (val, _, ok) = scan_int_val(buf, &mut p, buf_len, 16, width);
                 if !ok { break; }
                 if let Some(out) = dest { if !out.is_null() { *out = val as c_int; } }
@@ -7150,7 +7150,7 @@ unsafe fn do_vsscanf(
             }
             b'p' => {
                 while p < buf_len && is_ws_byte(*buf.add(p)) { p += 1; }
-                let dest = if !suppress { Some(args.arg::<*mut *mut c_void>()) } else { None };
+                let dest = if !suppress { Some(args.next_arg::<*mut *mut c_void>()) } else { None };
                 let (val, _, ok) = scan_int_val(buf, &mut p, buf_len, 16, width);
                 if !ok { break; }
                 if let Some(out) = dest { if !out.is_null() { *out = val as usize as *mut c_void; } }
@@ -7163,16 +7163,16 @@ unsafe fn do_vsscanf(
                 if !suppress {
                     // %f -> f32, %lf -> f64, %Lf -> f64
                     if _real_len == 3 || _real_len == 5 {
-                        let out = args.arg::<*mut f64>(); if !out.is_null() { *out = val; }
+                        let out = args.next_arg::<*mut f64>(); if !out.is_null() { *out = val; }
                     } else {
-                        let out = args.arg::<*mut f32>(); if !out.is_null() { *out = val as f32; }
+                        let out = args.next_arg::<*mut f32>(); if !out.is_null() { *out = val as f32; }
                     }
                 }
                 if !suppress { assigned += 1; }
             }
             b'c' => {
                 let w = if width > 0 { width } else { 1 };
-                let dest_ptr: *mut c_char = if !suppress { args.arg::<*mut c_char>() } else { core::ptr::null_mut() };
+                let dest_ptr: *mut c_char = if !suppress { args.next_arg::<*mut c_char>() } else { core::ptr::null_mut() };
                 let mut j = 0usize;
                 while j < w && p < buf_len {
                     if !dest_ptr.is_null() { *dest_ptr.add(j) = *buf.add(p) as c_char; }
@@ -7184,7 +7184,7 @@ unsafe fn do_vsscanf(
             b's' => {
                 while p < buf_len && is_ws_byte(*buf.add(p)) { p += 1; }
                 if p >= buf_len || *buf.add(p) == 0 { break; }
-                let dest_ptr: *mut c_char = if !suppress { args.arg::<*mut c_char>() } else { core::ptr::null_mut() };
+                let dest_ptr: *mut c_char = if !suppress { args.next_arg::<*mut c_char>() } else { core::ptr::null_mut() };
                 let w = if width > 0 { width } else { usize::MAX };
                 let mut j = 0usize;
                 while p < buf_len && *buf.add(p) != 0 && !is_ws_byte(*buf.add(p)) && j < w {
@@ -7203,7 +7203,7 @@ unsafe fn do_vsscanf(
                 loop { let c = *fmt.add(fi) as u8; if c == b']' || c == 0 { break; } charset[c as usize] = 1; fi += 1; }
                 if *fmt.add(fi) as u8 == b']' { fi += 1; }
                 fi -= 1; // common fi += 1 will advance past the closing ]
-                let dest_ptr: *mut c_char = if !suppress { args.arg::<*mut c_char>() } else { core::ptr::null_mut() };
+                let dest_ptr: *mut c_char = if !suppress { args.next_arg::<*mut c_char>() } else { core::ptr::null_mut() };
                 let w = if width > 0 { width } else { usize::MAX };
                 let mut j = 0usize;
                 while p < buf_len && *buf.add(p) != 0 && j < w {
@@ -7225,14 +7225,14 @@ unsafe fn do_vsscanf(
     if assigned == 0 && input_eof { -1 } else { assigned }
 }
 
-unsafe fn vsscanf_inner(buf: *const u8, fmt: *const c_char, args: &mut VaListImpl) -> c_int {
+unsafe fn vsscanf_inner(buf: *const u8, fmt: *const c_char, args: &mut VaList<'_>) -> c_int {
     let len = strlen(buf);
     do_vsscanf(buf, len, fmt, args, core::ptr::null_mut())
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn vsscanf(buf: *const c_char, fmt: *const c_char, mut args: VaList) -> c_int {
-    vsscanf_inner(buf as *const u8, fmt, &mut *args)
+    vsscanf_inner(buf as *const u8, fmt, &mut args)
 }
 
 #[no_mangle]
@@ -7249,7 +7249,7 @@ pub unsafe extern "C" fn vfscanf(stream: *mut FILE, fmt: *const c_char, mut args
     }
     line[pos] = 0;
     if pos == 0 { return 0; }
-    vsscanf_inner(line.as_ptr(), fmt, &mut *args)
+    vsscanf_inner(line.as_ptr(), fmt, &mut args)
 }
 
 #[no_mangle]
@@ -7264,12 +7264,12 @@ pub unsafe extern "C" fn sscanf(buf: *const c_char, fmt: *const c_char, mut args
 
 #[no_mangle]
 pub unsafe extern "C" fn fscanf(stream: *mut FILE, fmt: *const c_char, mut args: ...) -> c_int {
-    vfscanf(stream, fmt, args.as_va_list())
+    vfscanf(stream, fmt, args)
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn scanf(fmt: *const c_char, mut args: ...) -> c_int {
-    vfscanf(stdin, fmt, args.as_va_list())
+    vfscanf(stdin, fmt, args)
 }
 
 // ============================================================
@@ -9006,32 +9006,32 @@ pub unsafe extern "C" fn vswprintf(s: *mut wchar_t, n: usize, fmt: *const wchar_
         let spec = *fmt.add(i) as u32;
         match spec {
             0x73 => {
-                let p = args.arg::<*const c_char>();
+                let p = args.next_arg::<*const c_char>();
                 if p.is_null() { pos = wfmt_write_str(s, pos, cap, b"(null)".as_ptr(), 6); }
                 else { let len = strlen(p as *const u8); pos = wfmt_write_str(s, pos, cap, p as *const u8, len); }
             }
             0x64 | 0x69 => {
-                let d = args.arg::<c_int>();
+                let d = args.next_arg::<c_int>();
                 let (buf, len) = format_i64(d as i64);
                 pos = wfmt_write_str(s, pos, cap, buf.as_ptr().add(21 - len), len);
             }
             0x75 => {
-                let u = args.arg::<c_uint>();
+                let u = args.next_arg::<c_uint>();
                 let (buf, len) = format_u64(u as u64);
                 pos = wfmt_write_str(s, pos, cap, buf.as_ptr().add(20 - len), len);
             }
             0x78 => {
-                let x = args.arg::<c_uint>();
+                let x = args.next_arg::<c_uint>();
                 let (buf, len) = format_hex(x as u64, false);
                 pos = wfmt_write_str(s, pos, cap, buf.as_ptr().add(16 - len), len);
             }
             0x58 => {
-                let x = args.arg::<c_uint>();
+                let x = args.next_arg::<c_uint>();
                 let (buf, len) = format_hex(x as u64, true);
                 pos = wfmt_write_str(s, pos, cap, buf.as_ptr().add(16 - len), len);
             }
             0x63 => {
-                let ch = args.arg::<c_int>();
+                let ch = args.next_arg::<c_int>();
                 if pos < cap { *s.add(pos) = ch as wchar_t; }
                 pos += 1;
             }
@@ -9039,12 +9039,12 @@ pub unsafe extern "C" fn vswprintf(s: *mut wchar_t, n: usize, fmt: *const wchar_
                 if pos < cap { *s.add(pos) = b'0' as wchar_t; }
                 if pos + 1 < cap { *s.add(pos + 1) = b'x' as wchar_t; }
                 pos += 2;
-                let p = args.arg::<*const c_void>();
+                let p = args.next_arg::<*const c_void>();
                 let (buf, len) = format_hex(p as u64, false);
                 pos = wfmt_write_str(s, pos, cap, buf.as_ptr().add(16 - len), len);
             }
             0x66 => {
-                let val = args.arg::<f64>();
+                let val = args.next_arg::<f64>();
                 let (buf, len) = format_f64(val);
                 pos = wfmt_write_str(s, pos, cap, buf.as_ptr(), len);
             }
@@ -9052,10 +9052,10 @@ pub unsafe extern "C" fn vswprintf(s: *mut wchar_t, n: usize, fmt: *const wchar_
                 i += 1;
                 let sub = *fmt.add(i) as u32;
                 match sub {
-                    0x64 => { let ld = args.arg::<c_long>(); let (buf, len) = format_i64(ld as i64); pos = wfmt_write_str(s, pos, cap, buf.as_ptr().add(21 - len), len); }
-                    0x75 => { let lu = args.arg::<c_ulong>(); let (buf, len) = format_u64(lu as u64); pos = wfmt_write_str(s, pos, cap, buf.as_ptr().add(20 - len), len); }
-                    0x78 => { let lx = args.arg::<c_ulong>(); let (buf, len) = format_hex(lx as u64, false); pos = wfmt_write_str(s, pos, cap, buf.as_ptr().add(16 - len), len); }
-                    0x58 => { let lx = args.arg::<c_ulong>(); let (buf, len) = format_hex(lx as u64, true); pos = wfmt_write_str(s, pos, cap, buf.as_ptr().add(16 - len), len); }
+                    0x64 => { let ld = args.next_arg::<c_long>(); let (buf, len) = format_i64(ld as i64); pos = wfmt_write_str(s, pos, cap, buf.as_ptr().add(21 - len), len); }
+                    0x75 => { let lu = args.next_arg::<c_ulong>(); let (buf, len) = format_u64(lu as u64); pos = wfmt_write_str(s, pos, cap, buf.as_ptr().add(20 - len), len); }
+                    0x78 => { let lx = args.next_arg::<c_ulong>(); let (buf, len) = format_hex(lx as u64, false); pos = wfmt_write_str(s, pos, cap, buf.as_ptr().add(16 - len), len); }
+                    0x58 => { let lx = args.next_arg::<c_ulong>(); let (buf, len) = format_hex(lx as u64, true); pos = wfmt_write_str(s, pos, cap, buf.as_ptr().add(16 - len), len); }
                     _ => { if pos < cap { *s.add(pos) = b'%' as wchar_t; } if pos + 1 < cap { *s.add(pos + 1) = sub as wchar_t; } pos += 2; }
                 }
             }
@@ -9070,7 +9070,7 @@ pub unsafe extern "C" fn vswprintf(s: *mut wchar_t, n: usize, fmt: *const wchar_
 
 #[no_mangle]
 pub unsafe extern "C" fn swprintf(s: *mut wchar_t, n: usize, fmt: *const wchar_t, mut args: ...) -> c_int {
-    vswprintf(s, n, fmt, args.as_va_list())
+    vswprintf(s, n, fmt, args)
 }
 
 #[no_mangle]
@@ -9091,7 +9091,7 @@ pub unsafe extern "C" fn vfwprintf(f: *mut FILE, fmt: *const wchar_t, mut args: 
 
 #[no_mangle]
 pub unsafe extern "C" fn fwprintf(f: *mut FILE, fmt: *const wchar_t, mut args: ...) -> c_int {
-    vfwprintf(f, fmt, args.as_va_list())
+    vfwprintf(f, fmt, args)
 }
 
 // ============================================================
@@ -9130,12 +9130,12 @@ pub unsafe extern "C" fn vswscanf(s: *const wchar_t, fmt: *const wchar_t, mut ar
     mbs_buf[mb_pos] = 0;
     let mut mbs_fmt = [0u8; 4096];
     wcsfmt_to_mbs(mbs_fmt.as_mut_ptr(), mbs_fmt.len(), fmt);
-    do_vsscanf(mbs_buf.as_ptr(), mb_pos, mbs_fmt.as_ptr() as *const c_char, &mut *args, core::ptr::null_mut())
+    do_vsscanf(mbs_buf.as_ptr(), mb_pos, mbs_fmt.as_ptr() as *const c_char, &mut args, core::ptr::null_mut())
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn swscanf(s: *const wchar_t, fmt: *const wchar_t, mut args: ...) -> c_int {
-    vswscanf(s, fmt, args.as_va_list())
+    vswscanf(s, fmt, args)
 }
 
 #[no_mangle]
@@ -9155,14 +9155,14 @@ pub unsafe extern "C" fn vfwscanf(f: *mut FILE, fmt: *const wchar_t, mut args: V
     let mut mbs_fmt = [0u8; 4096];
     wcsfmt_to_mbs(mbs_fmt.as_mut_ptr(), mbs_fmt.len(), fmt);
     let mut consumed = 0usize;
-    let result = do_vsscanf(buf.as_ptr(), n, mbs_fmt.as_ptr() as *const c_char, &mut *args, &mut consumed);
+    let result = do_vsscanf(buf.as_ptr(), n, mbs_fmt.as_ptr() as *const c_char, &mut args, &mut consumed);
     let _ = fseeko(f, start_pos + consumed as i64, SEEK_SET);
     result
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn fwscanf(f: *mut FILE, fmt: *const wchar_t, mut args: ...) -> c_int {
-    vfwscanf(f, fmt, args.as_va_list())
+    vfwscanf(f, fmt, args)
 }
 
 #[no_mangle]
@@ -9172,7 +9172,7 @@ pub unsafe extern "C" fn vwscanf(fmt: *const wchar_t, mut args: VaList) -> c_int
 
 #[no_mangle]
 pub unsafe extern "C" fn wscanf(fmt: *const wchar_t, mut args: ...) -> c_int {
-    vfwscanf(stdin, fmt, args.as_va_list())
+    vfwscanf(stdin, fmt, args)
 }
 
 // ============================================================
@@ -10803,11 +10803,11 @@ pub unsafe extern "C" fn fcntl(fd: c_int, cmd: c_int, mut args: ...) -> c_int {
     let r = match cmd {
         F_GETFD | F_GETFL => sys_fcntl(fd, cmd, 0),
         F_SETFD | F_SETFL | F_DUPFD | F_DUPFD_CLOEXEC => {
-            let arg = args.arg::<c_int>();
+            let arg = args.next_arg::<c_int>();
             sys_fcntl(fd, cmd, arg as i64)
         }
         F_GETLK | F_SETLK | F_SETLKW => {
-            let arg = args.arg::<*mut c_void>();
+            let arg = args.next_arg::<*mut c_void>();
             sys_fcntl(fd, cmd, arg as i64)
         }
         _ => sys_fcntl(fd, cmd, 0),
@@ -13139,7 +13139,7 @@ pub unsafe extern "C" fn semctl(semid: c_int, semnum: c_int, cmd: c_int, mut arg
     // Commands that take the union semun argument
     match cmd {
         16 | 13 | 17 | 1 | 3 | 2 | 0x102 | 0x104 | 0x106 => {
-            arg = args.arg::<*mut c_void>();
+            arg = args.next_arg::<*mut c_void>();
         }
         _ => {}
     }

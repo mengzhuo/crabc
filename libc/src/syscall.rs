@@ -4,12 +4,12 @@
 
 #[no_mangle]
 pub unsafe extern "C" fn syscall(num: c_long, mut args: ...) -> c_long {
-    let a: c_long = args.arg();
-    let b: c_long = args.arg();
-    let c: c_long = args.arg();
-    let d: c_long = args.arg();
-    let e: c_long = args.arg();
-    let f: c_long = args.arg();
+    let a: c_long = args.next_arg();
+    let b: c_long = args.next_arg();
+    let c: c_long = args.next_arg();
+    let d: c_long = args.next_arg();
+    let e: c_long = args.next_arg();
+    let f: c_long = args.next_arg();
 
     let result: i64;
     core::arch::asm!(

@@ -15,6 +15,7 @@ edition = "2021"
 description = "A Rust musl-compatible libc with a dynamic linker"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/mengzhuo/crabc"
+readme = "README.md"
 
 [[bin]]
 name = "loader"
