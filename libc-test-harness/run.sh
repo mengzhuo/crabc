@@ -1,16 +1,16 @@
 #!/usr/bin/env bash
 #
-# Integration harness: build libc-test against librc's libc.so
+# Integration harness: build libc-test against crabc's libc.so
 # Usage: ./run.sh [subset]
 #   subset: functional (default), math, regression, api, all
 #
 set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-LIBRC_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+CRABC_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 LIBC_TEST_DIR="${LIBC_TEST_DIR:-/home/root/libc-test}"
-LIBC_SO="${LIBRC_DIR}/target/debug/libc.so"
-LDSO_SO="${LIBRC_DIR}/target/debug/libldso.so"
+LIBC_SO="${CRABC_DIR}/target/debug/libc.so"
+LDSO_SO="${CRABC_DIR}/target/debug/libldso.so"
 FAKE_LIBS="${SCRIPT_DIR}/fake-libs"
 BUILD_DIR="${SCRIPT_DIR}/build"
 REPORT_DIR="${SCRIPT_DIR}/reports"
@@ -21,8 +21,8 @@ mkdir -p "$FAKE_LIBS" "$BUILD_DIR" "$REPORT_DIR"
 
 
 if [ ! -f "$LIBC_SO" ] || [ ! -f "$LDSO_SO" ]; then
-    echo ">>> Building librc..."
-    (cd "$LIBRC_DIR" && cargo build 2>&1) || { echo "FATAL: cargo build failed"; exit 1; }
+    echo ">>> Building crabc..."
+    (cd "$CRABC_DIR" && cargo build 2>&1) || { echo "FATAL: cargo build failed"; exit 1; }
 fi
 echo ">>> Using libc.so: $LIBC_SO"
 echo ">>> Using libldso.so: $LDSO_SO"
@@ -48,7 +48,7 @@ CFLAGS="-I${LIBC_TEST_DIR}/src/common -pipe -std=c99 -D_POSIX_C_SOURCE=200809L -
 for f in "${LIBC_TEST_DIR}"/src/common/*.c; do
     base=$(basename "$f" .c)
     if [ "$base" = "mtest" ]; then
-        musl-gcc $CFLAGS -I"${LIBRC_DIR}/include" -c -o "$COMMON_BUILD/$base.o" "$f" 2>"$COMMON_BUILD/$base.o.err" || true
+        musl-gcc $CFLAGS -I"${CRABC_DIR}/include" -c -o "$COMMON_BUILD/$base.o" "$f" 2>"$COMMON_BUILD/$base.o.err" || true
     else
         musl-gcc $CFLAGS -c -o "$COMMON_BUILD/$base.o" "$f" 2>"$COMMON_BUILD/$base.o.err" || true
     fi
@@ -117,7 +117,7 @@ for dir in $DIRS; do
         COMPILE_RC=0
         EXTRA_CFLAGS=""
         if [ "$dir" = "math" ]; then
-            EXTRA_CFLAGS="-I${LIBRC_DIR}/include -mlong-double-64"
+            EXTRA_CFLAGS="-I${CRABC_DIR}/include -mlong-double-64"
         fi
         musl-gcc $CFLAGS $EXTRA_CFLAGS -c -o "$OBJ" "$cfile" 2>"$DIR_BUILD/${base}.o.err" || COMPILE_RC=$?
 

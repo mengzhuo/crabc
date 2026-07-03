@@ -60,7 +60,7 @@ static void test_inet(void) {
 }
 
 static void test_fcntl_lock(void) {
-    char path[] = "/tmp/librc_fcntl_lock_test_XXXXXX";
+    char path[] = "/tmp/crabc_fcntl_lock_test_XXXXXX";
     int fd = mkstemp(path);
     CHECK(fd >= 0, "mkstemp for lock test");
     if (fd < 0) return;

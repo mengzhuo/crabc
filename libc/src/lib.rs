@@ -4443,7 +4443,7 @@ const ENC_ISO8859_14: i32 = 28;
 const ENC_ISO8859_15: i32 = 29;
 const ENC_ISO8859_16: i32 = 30;
 
-include!("../../wave3/iconv_iso8859.rs");
+include!("iconv_iso8859.rs");
 
 fn make_cd(from: i32, to: i32) -> IconvT {
     ((from as usize) << 16 | (to as usize) << 1 | 1) as IconvT
@@ -13221,14 +13221,14 @@ pub unsafe extern "C" fn __libc_start_main(
 
 include!("crypt_impl.rs");
 include!("statvfs.rs");
-include!("../../wave1/daemon.rs");
-include!("../../wave1/dn_expand.rs");
-include!("../../wave1/lrand48.rs");
-include!("../../wave1/strverscmp.rs");
-include!("../../wave1/syscall.rs");
-include!("../../wave1/pthread_atfork.rs");
-include!("../../wave2/fenv.rs");
-include!("../../wave2/locale_ctype.rs");
+include!("daemon.rs");
+include!("dn_expand.rs");
+include!("lrand48.rs");
+include!("strverscmp.rs");
+include!("syscall.rs");
+include!("pthread_atfork.rs");
+include!("fenv.rs");
+include!("locale_ctype.rs");
 
 #[cfg(test)]
 mod libc_unit_stub {

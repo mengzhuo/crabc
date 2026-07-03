@@ -1,10 +1,10 @@
 # libc-test Integration Harness
 
-Builds and runs the [libc-test](https://git.musl-libc.org/cgit/libc-test) suite against librc's libc.so to produce a categorized failure report.
+Builds and runs the [libc-test](https://git.musl-libc.org/cgit/libc-test) suite against crabc's libc.so to produce a categorized failure report.
 
 ## How It Works
 
-1. Builds `librc/libc` into `target/debug/libc.so` (via `cargo build`).
+1. Builds `crabc/libc` into `target/debug/libc.so` (via `cargo build`).
 2. Creates a `fake-libs/` directory with symlinks so the linker resolves `-lc`, `-lpthread`, `-lm`, etc. against our libc.so instead of musl's.
 3. Builds libc-test's `runtest.exe` and `libtest.a` as host tools (linked against musl).
 4. Compiles and links each test binary with `musl-gcc -L fake-libs/`, then runs it via `LD_LIBRARY_PATH=fake-libs/`.
@@ -25,7 +25,7 @@ Reports are saved to `reports/`. Symlinks `reports/latest-summary.txt` and `repo
 ## Requirements
 
 - musl-gcc (`apt install musl-tools`)
-- Rust nightly toolchain (for building librc)
+- Rust nightly toolchain (for building crabc)
 - libc-test source at `/home/root/libc-test` (override with `LIBC_TEST_DIR` env var)
 
 ## Known Limitations

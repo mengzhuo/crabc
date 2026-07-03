@@ -22,9 +22,9 @@ const HYP_EPM1_Q5: f64 = asdouble(0xBE8AFDB76E09C32D);
 core::arch::global_asm!(
     ".intel_syntax noprefix",
     ".text",
-    ".global __librc_sinh_small_x87",
-    ".type __librc_sinh_small_x87, @function",
-    "__librc_sinh_small_x87:",
+    ".global __crabc_sinh_small_x87",
+    ".type __crabc_sinh_small_x87, @function",
+    "__crabc_sinh_small_x87:",
     "movsd qword ptr [rsp - 8], xmm0",
     "fld qword ptr [rsp - 8]",
     "fldl2e",
@@ -51,7 +51,7 @@ core::arch::global_asm!(
 
 #[cfg(target_arch = "x86_64")]
 extern "C" {
-    fn __librc_sinh_small_x87(x: f64) -> f64;
+    fn __crabc_sinh_small_x87(x: f64) -> f64;
 }
 
 // ============================================================
@@ -337,7 +337,7 @@ pub extern "C" fn sinh(x: f64) -> f64 {
     if w < 0x40862e42 {
         #[cfg(target_arch = "x86_64")]
         if w >= 0x3f500000 && w < 0x3fe62e42 {
-            let mut r = unsafe { __librc_sinh_small_x87(absx) };
+            let mut r = unsafe { __crabc_sinh_small_x87(absx) };
             if asuint64(x) >> 63 != 0 {
                 r = -r;
             }

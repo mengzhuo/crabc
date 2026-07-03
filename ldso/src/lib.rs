@@ -755,7 +755,11 @@ unsafe fn resolve_symbol_module(obj_idx: usize, sym_idx: usize) -> usize {
     let sym_entry = obj.symtab.add(sym_idx * SYMTAB_ENT_SIZE);
     let st_name =
         u32::from_le_bytes(core::ptr::read_unaligned(sym_entry as *const [u8; 4])) as usize;
-    if st_name >= obj.strsz {
+    if st_name == 0 || st_name >= obj.strsz {
+        return obj_idx;
+    }
+    let st_info = *sym_entry.add(4);
+    if (st_info & 0xf) == 6 {
         return obj_idx;
     }
     let name = obj.strtab.add(st_name);
