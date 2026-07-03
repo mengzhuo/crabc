@@ -324,6 +324,30 @@ fn sys_write(fd: i64, buf: *const u8, count: usize) -> i64 {
     result
 }
 
+unsafe fn write_stderr(msg: &[u8]) {
+    let _ = sys_write(2, msg.as_ptr(), msg.len());
+}
+
+unsafe fn write_hex_stderr(mut v: usize) {
+    let mut buf = [0u8; 18];
+    buf[0] = b'0';
+    buf[1] = b'x';
+    for i in 0..16 {
+        let nibble = ((v >> (60 - i * 4)) & 0xf) as u8;
+        buf[2 + i] = if nibble < 10 { b'0' + nibble } else { b'a' + nibble - 10 };
+    }
+    write_stderr(&buf);
+}
+
+unsafe fn die(code: i32, label: &[u8], detail: usize) -> ! {
+    write_stderr(b"[ldso fatal ");
+    write_stderr(label);
+    write_stderr(b" ");
+    write_hex_stderr(detail);
+    write_stderr(b"]\n");
+    sys_exit(code)
+}
+
 fn sys_close(fd: i64) {
     unsafe {
         core::arch::asm!(
@@ -1100,17 +1124,17 @@ unsafe fn load_and_jump(sp: usize) -> ! {
     let proc_exe = b"/proc/self/exe\0";
     let fd = sys_open(proc_exe.as_ptr());
     if fd < 0 {
-        sys_exit(99);
+        die(99, b"open_exe", fd as usize);
     }
 
     let mut buf = [0u8; 4096];
     let n = sys_read(fd, buf.as_mut_ptr(), buf.len());
     if n < 64 {
-        sys_exit(98);
+        die(98, b"read_exe", n as usize);
     }
 
     if buf[0] != 0x7f || buf[1] != b'E' {
-        sys_exit(97);
+        die(97, b"elf_magic", u16::from_le_bytes([buf[0], buf[1]]) as usize);
     }
 
     let e_phoff = u64::from_le_bytes(buf[32..40].try_into().unwrap());
@@ -1146,7 +1170,7 @@ unsafe fn load_and_jump(sp: usize) -> ! {
             map_off as i64,
         );
         if ptr as usize == MAP_FAILED {
-            sys_exit(95);
+            die(95, b"map_exec", map_addr as usize);
         }
 
         if p_memsz > p_filesz {
@@ -1256,12 +1280,12 @@ unsafe fn load_and_jump(sp: usize) -> ! {
         let (name_ptr, name_len) = needed_names[i];
         let lib_fd = find_library_fd(name_ptr, name_len, ld_path);
         if lib_fd < 0 {
-            sys_exit(89);
+            die(89, b"needed_fd", i);
         }
         let desired_base = DSO_BASE_START + (i as u64) * DSO_BASE_STRIDE;
         if load_dso_from_fd(lib_fd, desired_base).is_none() {
             sys_close(lib_fd);
-            sys_exit(88);
+            die(88, b"load_dso", desired_base as usize);
         }
         sys_close(lib_fd);
     }
@@ -1281,7 +1305,7 @@ unsafe fn load_and_jump(sp: usize) -> ! {
             0,
         );
         if tls_block as usize == MAP_FAILED {
-            sys_exit(93);
+            die(93, b"tls_mmap", alloc_size);
         }
         let tcb = init_tls_block(tls_block);
         sys_arch_prctl(0x1002, tcb as u64);
@@ -1319,7 +1343,7 @@ unsafe fn build_and_jump(entry: u64, phdr_addr: u64, phnum: u16, orig_sp: usize)
         0,
     );
     if stack_base as usize == MAP_FAILED {
-        sys_exit(94);
+        die(94, b"stack_mmap", stack_size);
     }
     let mut sp = stack_base as usize + stack_size;
 
