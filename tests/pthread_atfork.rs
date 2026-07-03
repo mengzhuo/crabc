@@ -5,7 +5,7 @@ fn pthread_atfork_handlers_fire_in_order() {
     let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
     let fixtures = manifest_dir.join("tests/fixtures");
     let include = manifest_dir.join("include");
-    let wave1 = manifest_dir.join("wave1");
+    let wave1 = manifest_dir.join("include");
 
     let ldso_path = manifest_dir.join("target/debug/libldso.so");
     let lib_dir = manifest_dir.join("target/debug");

@@ -5,7 +5,7 @@ fn isdigit(c: c_int) -> c_int {
     ((c >= '0' as c_int) && (c <= '9' as c_int)) as c_int
 }
 
-include!("../wave1/strverscmp.rs");
+include!("../libc/src/strverscmp.rs");
 
 fn cmp(a: &str, b: &str) -> c_int {
     let a = std::ffi::CString::new(a).unwrap();
