@@ -35,7 +35,7 @@ jobs:
           key: ${{ runner.os }}-cargo-build-${{ hashFiles('**/Cargo.lock') }}
 
       - name: Build all artifacts
-        run: cargo build
+        run: cargo build --workspace
 
       - name: Run integration tests
         run: cargo test --workspace
