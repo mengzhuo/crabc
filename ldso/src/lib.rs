@@ -1141,7 +1141,47 @@ unsafe fn load_and_jump(sp: usize) -> ! {
     let e_phnum = u16::from_le_bytes(buf[56..58].try_into().unwrap());
     let e_entry = u64::from_le_bytes(buf[24..32].try_into().unwrap());
 
-    // 3. Map executable's PT_LOAD segments at p_vaddr (base = 0 for PIE)
+    // 3. Map executable's PT_LOAD segments at a safe base address.
+    //    PIE p_vaddr often starts at 0 which is below mmap_min_addr on CI.
+    //    Pre-scan to find span, probe for free region, then MAP_FIXED there.
+    let page = 4096u64;
+    let mut min_vaddr = u64::MAX;
+    let mut max_vaddr_end = 0u64;
+    for i in 0..e_phnum as usize {
+        let ph = buf.as_ptr().add(e_phoff as usize + i * PHDR_SIZE);
+        let p_type = u32::from_le_bytes(core::ptr::read_unaligned(ph as *const [u8; 4]));
+        if p_type != PT_LOAD {
+            continue;
+        }
+        let p_vaddr = u64::from_le_bytes(core::ptr::read_unaligned(ph.add(PH_VADDR) as *const [u8; 8]));
+        let p_memsz = u64::from_le_bytes(core::ptr::read_unaligned(ph.add(PH_MEMSZ) as *const [u8; 8]));
+        if p_vaddr < min_vaddr { min_vaddr = p_vaddr; }
+        let end = p_vaddr + p_memsz;
+        if end > max_vaddr_end { max_vaddr_end = end; }
+    }
+    let total_size = ((max_vaddr_end - min_vaddr + page - 1) & !(page - 1)) as usize;
+    // ponytail: mmap_min_addr is typically 65536; probe upward to find free span
+    let desired = if min_vaddr < 0x10000 { 0x10000 } else { min_vaddr };
+    let mut probe_addr = desired;
+    let load_start = loop {
+        let probe = sys_mmap(
+            probe_addr as *mut u8, total_size,
+            PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0,
+        );
+        if probe as usize == probe_addr as usize {
+            sys_munmap(probe, total_size);
+            break probe_addr;
+        }
+        if probe as usize != MAP_FAILED {
+            sys_munmap(probe, total_size);
+        }
+        probe_addr += DSO_BASE_STRIDE;
+        if probe_addr > desired + DSO_BASE_STRIDE * 16 {
+            die(95, b"map_exec", probe_addr as usize);
+        }
+    };
+    let exec_base = load_start - min_vaddr;
+
     for i in 0..e_phnum as usize {
         let ph = buf.as_ptr().add(e_phoff as usize + i * PHDR_SIZE);
         let p_type = u32::from_le_bytes(core::ptr::read_unaligned(ph as *const [u8; 4]));
@@ -1154,9 +1194,8 @@ unsafe fn load_and_jump(sp: usize) -> ! {
         let p_filesz = u64::from_le_bytes(core::ptr::read_unaligned(ph.add(PH_FILESZ) as *const [u8; 8]));
         let p_memsz = u64::from_le_bytes(core::ptr::read_unaligned(ph.add(PH_MEMSZ) as *const [u8; 8]));
 
-        let page = 4096u64;
         let adj = p_vaddr & (page - 1);
-        let map_addr = p_vaddr - adj;
+        let map_addr = exec_base + p_vaddr - adj;
         let map_off = p_offset - adj;
         let map_len = ((p_memsz + adj + page - 1) & !(page - 1)) as usize;
         let prot = prot_from_flags(p_flags);
@@ -1174,7 +1213,7 @@ unsafe fn load_and_jump(sp: usize) -> ! {
         }
 
         if p_memsz > p_filesz {
-            let bss_start = (p_vaddr + p_filesz) as *mut u8;
+            let bss_start = (exec_base + p_vaddr + p_filesz) as *mut u8;
             let bss_len = (p_memsz - p_filesz) as usize;
             core::ptr::write_bytes(bss_start, 0, bss_len);
         }
@@ -1192,7 +1231,7 @@ unsafe fn load_and_jump(sp: usize) -> ! {
             exec_tls_filesz = u64::from_le_bytes(core::ptr::read_unaligned(ph.add(PH_FILESZ) as *const [u8; 8]));
             exec_tls_memsz = u64::from_le_bytes(core::ptr::read_unaligned(ph.add(PH_MEMSZ) as *const [u8; 8]));
             exec_tls_align = u64::from_le_bytes(core::ptr::read_unaligned(ph.add(PH_ALIGN) as *const [u8; 8]));
-            exec_tls_image = p_vaddr as *const u8;
+            exec_tls_image = (exec_base + p_vaddr) as *const u8;
             break;
         }
     }
@@ -1221,7 +1260,7 @@ unsafe fn load_and_jump(sp: usize) -> ! {
     let mut needed_count: usize = 0;
 
     if dyn_vaddr != 0 {
-        let dyn_start = dyn_vaddr as usize;
+        let dyn_start = (exec_base + dyn_vaddr) as usize;
         let dyn_end = dyn_start + dyn_memsz as usize;
         let mut dp = dyn_start;
         while dp + 16 <= dyn_end {
@@ -1249,7 +1288,7 @@ unsafe fn load_and_jump(sp: usize) -> ! {
     // Resolve DT_NEEDED name pointers (offsets into strtab)
     let mut needed_names: [(*const u8, usize); 32] = [(core::ptr::null(), 0); 32];
     for i in 0..needed_count {
-        let name_ptr = (dt_strtab + needed_offsets[i]) as *const u8;
+        let name_ptr = (exec_base + dt_strtab + needed_offsets[i]) as *const u8;
         let name_len = strlen(name_ptr);
         needed_names[i] = (name_ptr, name_len);
     }
@@ -1261,12 +1300,12 @@ unsafe fn load_and_jump(sp: usize) -> ! {
         0
     };
     LOADED[0] = LoadedObject {
-        base: 0,
-        symtab: dt_symtab as *const u8,
+        base: exec_base,
+        symtab: (exec_base + dt_symtab) as *const u8,
         sym_count: exec_sym_count,
-        strtab: dt_strtab as *const u8,
+        strtab: (exec_base + dt_strtab) as *const u8,
         strsz: dt_strsz as usize,
-        dyn_addr: dyn_vaddr as usize,
+        dyn_addr: (exec_base + dyn_vaddr) as usize,
         dyn_memsz: dyn_memsz as usize,
         tls_image: exec_tls_image,
         tls_filesz: exec_tls_filesz,
@@ -1311,8 +1350,8 @@ unsafe fn load_and_jump(sp: usize) -> ! {
         sys_arch_prctl(0x1002, tcb as u64);
     }
 
-    let phdr_addr = e_phoff;
-    build_and_jump(e_entry, phdr_addr, e_phnum, sp)
+    let phdr_addr = exec_base + e_phoff;
+    build_and_jump(exec_base + e_entry, phdr_addr, e_phnum, sp)
 }
 
 // ============================================================
