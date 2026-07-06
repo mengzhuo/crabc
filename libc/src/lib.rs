@@ -7542,6 +7542,13 @@ pub unsafe extern "C" fn abort() -> ! {
     _exit(128 + 6);
 }
 
+#[no_mangle]
+pub unsafe extern "C" fn __stack_chk_fail() -> ! {
+    const MSG: &[u8] = b"*** stack smashing detected ***: terminated\n";
+    let _ = sys_write(2, MSG.as_ptr(), MSG.len());
+    abort();
+}
+
 // ============================================================
 // qsort / qsort_r (smoothsort, O(1) aux, adaptive)
 // ============================================================
