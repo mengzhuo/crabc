@@ -2,6 +2,15 @@ use std::process::Command;
 
 #[test]
 fn wave5_libc_test_functional_networking_and_fcntl() {
+    let libc_test_dir = std::env::var("LIBC_TEST_DIR").unwrap_or_else(|_| "/home/root/libc-test".into());
+    if !std::path::Path::new(&libc_test_dir).join("src").is_dir() {
+        eprintln!(
+            "skipping wave5_libc_test_functional_networking_and_fcntl: libc-test source not found at {}",
+            libc_test_dir
+        );
+        return;
+    }
+
     let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
     let harness = manifest_dir.join("libc-test-harness/run.sh");
 
