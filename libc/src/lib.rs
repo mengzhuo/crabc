@@ -193,7 +193,8 @@ unsafe fn sys_munmap(addr: *mut u8, length: usize) -> i64 {
 // ============================================================
 
 #[no_mangle]
-pub unsafe extern "C" fn strlen(s: *const u8) -> usize {
+pub unsafe extern "C" fn strlen(s: *const c_char) -> usize {
+    let s = s as *const u8;
     let mut len = 0;
     while *s.add(len) != 0 {
         len += 1;
@@ -202,27 +203,32 @@ pub unsafe extern "C" fn strlen(s: *const u8) -> usize {
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn memcpy(dst: *mut u8, src: *const u8, n: usize) -> *mut u8 {
+pub unsafe extern "C" fn memcpy(dst: *mut c_void, src: *const c_void, n: usize) -> *mut c_void {
+    let dst = dst as *mut u8;
+    let src = src as *const u8;
     let mut i = 0;
     while i < n {
         *dst.add(i) = *src.add(i);
         i += 1;
     }
-    dst
+    dst as *mut c_void
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn memset(s: *mut u8, c: c_int, n: usize) -> *mut u8 {
+pub unsafe extern "C" fn memset(s: *mut c_void, c: c_int, n: usize) -> *mut c_void {
+    let s = s as *mut u8;
     let mut i = 0;
     while i < n {
         *s.add(i) = c as u8;
         i += 1;
     }
-    s
+    s as *mut c_void
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn memmove(dst: *mut u8, src: *const u8, n: usize) -> *mut u8 {
+pub unsafe extern "C" fn memmove(dst: *mut c_void, src: *const c_void, n: usize) -> *mut c_void {
+    let dst = dst as *mut u8;
+    let src = src as *const u8;
     if (dst as usize) < (src as usize) {
         let mut i = 0;
         while i < n {
@@ -236,11 +242,13 @@ pub unsafe extern "C" fn memmove(dst: *mut u8, src: *const u8, n: usize) -> *mut
             *dst.add(i) = *src.add(i);
         }
     }
-    dst
+    dst as *mut c_void
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn memcmp(s1: *const u8, s2: *const u8, n: usize) -> c_int {
+pub unsafe extern "C" fn memcmp(s1: *const c_void, s2: *const c_void, n: usize) -> c_int {
+    let s1 = s1 as *const u8;
+    let s2 = s2 as *const u8;
     let mut i = 0;
     while i < n {
         let a = *s1.add(i);
@@ -254,7 +262,7 @@ pub unsafe extern "C" fn memcmp(s1: *const u8, s2: *const u8, n: usize) -> c_int
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn bcmp(s1: *const u8, s2: *const u8, n: usize) -> c_int {
+pub unsafe extern "C" fn bcmp(s1: *const c_void, s2: *const c_void, n: usize) -> c_int {
     memcmp(s1, s2, n)
 }
 
@@ -354,7 +362,7 @@ pub unsafe extern "C" fn strncat(dst: *mut u8, src: *const u8, n: usize) -> *mut
 
 #[no_mangle]
 pub unsafe extern "C" fn strlcpy(dst: *mut u8, src: *const u8, n: usize) -> usize {
-    let l = strlen(src);
+    let l = strlen(src as *const c_char);
     if n > 0 {
         let c = if l < n { l } else { n - 1 };
         core::ptr::copy_nonoverlapping(src, dst, c);
@@ -365,8 +373,8 @@ pub unsafe extern "C" fn strlcpy(dst: *mut u8, src: *const u8, n: usize) -> usiz
 
 #[no_mangle]
 pub unsafe extern "C" fn strlcat(dst: *mut u8, src: *const u8, n: usize) -> usize {
-    let dl = strlen(dst);
-    let sl = strlen(src);
+    let dl = strlen(dst as *const c_char);
+    let sl = strlen(src as *const c_char);
     if dl >= n { return n + sl; }
     let c = if sl < n - dl { sl } else { n - dl - 1 };
     core::ptr::copy_nonoverlapping(src, dst.add(dl), c);
@@ -555,7 +563,7 @@ pub unsafe extern "C" fn memmem(
     let n = needle as *const u8;
     let last = haystacklen - needlelen;
     for i in 0..=last {
-        if *h.add(i) == *n && memcmp(h.add(i), n, needlelen) == 0 {
+        if *h.add(i) == *n && memcmp(h.add(i) as *const c_void, n as *const c_void, needlelen) == 0 {
             return h.add(i) as *mut c_void;
         }
     }
@@ -1358,7 +1366,7 @@ pub unsafe extern "C" fn sigaction(
         kact = sigaction {
             sa_handler: (*act).sa_handler,
             sa_flags: (*act).sa_flags | SA_RESTORER,
-            sa_restorer: sig_restorer as usize,
+            sa_restorer: sig_restorer as *const () as usize,
             sa_mask: (*act).sa_mask,
         };
         &kact as *const sigaction
@@ -1377,7 +1385,7 @@ pub unsafe extern "C" fn signal(signum: c_int, handler: usize) -> usize {
     let act = sigaction {
         sa_handler: handler,
         sa_flags: SA_RESTORER,
-        sa_restorer: sig_restorer as usize,
+        sa_restorer: sig_restorer as *const () as usize,
         sa_mask: [0],
     };
     let mut old = sigaction {
@@ -1958,7 +1966,7 @@ unsafe fn spawn_apply_actions(fa: *const posix_spawn_file_actions_t) {
 
 // ponytail: PATH search using stack buffer, O(n) scan per entry
 unsafe fn spawn_execvp(file: *const c_char, argv: *const *const c_char, envp: *const *const c_char) -> ! {
-    let flen = strlen(file as *const u8);
+    let flen = strlen(file as *const c_char);
     let f = file as *const u8;
     let mut has_slash = false;
     for i in 0..flen {
@@ -1971,7 +1979,7 @@ unsafe fn spawn_execvp(file: *const c_char, argv: *const *const c_char, envp: *c
     let path = getenv(b"PATH\0".as_ptr() as *const c_char);
     let default_path = b"/usr/local/bin:/usr/bin:/bin\0";
     let p = if path.is_null() { default_path.as_ptr() } else { path as *const u8 };
-    let plen = strlen(p);
+    let plen = strlen(p as *const c_char);
     let mut buf: [u8; 4096] = [0; 4096];
     let mut i: usize = 0;
     while i <= plen {
@@ -2984,7 +2992,7 @@ pub unsafe extern "C" fn pthread_create(
     let tid_ptr = &raw mut (*slot).tid;
     let flags = CLONE_VM | CLONE_FS | CLONE_FILES | CLONE_SIGHAND | CLONE_THREAD
         | CLONE_SYSVSEM | CLONE_PARENT_SETTID | CLONE_CHILD_CLEARTID | CLONE_SETTLS;
-    let tid = __rc_clone(thread_entry as usize, stack_top, flags, slot as *mut c_void, tid_ptr, fs_base as c_ulong, tid_ptr);
+    let tid = __rc_clone(thread_entry as *const () as usize, stack_top, flags, slot as *mut c_void, tid_ptr, fs_base as c_ulong, tid_ptr);
     if tid < 0 {
         (*slot).tid = -1;
         sys_munmap(stack, stack_size);
@@ -4128,9 +4136,9 @@ static CANCEL_INIT: AtomicI32 = AtomicI32::new(0);
 unsafe fn ensure_cancel_handler() {
     if CANCEL_INIT.swap(1, Ordering::AcqRel) == 0 {
         let act = sigaction {
-            sa_handler: cancel_handler as usize,
+            sa_handler: cancel_handler as *const () as usize,
             sa_flags: SA_RESTORER,
-            sa_restorer: sig_restorer as usize,
+            sa_restorer: sig_restorer as *const () as usize,
             sa_mask: [!0u64],
         };
         sys_rt_sigaction(SIGCANCEL, &act as *const sigaction, core::ptr::null_mut(), 8);
@@ -4302,11 +4310,11 @@ pub type locale_t = *mut c_void;
 static mut CURRENT_LOCALE: locale_t = LC_GLOBAL_LOCALE;
 
 static mut C_LOCALE_STORAGE: c_int = 0;
-const C_LOCALE: locale_t = unsafe { core::ptr::addr_of_mut!(C_LOCALE_STORAGE) as locale_t };
+const C_LOCALE: locale_t = core::ptr::addr_of_mut!(C_LOCALE_STORAGE) as locale_t;
 const LC_GLOBAL_LOCALE: locale_t = usize::MAX as locale_t;
 
 #[no_mangle]
-pub unsafe extern "C" fn newlocale(mask: c_int, name: *const c_char, base: locale_t) -> locale_t {
+pub unsafe extern "C" fn newlocale(_mask: c_int, name: *const c_char, base: locale_t) -> locale_t {
     if !name.is_null() && *name != 0 {
         let n = name as *const u8;
         if strcmp(n, b"C\0".as_ptr()) != 0
@@ -5777,7 +5785,7 @@ static mut PERROR_BUF: [u8; PERROR_BUF_SIZE] = [0; PERROR_BUF_SIZE];
 pub unsafe extern "C" fn perror(msg: *const c_char) {
     let fd = (*stderr).fd;
     if !msg.is_null() && *msg != 0 {
-        let len = strlen(msg as *const u8);
+        let len = strlen(msg as *const c_char);
         write_str(fd, msg as *const u8, len);
         write_str(fd, b": ".as_ptr(), 2);
     }
@@ -5839,7 +5847,7 @@ unsafe fn __overflow(f: *mut FILE, c: c_int) -> c_int {
 
 #[no_mangle]
 pub unsafe extern "C" fn puts(s: *const c_char) -> c_int {
-    let len = strlen(s as *const u8);
+    let len = strlen(s as *const c_char);
     let _ = fwrite(s as *const c_void, 1, len, stdout);
     let _ = fwrite(b"\n".as_ptr() as *const c_void, 1, 1, stdout);
     let f = &mut *stdout;
@@ -5849,7 +5857,7 @@ pub unsafe extern "C" fn puts(s: *const c_char) -> c_int {
 
 #[no_mangle]
 pub unsafe extern "C" fn fputs(s: *const c_char, stream: *mut FILE) -> c_int {
-    let len = strlen(s as *const u8);
+    let len = strlen(s as *const c_char);
     fwrite(s as *const c_void, 1, len, stream) as c_int
 }
 
@@ -6092,7 +6100,7 @@ macro_rules! impl_format {
                             }
                             count += padded_len;
                         } else {
-                            let full_len = strlen(s as *const u8);
+                            let full_len = strlen(s as *const c_char);
                             let slen = if precision >= 0 { (precision as usize).min(full_len) } else { full_len };
                             let padded_len = if width > slen { width } else { slen };
                             let pad = padded_len - slen;
@@ -6293,10 +6301,9 @@ unsafe fn format_f64_full(
     }
 
     // === Decimal formats ===
-    let mut p: usize;
-    let mut frac_digits: usize;
+    let p: usize;
     let mut exp: i32;
-    let mut use_f: bool;
+    let use_f: bool;
 
     match fmt_type {
         FMT_G => {
@@ -6304,24 +6311,20 @@ unsafe fn format_f64_full(
             exp = if v > 0.0 { compute_exp10(v) } else { 0 };
             use_f = exp >= -4 && (exp as usize) < gp;
             if use_f {
-                frac_digits = if exp < 0 { gp + ((-exp) as usize - 1) }
+                p = if exp < 0 { gp + ((-exp) as usize - 1) }
                     else if (exp as usize) < gp { gp - exp as usize - 1 }
                     else { 0 };
-                p = frac_digits;
             } else {
                 p = gp - 1;
-                frac_digits = p;
             }
         }
         FMT_E => {
             p = if precision < 0 { 6usize } else { precision as usize };
-            frac_digits = p;
             exp = if v > 0.0 { compute_exp10(v) } else { 0 };
             use_f = false;
         }
         _ => {
             p = if precision < 0 { 6usize } else { precision as usize };
-            frac_digits = p;
             exp = 0;
             use_f = true;
         }
@@ -6351,7 +6354,7 @@ unsafe fn format_f64_full(
     // Extract fractional digits using scaling approach for reliability.
     // f64 gives ~15.9 reliable decimal digits total.
     let extract = p.min(16);
-    let remaining = p - extract;
+    let _remaining = p - extract;
 
     let mut fbuf = [0u8; 4120];
     if extract > 0 {
@@ -6382,7 +6385,7 @@ unsafe fn format_f64_full(
             if use_f { int_part += 1; }
             else {
                 exp += 1;
-                int_part = 1;
+
                 // Re-extract for new exponent
                 let new_mant = v / libm::pow(10.0, exp as f64);
                 let new_int = new_mant as u64;
@@ -6491,7 +6494,7 @@ unsafe fn compute_exp10(v: f64) -> i32 {
 }
 
 // Write hex float to dst. Returns bytes written.
-unsafe fn fmt_hex_float(dst: *mut u8, val: f64, precision: i32, flags: u8, uppercase: bool) -> usize {
+unsafe fn fmt_hex_float(dst: *mut u8, val: f64, precision: i32, _flags: u8, uppercase: bool) -> usize {
     let bits = val.to_bits();
     let exp_bits = ((bits >> 52) & 0x7FF) as i32;
     let mant_bits = bits & 0x000FFFFFFFFFFFFF;
@@ -6831,7 +6834,7 @@ unsafe fn format_to_buf(buf: *mut u8, cap: usize, fmt: *const c_char, args: &mut
                             ws!(b"(null)".as_ptr(), slen);
                         }
                     } else {
-                        let full_len = strlen(s as *const u8);
+                        let full_len = strlen(s as *const c_char);
                         let slen = if precision >= 0 { (precision as usize).min(full_len) } else { full_len };
                         let padded_len = if width > slen { width } else { slen };
                         let pad = padded_len - slen;
@@ -7226,7 +7229,7 @@ unsafe fn do_vsscanf(
 }
 
 unsafe fn vsscanf_inner(buf: *const u8, fmt: *const c_char, args: &mut VaList<'_>) -> c_int {
-    let len = strlen(buf);
+    let len = strlen(buf as *const c_char);
     do_vsscanf(buf, len, fmt, args, core::ptr::null_mut())
 }
 
@@ -7253,7 +7256,7 @@ pub unsafe extern "C" fn vfscanf(stream: *mut FILE, fmt: *const c_char, mut args
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn vscanf(fmt: *const c_char, mut args: VaList) -> c_int {
+pub unsafe extern "C" fn vscanf(fmt: *const c_char, args: VaList) -> c_int {
     vfscanf(stdin, fmt, args)
 }
 
@@ -7263,12 +7266,12 @@ pub unsafe extern "C" fn sscanf(buf: *const c_char, fmt: *const c_char, mut args
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn fscanf(stream: *mut FILE, fmt: *const c_char, mut args: ...) -> c_int {
+pub unsafe extern "C" fn fscanf(stream: *mut FILE, fmt: *const c_char, args: ...) -> c_int {
     vfscanf(stream, fmt, args)
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn scanf(fmt: *const c_char, mut args: ...) -> c_int {
+pub unsafe extern "C" fn scanf(fmt: *const c_char, args: ...) -> c_int {
     vfscanf(stdin, fmt, args)
 }
 
@@ -7950,7 +7953,7 @@ pub unsafe extern "C" fn setenv(
     if overwrite == 0 && !getenv(var as *const c_char).is_null() {
         return 0;
     }
-    let l2 = strlen(value as *const u8);
+    let l2 = strlen(value as *const c_char);
     let s = malloc(l1 + l2 + 2) as *mut u8;
     if s.is_null() {
         return -1;
@@ -9015,7 +9018,7 @@ pub unsafe extern "C" fn vswprintf(s: *mut wchar_t, n: usize, fmt: *const wchar_
             0x73 => {
                 let p = args.next_arg::<*const c_char>();
                 if p.is_null() { pos = wfmt_write_str(s, pos, cap, b"(null)".as_ptr(), 6); }
-                else { let len = strlen(p as *const u8); pos = wfmt_write_str(s, pos, cap, p as *const u8, len); }
+                else { let len = strlen(p as *const c_char); pos = wfmt_write_str(s, pos, cap, p as *const u8, len); }
             }
             0x64 | 0x69 => {
                 let d = args.next_arg::<c_int>();
@@ -9076,12 +9079,12 @@ pub unsafe extern "C" fn vswprintf(s: *mut wchar_t, n: usize, fmt: *const wchar_
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn swprintf(s: *mut wchar_t, n: usize, fmt: *const wchar_t, mut args: ...) -> c_int {
+pub unsafe extern "C" fn swprintf(s: *mut wchar_t, n: usize, fmt: *const wchar_t, args: ...) -> c_int {
     vswprintf(s, n, fmt, args)
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn vfwprintf(f: *mut FILE, fmt: *const wchar_t, mut args: VaList) -> c_int {
+pub unsafe extern "C" fn vfwprintf(f: *mut FILE, fmt: *const wchar_t, args: VaList) -> c_int {
     let mut buf = [0i32; 4096];
     let r = vswprintf(buf.as_mut_ptr(), 4096, fmt, args);
     if r < 0 { return r; }
@@ -9097,7 +9100,7 @@ pub unsafe extern "C" fn vfwprintf(f: *mut FILE, fmt: *const wchar_t, mut args: 
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn fwprintf(f: *mut FILE, fmt: *const wchar_t, mut args: ...) -> c_int {
+pub unsafe extern "C" fn fwprintf(f: *mut FILE, fmt: *const wchar_t, args: ...) -> c_int {
     vfwprintf(f, fmt, args)
 }
 
@@ -9141,7 +9144,7 @@ pub unsafe extern "C" fn vswscanf(s: *const wchar_t, fmt: *const wchar_t, mut ar
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn swscanf(s: *const wchar_t, fmt: *const wchar_t, mut args: ...) -> c_int {
+pub unsafe extern "C" fn swscanf(s: *const wchar_t, fmt: *const wchar_t, args: ...) -> c_int {
     vswscanf(s, fmt, args)
 }
 
@@ -9168,17 +9171,17 @@ pub unsafe extern "C" fn vfwscanf(f: *mut FILE, fmt: *const wchar_t, mut args: V
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn fwscanf(f: *mut FILE, fmt: *const wchar_t, mut args: ...) -> c_int {
+pub unsafe extern "C" fn fwscanf(f: *mut FILE, fmt: *const wchar_t, args: ...) -> c_int {
     vfwscanf(f, fmt, args)
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn vwscanf(fmt: *const wchar_t, mut args: VaList) -> c_int {
+pub unsafe extern "C" fn vwscanf(fmt: *const wchar_t, args: VaList) -> c_int {
     vfwscanf(stdin, fmt, args)
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn wscanf(fmt: *const wchar_t, mut args: ...) -> c_int {
+pub unsafe extern "C" fn wscanf(fmt: *const wchar_t, args: ...) -> c_int {
     vfwscanf(stdin, fmt, args)
 }
 
@@ -9987,7 +9990,7 @@ pub unsafe extern "C" fn system(cmd: *const c_char) -> c_int {
     let sa_ignore = sigaction {
         sa_handler: SIG_IGN,
         sa_flags: SA_RESTORER,
-        sa_restorer: sig_restorer as usize,
+        sa_restorer: sig_restorer as *const () as usize,
         sa_mask: [0],
     };
     let mut oldint: sigaction = core::mem::zeroed();
@@ -10336,7 +10339,7 @@ pub unsafe extern "C" fn strerror(errnum: c_int) -> *mut c_char {
 #[no_mangle]
 pub unsafe extern "C" fn strerror_r(errnum: c_int, buf: *mut c_char, buflen: usize) -> c_int {
     let s = strerror(errnum);
-    let slen = strlen(s as *const u8);
+    let slen = strlen(s as *const c_char);
     if slen >= buflen {
         if buflen > 0 {
             core::ptr::copy_nonoverlapping(s as *const u8, buf as *mut u8, buflen - 1);
@@ -10469,7 +10472,7 @@ unsafe fn sys_gethostname(buf: *mut u8, len: usize) -> i64 {
     if result < 0 {
         return result;
     }
-    let nlen = strlen(uts.nodename.as_ptr());
+    let nlen = strlen(uts.nodename.as_ptr() as *const c_char);
     let copylen = if nlen < len { nlen } else { if len > 0 { len - 1 } else { 0 } };
     core::ptr::copy_nonoverlapping(uts.nodename.as_ptr(), buf, copylen);
     if len > 0 { *buf.add(copylen) = 0; }
@@ -11099,7 +11102,7 @@ pub unsafe extern "C" fn setpgrp() -> c_int {
 #[no_mangle]
 pub unsafe extern "C" fn mkstemp(template: *mut c_char) -> c_int {
     if template.is_null() { ERRNO = EINVAL; return -1; }
-    let len = strlen(template as *const u8);
+    let len = strlen(template as *const c_char);
     if len < 6 { ERRNO = EINVAL; return -1; }
     let x_start = len - 6;
     // check that last 6 chars are XXXXXX
@@ -11144,7 +11147,7 @@ pub unsafe extern "C" fn dirname(s: *mut c_char) -> *mut c_char {
     if s.is_null() || *s == 0 {
         return b".\0".as_ptr() as *mut c_char;
     }
-    let mut i = strlen(s as *const u8);
+    let mut i = strlen(s as *const c_char);
     i = i.wrapping_sub(1);
     // skip trailing slashes
     while i > 0 && *s.add(i) == b'/' as c_char {
@@ -11179,7 +11182,7 @@ pub unsafe extern "C" fn basename(s: *mut c_char) -> *mut c_char {
     if s.is_null() || *s == 0 {
         return b".\0".as_ptr() as *mut c_char;
     }
-    let mut i = strlen(s as *const u8);
+    let mut i = strlen(s as *const c_char);
     i = i.wrapping_sub(1);
     // strip trailing slashes
     while i > 0 && *s.add(i) == b'/' as c_char {
@@ -12049,7 +12052,7 @@ pub unsafe extern "C" fn lsearch(
         }
     }
     let dest = p.add(n * width);
-    memcpy(dest, key as *const u8, width);
+    memcpy(dest as *mut c_void, key as *const c_void, width);
     *nelp = n + 1;
     dest as *mut c_void
 }
@@ -12457,7 +12460,7 @@ unsafe fn fnmatch_internal(pat: *const u8, str: *const u8, flags: c_int) -> c_in
     }
 
     // str must have at least tailcnt chars
-    let slen = strlen(s);
+    let slen = strlen(s as *const c_char);
     if slen < tailcnt { return FNM_NOMATCH; }
 
     // Match tail: ptail..end against str[tailcnt from end]
@@ -12711,7 +12714,7 @@ unsafe fn parse_mntent_line(
     linebuf: *mut c_char,
     mnt: *mut MntEnt,
 ) -> *mut MntEnt {
-    let _len = strlen(linebuf as *const u8);
+    let _len = strlen(linebuf as *const c_char);
     // skip comments and empty lines
     // parse: fsname dir type opts freq passno
     let mut p = linebuf;
@@ -12889,7 +12892,7 @@ pub unsafe extern "C" fn addmntent(f: *mut FILE, mnt: *const MntEnt) -> c_int {
 
 #[no_mangle]
 pub unsafe extern "C" fn hasmntopt(mnt: *const MntEnt, opt: *const c_char) -> *mut c_char {
-    let l = strlen(opt as *const u8);
+    let l = strlen(opt as *const c_char);
     let mut p = (*mnt).mnt_opts;
     loop {
         if strncmp(p as *const u8, opt as *const u8, l) == 0 {

@@ -3,7 +3,7 @@
 
 unsafe fn cstr_bytes(s: *const c_char) -> &'static [u8] {
     if s.is_null() { return &[]; }
-    let len = strlen(s as *const u8);
+    let len = strlen(s as *const c_char);
     core::slice::from_raw_parts(s as *const u8, len)
 }
 
@@ -77,7 +77,7 @@ impl Md5 {
     }
     fn update(&mut self, data: &[u8]) {
         let mut p = 0usize;
-        let mut r = (self.len % 64) as usize;
+        let r = (self.len % 64) as usize;
         self.len += data.len() as u64;
         if r > 0 {
             let avail = 64 - r;
@@ -182,7 +182,7 @@ impl Sha256 {
         self.h[4]=self.h[4].wrapping_add(e);self.h[5]=self.h[5].wrapping_add(f);self.h[6]=self.h[6].wrapping_add(g);self.h[7]=self.h[7].wrapping_add(h);
     }
     fn update(&mut self, data: &[u8]) {
-        let mut p=0usize; let mut r=(self.len%64) as usize; self.len+=data.len() as u64;
+        let mut p=0usize; let r=(self.len%64) as usize; self.len+=data.len() as u64;
         if r>0 { let avail=64-r; if data.len()<avail { self.buf[r..r+data.len()].copy_from_slice(data); return; } self.buf[r..64].copy_from_slice(&data[..avail]); p=avail; let b=self.buf; self.processblock(&b); }
         while p+64<=data.len() { let mut blk=[0u8;64]; blk.copy_from_slice(&data[p..p+64]); self.processblock(&blk); p+=64; }
         if p<data.len() { self.buf[..data.len()-p].copy_from_slice(&data[p..]); }
@@ -230,8 +230,8 @@ fn sha256crypt(key: &[u8], setting: &[u8], output: &mut [u8]) -> Option<usize> {
     let mut md=[0u8;32]; let mut kmd=[0u8;32]; let mut smd=[0u8;32];
     ctx.init(); ctx.update(&key[..klen]); ctx.update(sd); ctx.update(&key[..klen]); ctx.finish(&mut md);
     ctx.init(); ctx.update(&key[..klen]); ctx.update(sd); sha256_hashmd(&mut ctx,klen,&md); { let mut i=klen; while i>0 { if i&1!=0{ctx.update(&md);}else{ctx.update(&key[..klen]);} i>>=1; } } ctx.finish(&mut md);
-    ctx.init(); { for _ in 0..klen { ctx.update(&key[..klen]); } } ctx.finish(&mut kmd);
-    ctx.init(); { for _ in 0..16+md[0] as usize { ctx.update(sd); } } ctx.finish(&mut smd);
+    ctx.init(); for _ in 0..klen { ctx.update(&key[..klen]); } ctx.finish(&mut kmd);
+    ctx.init(); for _ in 0..16+md[0] as usize { ctx.update(sd); } ctx.finish(&mut smd);
     for i in 0..r { ctx.init(); if i%2!=0{sha256_hashmd(&mut ctx,klen,&kmd);}else{ctx.update(&md);} if i%3!=0{ctx.update(&smd[..slen]);} if i%7!=0{sha256_hashmd(&mut ctx,klen,&kmd);} if i%2!=0{ctx.update(&md);}else{sha256_hashmd(&mut ctx,klen,&kmd);} ctx.finish(&mut md); }
     let mut p=0usize;
     output[p..p+3].copy_from_slice(b"$5$"); p+=3;
@@ -305,7 +305,7 @@ impl Sha512 {
         self.h[4]=self.h[4].wrapping_add(e);self.h[5]=self.h[5].wrapping_add(f);self.h[6]=self.h[6].wrapping_add(g);self.h[7]=self.h[7].wrapping_add(h);
     }
     fn update(&mut self, data: &[u8]) {
-        let mut p=0usize; let mut r=(self.len%128) as usize; self.len+=data.len() as u64;
+        let mut p=0usize; let r=(self.len%128) as usize; self.len+=data.len() as u64;
         if r>0 { let avail=128-r; if data.len()<avail { self.buf[r..r+data.len()].copy_from_slice(data); return; } self.buf[r..128].copy_from_slice(&data[..avail]); p=avail; let b=self.buf; self.processblock(&b); }
         while p+128<=data.len() { let mut blk=[0u8;128]; blk.copy_from_slice(&data[p..p+128]); self.processblock(&blk); p+=128; }
         if p<data.len() { self.buf[..data.len()-p].copy_from_slice(&data[p..]); }
@@ -353,8 +353,8 @@ fn sha512crypt(key: &[u8], setting: &[u8], output: &mut [u8]) -> Option<usize> {
     let mut md=[0u8;64]; let mut kmd=[0u8;64]; let mut smd=[0u8;64];
     ctx.init(); ctx.update(&key[..klen]); ctx.update(sd); ctx.update(&key[..klen]); ctx.finish(&mut md);
     ctx.init(); ctx.update(&key[..klen]); ctx.update(sd); sha512_hashmd(&mut ctx,klen,&md); { let mut i=klen; while i>0 { if i&1!=0{ctx.update(&md);}else{ctx.update(&key[..klen]);} i>>=1; } } ctx.finish(&mut md);
-    ctx.init(); { for _ in 0..klen { ctx.update(&key[..klen]); } } ctx.finish(&mut kmd);
-    ctx.init(); { for _ in 0..16+md[0] as usize { ctx.update(sd); } } ctx.finish(&mut smd);
+    ctx.init(); for _ in 0..klen { ctx.update(&key[..klen]); } ctx.finish(&mut kmd);
+    ctx.init(); for _ in 0..16+md[0] as usize { ctx.update(sd); } ctx.finish(&mut smd);
     for i in 0..r { ctx.init(); if i%2!=0{sha512_hashmd(&mut ctx,klen,&kmd);}else{ctx.update(&md);} if i%3!=0{ctx.update(&smd[..slen]);} if i%7!=0{sha512_hashmd(&mut ctx,klen,&kmd);} if i%2!=0{ctx.update(&md);}else{sha512_hashmd(&mut ctx,klen,&kmd);} ctx.finish(&mut md); }
     let mut p=0usize;
     output[p..p+3].copy_from_slice(b"$6$"); p+=3;
@@ -595,10 +595,10 @@ fn bf_crypt_inner(key: &[u8], setting: &[u8], output: &mut [u8], min: u32) -> Op
 
     let mut p_box = initial;
     // Copy init S-boxes
-    let mut s0 = BF_S0;
-    let mut s1 = BF_S1;
-    let mut s2 = BF_S2;
-    let mut s3 = BF_S3;
+    let s0 = BF_S0;
+    let s1 = BF_S1;
+    let s2 = BF_S2;
+    let s3 = BF_S3;
 
     // Phase 1: Eksblowfish setup - encrypt salt through P and S boxes
     let (mut l, mut r) = (0u32, 0u32);
@@ -878,7 +878,7 @@ static mut CRYPT_BUF: [u8; 128] = [0; 128];
 
 #[no_mangle]
 pub unsafe extern "C" fn crypt(key: *const c_char, setting: *const c_char) -> *mut c_char {
-    __crypt_r(key, setting, CRYPT_BUF.as_mut_ptr() as *mut crate::c_void)
+    __crypt_r(key, setting, core::ptr::addr_of_mut!(CRYPT_BUF) as *mut crate::c_void)
 }
 
 #[no_mangle]

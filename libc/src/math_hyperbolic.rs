@@ -20,7 +20,6 @@ const HYP_EPM1_Q5: f64 = asdouble(0xBE8AFDB76E09C32D);
 
 #[cfg(target_arch = "x86_64")]
 core::arch::global_asm!(
-    ".intel_syntax noprefix",
     ".text",
     ".global __crabc_sinh_small_x87",
     ".type __crabc_sinh_small_x87, @function",
@@ -366,7 +365,7 @@ pub extern "C" fn cosh(x: f64) -> f64 {
     let u = asuint64(x);
     // |x|
     let u = u & 0x7FFFFFFFFFFFFFFF;
-    let mut x = asdouble(u);
+    let x = asdouble(u);
     let w = (u >> 32) as u32;
 
     // |x| < log(2)

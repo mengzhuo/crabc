@@ -2,6 +2,8 @@
 #![no_main]
 #![allow(dead_code, deref_nullptr)]
 
+use core::ffi::c_void;
+
 #[cfg(not(test))]
 #[panic_handler]
 fn panic(_: &core::panic::PanicInfo) -> ! {
@@ -328,7 +330,7 @@ unsafe fn write_stderr(msg: &[u8]) {
     let _ = sys_write(2, msg.as_ptr(), msg.len());
 }
 
-unsafe fn write_hex_stderr(mut v: usize) {
+unsafe fn write_hex_stderr(v: usize) {
     let mut buf = [0u8; 18];
     buf[0] = b'0';
     buf[1] = b'x';
@@ -779,13 +781,13 @@ unsafe fn resolve_symbol_with_size(name: *const u8, exclude: usize) -> (u64, usi
         return (0, 0);
     }
     if str_eq(name, name_len, b"__tls_get_addr\0".as_ptr()) {
-        return ((__tls_get_addr as usize) as u64, 0);
+        return ((__tls_get_addr as *const () as usize) as u64, 0);
     }
     if str_eq(name, name_len, b"__rc_create_thread_tls\0".as_ptr()) {
-        return ((__rc_create_thread_tls as usize) as u64, 0);
+        return ((__rc_create_thread_tls as *const () as usize) as u64, 0);
     }
     if str_eq(name, name_len, b"__rc_tls_block_size\0".as_ptr()) {
-        return ((__rc_tls_block_size as usize) as u64, 0);
+        return ((__rc_tls_block_size as *const () as usize) as u64, 0);
     }
 
     for i in 0..LOADED_COUNT {
@@ -1460,7 +1462,8 @@ unsafe fn build_and_jump(entry: u64, phdr_addr: u64, phnum: u16, orig_sp: usize)
 // ============================================================
 
 #[no_mangle]
-pub unsafe extern "C" fn memset(s: *mut u8, c: i32, n: usize) -> *mut u8 {
+pub unsafe extern "C" fn memset(s: *mut c_void, c: i32, n: usize) -> *mut c_void {
+    let s = s as *mut u8;
     let mut p = s;
     let mut i = 0;
     while i < n {
@@ -1470,11 +1473,13 @@ pub unsafe extern "C" fn memset(s: *mut u8, c: i32, n: usize) -> *mut u8 {
         p = unsafe { p.add(1) };
         i += 1;
     }
-    s
+    s as *mut c_void
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn memcpy(dst: *mut u8, src: *const u8, n: usize) -> *mut u8 {
+pub unsafe extern "C" fn memcpy(dst: *mut c_void, src: *const c_void, n: usize) -> *mut c_void {
+    let dst = dst as *mut u8;
+    let src = src as *const u8;
     let mut i = 0;
     while i < n {
         unsafe {
@@ -1482,11 +1487,13 @@ pub unsafe extern "C" fn memcpy(dst: *mut u8, src: *const u8, n: usize) -> *mut 
         }
         i += 1;
     }
-    dst
+    dst as *mut c_void
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn memmove(dst: *mut u8, src: *const u8, n: usize) -> *mut u8 {
+pub unsafe extern "C" fn memmove(dst: *mut c_void, src: *const c_void, n: usize) -> *mut c_void {
+    let dst = dst as *mut u8;
+    let src = src as *const u8;
     if (dst as usize) < (src as usize) {
         let mut i = 0;
         while i < n {
@@ -1504,5 +1511,5 @@ pub unsafe extern "C" fn memmove(dst: *mut u8, src: *const u8, n: usize) -> *mut
             }
         }
     }
-    dst
+    dst as *mut c_void
 }

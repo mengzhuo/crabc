@@ -19,7 +19,9 @@ int hcreate(size_t);
 void hdestroy(void);
 ENTRY *hsearch(ENTRY, ACTION);
 
+#ifndef _GNU_SOURCE
 #define _GNU_SOURCE
+#endif
 struct hsearch_data {
 	struct __tab *__tab;
 	unsigned int __unused1;

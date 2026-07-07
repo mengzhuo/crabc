@@ -578,7 +578,7 @@ fn __tandf(x: f64, odd: i32) -> f32 {
 
 #[no_mangle]
 pub extern "C" fn sin(x: f64) -> f64 {
-    let mut ix = ((asuint64(x) >> 32) as u32);
+    let mut ix = (asuint64(x) >> 32) as u32;
     ix &= 0x7fffffff;
 
     if ix <= 0x3fe921fb {
@@ -603,7 +603,7 @@ pub extern "C" fn sin(x: f64) -> f64 {
 
 #[no_mangle]
 pub extern "C" fn cos(x: f64) -> f64 {
-    let mut ix = ((asuint64(x) >> 32) as u32);
+    let mut ix = (asuint64(x) >> 32) as u32;
     ix &= 0x7fffffff;
 
     if ix <= 0x3fe921fb {
@@ -628,7 +628,7 @@ pub extern "C" fn cos(x: f64) -> f64 {
 
 #[no_mangle]
 pub extern "C" fn tan(x: f64) -> f64 {
-    let mut ix = ((asuint64(x) >> 32) as u32);
+    let mut ix = (asuint64(x) >> 32) as u32;
     ix &= 0x7fffffff;
 
     if ix <= 0x3fe921fb {

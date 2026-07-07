@@ -205,7 +205,7 @@ long double frexpl(long double, int *);
 double      hypot(double, double);
 float       hypotf(float, float);
 long double hypotl(long double, long double);
-double      ilogb(double);
+int         ilogb(double);
 int         ilogbf(float);
 int         ilogbl(long double);
 double      ldexp(double, int);

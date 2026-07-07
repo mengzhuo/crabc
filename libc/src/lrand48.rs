@@ -27,22 +27,22 @@ unsafe fn __rand48_step(xi: *mut u16, lc: *const u16) -> u64 {
 
 #[no_mangle]
 pub unsafe extern "C" fn nrand48(s: *mut u16) -> c_long {
-    (__rand48_step(s, __SEED48.as_ptr().add(3)) >> 17) as c_long
+    (__rand48_step(s, core::ptr::addr_of!(__SEED48).cast::<u16>().add(3)) >> 17) as c_long
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn lrand48() -> c_long {
-    nrand48(__SEED48.as_mut_ptr())
+    nrand48(core::ptr::addr_of_mut!(__SEED48).cast::<u16>())
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn jrand48(s: *mut u16) -> c_long {
-    (__rand48_step(s, __SEED48.as_ptr().add(3)) >> 16) as i32 as c_long
+    (__rand48_step(s, core::ptr::addr_of!(__SEED48).cast::<u16>().add(3)) >> 16) as i32 as c_long
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn mrand48() -> c_long {
-    jrand48(__SEED48.as_mut_ptr())
+    jrand48(core::ptr::addr_of_mut!(__SEED48).cast::<u16>())
 }
 
 #[no_mangle]
@@ -52,25 +52,25 @@ pub unsafe extern "C" fn srand48(seed: c_long) {
 
 #[no_mangle]
 pub unsafe extern "C" fn seed48(s: *mut u16) -> *mut u16 {
-    core::ptr::copy_nonoverlapping(__SEED48.as_ptr(), __SEED48_OLD.as_mut_ptr(), 3);
-    core::ptr::copy_nonoverlapping(s, __SEED48.as_mut_ptr(), 3);
-    __SEED48_OLD.as_mut_ptr()
+    core::ptr::copy_nonoverlapping(core::ptr::addr_of!(__SEED48).cast::<u16>(), core::ptr::addr_of_mut!(__SEED48_OLD).cast::<u16>(), 3);
+    core::ptr::copy_nonoverlapping(s, core::ptr::addr_of_mut!(__SEED48).cast::<u16>(), 3);
+    core::ptr::addr_of_mut!(__SEED48_OLD).cast::<u16>()
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn erand48(s: *mut u16) -> f64 {
-    let x = __rand48_step(s, __SEED48.as_ptr().add(3));
+    let x = __rand48_step(s, core::ptr::addr_of!(__SEED48).cast::<u16>().add(3));
     // Build double in [1.0, 2.0) by setting exponent bits, then subtract 1.0
     let bits: u64 = 0x3ff0000000000000 | (x << 4);
-    core::mem::transmute::<u64, f64>(bits) - 1.0
+    f64::from_bits(bits) - 1.0
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn drand48() -> f64 {
-    erand48(__SEED48.as_mut_ptr())
+    erand48(core::ptr::addr_of_mut!(__SEED48).cast::<u16>())
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn lcong48(p: *mut u16) {
-    core::ptr::copy_nonoverlapping(p, __SEED48.as_mut_ptr(), 7);
+    core::ptr::copy_nonoverlapping(p, core::ptr::addr_of_mut!(__SEED48).cast::<u16>(), 7);
 }
