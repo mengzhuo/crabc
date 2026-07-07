@@ -34,18 +34,7 @@ extern int getsid(int);
 extern void _exit(int);
 extern int setsid(void);
 
-static int my_waitpid(int pid, int *status, int options) {
-    /* ponytail: inline waitpid via syscall (rax=61, rdi=pid, rsi=status, rdx=options, r10=0) */
-    long ret;
-    register long r10 __asm__("r10") = 0;
-    __asm__ volatile (
-        "syscall"
-        : "=a"(ret)
-        : "a"(61l), "D"((long)pid), "S"(status), "d"((long)options), "r"(r10)
-        : "rcx", "r11", "memory"
-    );
-    return (int)ret;
-}
+#include <sys/wait.h>
 
 int main(void) {
     int status;
@@ -78,12 +67,12 @@ int main(void) {
         _exit(0);
     }
 
-    int r = my_waitpid(child, &status, 0);
+    int r = waitpid(child, &status, 0);
     if (r < 0) {
         my_puts("FAIL: waitpid\n");
         return 1;
     }
-    if (status != 0) {
+    if (!WIFEXITED(status) || WEXITSTATUS(status) != 0) {
         my_puts("FAIL: child exited ");
         my_putn(status);
         my_puts("\n");
