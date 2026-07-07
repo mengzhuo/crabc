@@ -26,13 +26,12 @@ fn load_and_run(path: &str, argv: &[String]) -> Result<(), String> {
     let ehdr = parse_ehdr(&data).map_err(|e| e.to_string())?;
     let phdrs = parse_phdrs(&data, &ehdr).map_err(|e| e.to_string())?;
 
-    let (min_vaddr, _max_vaddr) =
-        map_segments(phdrs, file.as_raw_fd()).map_err(|e| e.to_string())?;
+    let load_bias = map_segments(phdrs, file.as_raw_fd(), ehdr.e_type).map_err(|e| e.to_string())?;
 
-    apply_relocations(&data, phdrs, min_vaddr).map_err(|e| e.to_string())?;
+    apply_relocations(&data, phdrs, load_bias).map_err(|e| e.to_string())?;
 
-    let entry = ehdr.e_entry + min_vaddr;
-    transfer(entry, argv, ehdr.e_phoff + min_vaddr, phdrs.len());
+    let entry = ehdr.e_entry + load_bias;
+    transfer(entry, argv, ehdr.e_phoff + load_bias, phdrs.len());
 }
 
 fn transfer(entry: u64, argv: &[String], phdr_addr: u64, phnum: usize) -> ! {

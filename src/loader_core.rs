@@ -63,6 +63,7 @@ pub const AT_BASE: u64 = 7;
 pub const PROT_READ: i32 = 1;
 pub const PROT_WRITE: i32 = 2;
 pub const PROT_EXEC: i32 = 4;
+pub const PROT_NONE: i32 = 0;
 
 pub const MAP_PRIVATE: i32 = 0x02;
 pub const MAP_FIXED: i32 = 0x10;
@@ -127,22 +128,43 @@ pub fn parse_phdrs<'a>(data: &'a [u8], ehdr: &Ehdr) -> Result<&'a [Phdr], &'stat
     Ok(unsafe { core::slice::from_raw_parts(base, ehdr.e_phnum as usize) })
 }
 
-pub fn map_segments(phdrs: &[Phdr], fd: i32) -> Result<(u64, u64), &'static str> {
+pub fn map_segments(phdrs: &[Phdr], fd: i32, e_type: u16) -> Result<u64, &'static str> {
     let page = PAGE_SIZE as u64;
 
     let mut min = u64::MAX;
     let mut max = 0u64;
     for p in phdrs.iter().filter(|p| p.p_type == PT_LOAD) {
-        min = min.min(p.p_vaddr);
-        max = max.max(p.p_vaddr + p.p_memsz);
+        let seg_start = p.p_vaddr & !(page - 1);
+        let seg_end = (p.p_vaddr + p.p_memsz + page - 1) & !(page - 1);
+        min = min.min(seg_start);
+        max = max.max(seg_end);
     }
     if min >= max {
         return Err("no PT_LOAD segments");
     }
 
+    let mut load_bias = 0u64;
+    if e_type == ET_DYN {
+        let span = max - min;
+        let reserve = unsafe {
+            sys_mmap(
+                core::ptr::null_mut(),
+                span as usize,
+                PROT_NONE,
+                MAP_PRIVATE | MAP_ANONYMOUS,
+                -1,
+                0,
+            )
+        };
+        if reserve == MAP_FAILED {
+            return Err("mmap failed while reserving ET_DYN span");
+        }
+        load_bias = reserve as u64 - min;
+    }
+
     for ph in phdrs.iter().filter(|p| p.p_type == PT_LOAD) {
         let adj = ph.p_vaddr & (page - 1);
-        let map_addr = ph.p_vaddr - adj;
+        let map_addr = load_bias + ph.p_vaddr - adj;
         let map_off = ph.p_offset - adj;
         let map_len = (ph.p_filesz + adj + page - 1) & !(page - 1);
 
@@ -162,13 +184,13 @@ pub fn map_segments(phdrs: &[Phdr], fd: i32) -> Result<(u64, u64), &'static str>
         }
 
         if ph.p_memsz > ph.p_filesz {
-            let bss_start = (ph.p_vaddr + ph.p_filesz) as *mut u8;
+            let bss_start = (load_bias + ph.p_vaddr + ph.p_filesz) as *mut u8;
             let bss_len = (ph.p_memsz - ph.p_filesz) as usize;
             unsafe { core::ptr::write_bytes(bss_start, 0, bss_len) };
         }
     }
 
-    Ok((min, max))
+    Ok(load_bias)
 }
 
 pub fn apply_relocations(data: &[u8], phdrs: &[Phdr], base_addr: u64) -> Result<(), &'static str> {
