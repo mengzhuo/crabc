@@ -28,6 +28,9 @@ jobs:
           path: ~/.cargo/registry
           key: ${{ runner.os }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
 
+      - name: Fetch libc-test sources
+        run: git clone --depth 1 https://github.com/kraj/libc-test /tmp/libc-test
+
       - name: Build all artifacts
         run: cargo build --workspace
 
@@ -36,6 +39,8 @@ jobs:
 
       - name: Run libc-test harness (informational)
         continue-on-error: true
+        env:
+          LIBC_TEST_DIR: /tmp/libc-test
         run: |
           cd libc-test-harness
           ./run.sh functional
