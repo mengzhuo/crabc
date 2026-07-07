@@ -21,7 +21,7 @@ const INVTRIG_QS4: f64 = asdouble(0x3FB3B8C5B12E9282);
 
 // Rational approximation R(z) shared by asin and acos.
 #[inline]
-fn invtrig_R(z: f64) -> f64 {
+fn invtrig_r(z: f64) -> f64 {
     let p = z * (INVTRIG_PS0 + z * (INVTRIG_PS1 + z * (INVTRIG_PS2
         + z * (INVTRIG_PS3 + z * (INVTRIG_PS4 + z * INVTRIG_PS5)))));
     let q = 1.0 + z * (INVTRIG_QS1 + z * (INVTRIG_QS2 + z * (INVTRIG_QS3 + z * INVTRIG_QS4)));
@@ -51,12 +51,12 @@ pub unsafe extern "C" fn asin(x: f64) -> f64 {
         if ix < 0x3e500000 && ix >= 0x00100000 {
             return x;
         }
-        return x + x * invtrig_R(x * x);
+        return x + x * invtrig_r(x * x);
     }
     // 1 > |x| >= 0.5
     let z = (1.0 - fabs(x)) * 0.5;
     let s = sqrt(z);
-    let r = invtrig_R(z);
+    let r = invtrig_r(z);
     let result;
     if ix >= 0x3fef3333 {
         // |x| > 0.975
@@ -101,13 +101,13 @@ pub unsafe extern "C" fn acos(x: f64) -> f64 {
             // |x| < 2**-57
             return INVTRIG_PIO2_HI + asdouble(0x3870000000000000); // 0x1p-120f
         }
-        return INVTRIG_PIO2_HI - (x - (INVTRIG_PIO2_LO - x * invtrig_R(x * x)));
+        return INVTRIG_PIO2_HI - (x - (INVTRIG_PIO2_LO - x * invtrig_r(x * x)));
     }
     // x < -0.5
     if (hx >> 31) != 0 {
         let z = (1.0 + x) * 0.5;
         let s = sqrt(z);
-        let w = invtrig_R(z) * s - INVTRIG_PIO2_LO;
+        let w = invtrig_r(z) * s - INVTRIG_PIO2_LO;
         return 2.0 * (INVTRIG_PIO2_HI - (s + w));
     }
     // x > 0.5
@@ -116,7 +116,7 @@ pub unsafe extern "C" fn acos(x: f64) -> f64 {
     let mut df = s;
     set_low_word(&mut df, 0);
     let c = (z - df * df) / (s + df);
-    let w = invtrig_R(z) * s + c;
+    let w = invtrig_r(z) * s + c;
     2.0 * (df + w)
 }
 
@@ -314,7 +314,7 @@ const INVTRIG_QS1_F: f32 = -7.0662963390e-01;
 
 // Rational approximation R(z) for single-precision asinf/acosf.
 #[inline]
-fn invtrig_Rf(z: f32) -> f32 {
+fn invtrig_rf(z: f32) -> f32 {
     let p = z * (INVTRIG_PS0_F + z * (INVTRIG_PS1_F + z * INVTRIG_PS2_F));
     let q = 1.0f32 + z * INVTRIG_QS1_F;
     p / q
@@ -344,12 +344,12 @@ pub unsafe extern "C" fn asinf(x: f32) -> f32 {
         if ix < 0x39800000 && ix >= 0x00800000 {
             return x;
         }
-        return x + x * invtrig_Rf(x * x);
+        return x + x * invtrig_rf(x * x);
     }
     // 1 > |x| >= 0.5
     let z = (1.0f32 - fabsf(x)) * 0.5f32;
     let s = sqrt(z as f64);
-    let result = INVTRIG_PIO2_F - 2.0 * (s + s * invtrig_Rf(z) as f64);
+    let result = INVTRIG_PIO2_F - 2.0 * (s + s * invtrig_rf(z) as f64);
     let result = result as f32;
     if (hx >> 31) != 0 {
         return -result;
@@ -384,13 +384,13 @@ pub unsafe extern "C" fn acosf(x: f32) -> f32 {
             // |x| < 2**-26
             return INVTRIG_PIO2_HI_F + asfloat(0x03800000); // 0x1p-120f
         }
-        return INVTRIG_PIO2_HI_F - (x - (INVTRIG_PIO2_LO_F - x * invtrig_Rf(x * x)));
+        return INVTRIG_PIO2_HI_F - (x - (INVTRIG_PIO2_LO_F - x * invtrig_rf(x * x)));
     }
     // x < -0.5
     if (hx >> 31) != 0 {
         let z = (1.0f32 + x) * 0.5f32;
         let s = sqrtf(z);
-        let w = invtrig_Rf(z) * s - INVTRIG_PIO2_LO_F;
+        let w = invtrig_rf(z) * s - INVTRIG_PIO2_LO_F;
         return 2.0 * (INVTRIG_PIO2_HI_F - (s + w));
     }
     // x > 0.5
@@ -399,7 +399,7 @@ pub unsafe extern "C" fn acosf(x: f32) -> f32 {
     let hz = get_float_word(s);
     let df = asfloat(hz & 0xfffff000);
     let c = (z - df * df) / (s + df);
-    let w = invtrig_Rf(z) * s + c;
+    let w = invtrig_rf(z) * s + c;
     2.0 * (df + w)
 }
 

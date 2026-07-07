@@ -42,7 +42,7 @@ pub unsafe extern "C" fn __fork_handler(who: c_int) {
         return;
     }
 
-    let base = ATFORK_FUNCS.as_ptr();
+    let base = core::ptr::addr_of!(ATFORK_FUNCS).cast::<atfork_funcs>();
     if who < 0 {
         atfork_lock();
         let n = ATFORK_NFUNCS.load(Ordering::Relaxed);
@@ -82,7 +82,7 @@ pub unsafe extern "C" fn pthread_atfork(
         atfork_unlock();
         return ENOMEM;
     }
-    let dst = ATFORK_FUNCS.as_mut_ptr().add(n);
+    let dst = core::ptr::addr_of_mut!(ATFORK_FUNCS).cast::<atfork_funcs>().add(n);
     *dst = atfork_funcs { prepare, parent, child };
     ATFORK_NFUNCS.store(n + 1, Ordering::Relaxed);
     atfork_unlock();

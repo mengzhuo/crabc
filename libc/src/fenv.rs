@@ -45,9 +45,9 @@ pub unsafe extern "C" fn feclearexcept(excepts: c_int) -> c_int {
     let mut mxcsr: u32 = 0;
     let p = &mut mxcsr as *mut u32;
     core::arch::asm!("stmxcsr [{p}]", p = in(reg) p);
-    mxcsr |= (sw as u32) & 0x3f;
-    if mxcsr & (mask as u32) != 0 {
-        mxcsr &= !(mask as u32);
+    let mxcsr_val = core::ptr::read(p) | ((sw as u32) & 0x3f);
+    if mxcsr_val & (mask as u32) != 0 {
+        core::ptr::write(p, mxcsr_val & !(mask as u32));
         core::arch::asm!("ldmxcsr [{p}]", p = in(reg) p);
     }
     0
@@ -59,7 +59,7 @@ pub unsafe extern "C" fn feraiseexcept(excepts: c_int) -> c_int {
     let mut mxcsr: u32 = 0;
     let p = &mut mxcsr as *mut u32;
     core::arch::asm!("stmxcsr [{p}]", p = in(reg) p);
-    mxcsr |= mask;
+    core::ptr::write(p, core::ptr::read(p) | mask);
     core::arch::asm!("ldmxcsr [{p}]", p = in(reg) p);
     0
 }
@@ -72,7 +72,7 @@ pub unsafe extern "C" fn fetestexcept(excepts: c_int) -> c_int {
     core::arch::asm!("stmxcsr [{p}]", p = in(reg) p);
     let sw: u16;
     core::arch::asm!("fnstsw ax", out("ax") sw);
-    ((sw as c_int) | (mxcsr as c_int)) & mask
+    ((sw as c_int) | (core::ptr::read(p) as c_int)) & mask
 }
 
 #[no_mangle]
@@ -95,7 +95,7 @@ pub unsafe extern "C" fn fegetround() -> c_int {
     let p = &mut mxcsr as *mut u32;
     core::arch::asm!("stmxcsr [{p}]", p = in(reg) p);
     // MXCSR bits 13-14 map to x87 CW bits 10-11
-    ((mxcsr >> 3) & 0xc00) as c_int
+    ((core::ptr::read(p) >> 3) & 0xc00) as c_int
 }
 
 #[no_mangle]
@@ -106,12 +106,13 @@ pub unsafe extern "C" fn fesetround(r: c_int) -> c_int {
     let mut cw: u16 = 0;
     let p_cw = &mut cw as *mut u16;
     core::arch::asm!("fnstcw [{p}]", p = in(reg) p_cw);
-    cw = (cw & 0xf3ff) | (r as u16 & 0x0c00);
+    core::ptr::write(p_cw, (core::ptr::read(p_cw) & 0xf3ff) | (r as u16 & 0x0c00));
     core::arch::asm!("fldcw [{p}]", p = in(reg) p_cw);
+
     let mut mxcsr: u32 = 0;
     let p_mx = &mut mxcsr as *mut u32;
     core::arch::asm!("stmxcsr [{p}]", p = in(reg) p_mx);
-    mxcsr = (mxcsr & 0xffff9fff) | ((r as u32 & 0xc00) << 3);
+    core::ptr::write(p_mx, (core::ptr::read(p_mx) & 0xffff9fff) | ((r as u32 & 0xc00) << 3));
     core::arch::asm!("ldmxcsr [{p}]", p = in(reg) p_mx);
     0
 }

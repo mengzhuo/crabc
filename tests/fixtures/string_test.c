@@ -16,9 +16,10 @@ int main(void) {
     strncat(buf, "fgh", 1);
     if (strcmp(buf, "abcdef") != 0) return 4;
 
-    if (strlen("abc") != 3) return 5;
-    if (strnlen("abc", 10) != 3) return 6;
-    if (strnlen("abc", 2) != 2) return 7;
+    char abc[16] = "abc";
+    if (strlen(abc) != 3) return 5;
+    if (strnlen(abc, 10) != 3) return 6;
+    if (strnlen(abc, 2) != 2) return 7;
 
     if (strchr("abc", 'b') != "abc" + 1) return 8;
     if (strrchr("abca", 'a') != "abca" + 3) return 9;
