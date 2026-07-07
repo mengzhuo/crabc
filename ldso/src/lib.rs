@@ -1335,7 +1335,9 @@ unsafe fn load_and_jump(sp: usize) -> ! {
 
     process_all_relocations();
 
-    if TLS_TOTAL_SIZE > 0 {
+    // Always allocate a TCB so that %fs-relative accesses (e.g. stack canary
+    // at %fs:0x28) work even when there is no TLS data in the binary.
+    {
         let alloc_size = TLS_TOTAL_SIZE + TCB_SIZE;
         let tls_block = sys_mmap(
             core::ptr::null_mut(),
