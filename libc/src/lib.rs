@@ -9334,8 +9334,12 @@ pub unsafe extern "C" fn vfwscanf(f: *mut FILE, fmt: *const wchar_t, mut args: V
     let mut mbs_fmt = [0u8; 4096];
     wcsfmt_to_mbs(mbs_fmt.as_mut_ptr(), mbs_fmt.len(), fmt);
     let mut consumed = 0usize;
+    let hit_eof = (*f)._eof != 0;
     let result = do_vsscanf(buf.as_ptr(), n, mbs_fmt.as_ptr() as *const c_char, &mut args, &mut consumed);
     let _ = fseeko(f, start_pos + consumed as i64, SEEK_SET);
+    if hit_eof && consumed == n {
+        (*f)._eof = 1;
+    }
     result
 }
 
