@@ -1,5 +1,17 @@
 use std::process::Command;
 
+fn parse_count(stdout: &str, label: &str) -> i32 {
+    stdout
+        .lines()
+        .find(|l| l.trim_start().starts_with(label))
+        .and_then(|l| {
+            l.splitn(2, label)
+                .nth(1)
+                .map(|v| v.trim().parse::<i32>().unwrap_or(0))
+        })
+        .unwrap_or(0)
+}
+
 #[test]
 fn wave5_libc_test_functional_networking_and_fcntl() {
     let libc_test_dir = std::env::var("LIBC_TEST_DIR").unwrap_or_else(|_| "/home/root/libc-test".into());
@@ -38,14 +50,8 @@ fn wave5_libc_test_functional_networking_and_fcntl() {
         );
     }
 
-    assert!(
-        stdout.contains("PASS:       46") || stdout.contains("PASS:       4"),
-        "expected PASS count of at least 46:\n{}",
-        stdout
-    );
-    assert!(
-        stdout.contains("FAIL:       23") || stdout.contains("FAIL:       2"),
-        "expected FAIL count of at most 23:\n{}",
-        stdout
-    );
+    let pass = parse_count(&stdout, "PASS:");
+    let fail = parse_count(&stdout, "FAIL:");
+    assert!(pass >= 50, "expected PASS count of at least 50, got {}", pass);
+    assert!(fail <= 19, "expected FAIL count of at most 19, got {}", fail);
 }
