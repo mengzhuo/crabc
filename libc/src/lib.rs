@@ -5641,8 +5641,11 @@ pub unsafe extern "C" fn fseeko(stream: *mut FILE, offset: i64, whence: c_int) -
     }
     let f = &mut *stream;
     let mut adj_offset = offset;
-    if whence == SEEK_CUR && !f.rpos.is_null() {
-        adj_offset -= f.rend as i64 - f.rpos as i64;
+    if whence == SEEK_CUR {
+        if !f.rpos.is_null() {
+            adj_offset -= f.rend as i64 - f.rpos as i64;
+        }
+        adj_offset -= f.ungotten_count as i64;
     }
     if !f.wpos.is_null() && f.wpos != f.wbase {
         if flush_buf(stream) != 0 { return -1; }
@@ -5655,14 +5658,13 @@ pub unsafe extern "C" fn fseeko(stream: *mut FILE, offset: i64, whence: c_int) -
     f.rpos = core::ptr::null_mut();
     f.rend = core::ptr::null_mut();
     f._eof = 0;
+    f.ungotten_count = 0;
     0
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn ftello(stream: *mut FILE) -> i64 {
     let f = &mut *stream;
-    // Append streams may have unflushed output that belongs at the current end.
-    // Flush before querying the offset so ftello reflects the real position.
     if f.flags & F_APP != 0 && !f.wpos.is_null() && f.wpos != f.wbase {
         if fflush(stream) != 0 { return -1; }
     }
@@ -5674,7 +5676,7 @@ pub unsafe extern "C" fn ftello(stream: *mut FILE) -> i64 {
     } else if !f.wbase.is_null() {
         pos += f.wpos as i64 - f.wbase as i64;
     }
-    pos
+    pos - f.ungotten_count as i64
 }
 
 #[no_mangle]
@@ -7386,10 +7388,13 @@ pub unsafe extern "C" fn vsscanf(buf: *const c_char, fmt: *const c_char, mut arg
 
 #[no_mangle]
 pub unsafe extern "C" fn vfscanf(stream: *mut FILE, fmt: *const c_char, mut args: VaList) -> c_int {
+    let f = &mut *stream;
+    let start_ungotten_count = f.ungotten_count as usize;
+    let start_kernel_pos = sys_lseek(f.fd as i64, 0, SEEK_CUR as i64);
+
     let mut line = [0u8; 4096];
     let mut pos = 0usize;
-    loop {
-        if pos >= line.len() - 1 { break; }
+    while pos < line.len() - 1 {
         let c = fgetc(stream);
         if c == -1 { break; }
         line[pos] = c as u8;
@@ -7398,7 +7403,21 @@ pub unsafe extern "C" fn vfscanf(stream: *mut FILE, fmt: *const c_char, mut args
     }
     line[pos] = 0;
     if pos == 0 { return 0; }
-    vsscanf_inner(line.as_ptr(), fmt, &mut args)
+
+    let mut consumed = 0usize;
+    let assigned = do_vsscanf(line.as_ptr(), pos, fmt, &mut args, &mut consumed);
+
+    if start_kernel_pos >= 0 {
+        let file_consumed = consumed.saturating_sub(start_ungotten_count);
+        let target = start_kernel_pos + file_consumed as i64;
+        sys_lseek(f.fd as i64, target, SEEK_SET as i64);
+        f.rpos = core::ptr::null_mut();
+        f.rend = core::ptr::null_mut();
+        f._eof = 0;
+        let remaining = start_ungotten_count.saturating_sub(consumed);
+        f.ungotten_count = remaining as c_int;
+    }
+    assigned
 }
 
 #[no_mangle]
