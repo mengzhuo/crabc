@@ -12047,11 +12047,16 @@ unsafe fn htab_resize(nel: usize, htab: *mut HSearchData) -> c_int {
 
     let mut newsize: usize = HSEARCH_MINSIZE;
     while newsize < nel {
-        newsize = newsize.wrapping_mul(2);
+        let Some(next) = newsize.checked_mul(2) else {
+            ERRNO = ENOMEM;
+            return 0;
+        };
+        newsize = next;
     }
 
     let new_entries = calloc(newsize, core::mem::size_of::<HSearchEntry>()) as *mut HSearchEntry;
     if new_entries.is_null() {
+        ERRNO = ENOMEM;
         return 0;
     }
     (*tab).entries = new_entries;
@@ -12081,8 +12086,13 @@ unsafe fn htab_resize(nel: usize, htab: *mut HSearchData) -> c_int {
 }
 
 unsafe fn hcreate_r_impl(nel: usize, htab: *mut HSearchData) -> c_int {
+    if nel == 0 || nel > (1usize << 30) {
+        ERRNO = ENOMEM;
+        return 0;
+    }
     (*htab).tab = calloc(1, core::mem::size_of::<HTab>()) as *mut HTab;
     if (*htab).tab.is_null() {
+        ERRNO = ENOMEM;
         return 0;
     }
     if htab_resize(nel, htab) == 0 {
