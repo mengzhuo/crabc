@@ -7518,7 +7518,11 @@ pub unsafe extern "C" fn pclose(f: *mut FILE) -> c_int {
     let r = fclose(f);
     if pid <= 0 { return -1; }
     let mut status: c_int = 0;
-    let w = waitpid(pid, &mut status, 0);
+    let mut w: c_int;
+    loop {
+        w = waitpid(pid, &mut status, 0);
+        if w >= 0 || w != -EINTR { break; }
+    }
     if w < 0 || r != 0 { return -1; }
     status
 }
