@@ -544,23 +544,33 @@ const BF_S3: [u32; 256] = [
     0x90d4f869,0xa65cdea0,0x3f09252d,0xc208e69f,0xb74e6132,0xce77e25b,0x578fdfe3,0x3ac372e6,
 ];
 
-fn bf_s(idx: usize) -> u32 {
-    match idx >> 8 {
-        0 => BF_S0[idx & 0xFF],
-        1 => BF_S1[idx & 0xFF],
-        2 => BF_S2[idx & 0xFF],
-        _ => BF_S3[idx & 0xFF],
-    }
-}
+#[inline(always)]
+fn bf_encrypt_block(ps: &[u32; 1042], mut l: u32, mut r: u32) -> (u32, u32) {
+    let p = ps.as_ptr();
+    let s0 = unsafe { p.add(18) };
+    let s1 = unsafe { p.add(274) };
+    let s2 = unsafe { p.add(530) };
+    let s3 = unsafe { p.add(786) };
+    l ^= unsafe { *p };
+    for i in (0..BF_N).step_by(2) {
+        let mut tmp = unsafe { *s0.add((l >> 24) as usize) };
+        tmp = tmp.wrapping_add(unsafe { *s1.add(((l >> 16) & 0xFF) as usize) });
+        tmp ^= unsafe { *s2.add(((l >> 8) & 0xFF) as usize) };
+        tmp = tmp.wrapping_add(unsafe { *s3.add((l & 0xFF) as usize) });
+        r ^= unsafe { *p.add(i + 1) }; r ^= tmp;
+        let tl = r; r = l; l = tl;
 
-// BF_ROUND macro inlined: encrypts L through one Feistel round using P[i+1]
-// Returns new R value
-fn bf_round(l: u32, r: u32, p: &[u32; 18], pidx: usize) -> u32 {
-    let mut tmp = bf_s(0x300 + (l & 0xFF) as usize);
-    tmp = tmp.wrapping_add(bf_s(0x200 + ((l >> 8) & 0xFF) as usize));
-    tmp ^= bf_s(0x100 + ((l >> 16) & 0xFF) as usize);
-    tmp = tmp.wrapping_add(bf_s((l >> 24) as usize));
-    r ^ p[pidx] ^ tmp
+        let mut tmp2 = unsafe { *s0.add((l >> 24) as usize) };
+        tmp2 = tmp2.wrapping_add(unsafe { *s1.add(((l >> 16) & 0xFF) as usize) });
+        tmp2 ^= unsafe { *s2.add(((l >> 8) & 0xFF) as usize) };
+        tmp2 = tmp2.wrapping_add(unsafe { *s3.add((l & 0xFF) as usize) });
+        r ^= unsafe { *p.add(i + 2) }; r ^= tmp2;
+        let tl2 = r; r = l; l = tl2;
+    }
+    let old_r = r ^ unsafe { *p.add(BF_N + 1) };
+    r = l;
+    l = old_r;
+    (l, r)
 }
 
 fn bf_crypt_inner(key: &[u8], setting: &[u8], output: &mut [u8], min: u32) -> Option<usize> {
@@ -593,81 +603,34 @@ fn bf_crypt_inner(key: &[u8], setting: &[u8], output: &mut [u8], min: u32) -> Op
     let mut initial = [0u32; 18];
     bf_set_key(key, &mut expanded, &mut initial, flags);
 
-    let mut p_box = initial;
-    // Copy init S-boxes
-    let s0 = BF_S0;
-    let s1 = BF_S1;
-    let s2 = BF_S2;
-    let s3 = BF_S3;
+    let mut ps = [0u32; 18 + 4 * 256];
+    ps[..18].copy_from_slice(&initial);
+    ps[18..274].copy_from_slice(&BF_S0);
+    ps[274..530].copy_from_slice(&BF_S1);
+    ps[530..786].copy_from_slice(&BF_S2);
+    ps[786..1042].copy_from_slice(&BF_S3);
 
-    // Phase 1: Eksblowfish setup - encrypt salt through P and S boxes
     let (mut l, mut r) = (0u32, 0u32);
-    for i in (0..BF_N + 2).step_by(2) {
-        l ^= salt_words[0]; r ^= salt_words[1];
-        for _ in 0..16 {
-            l ^= p_box[0];
-            let mut tmp = s3[(l & 0xFF) as usize];
-            tmp = tmp.wrapping_add(s2[((l >> 8) & 0xFF) as usize]);
-            tmp ^= s1[((l >> 16) & 0xFF) as usize];
-            tmp = tmp.wrapping_add(s0[(l >> 24) as usize]);
-            r ^= p_box[1]; r ^= tmp;
-            let tmp_l = r; r = l; l = tmp_l;
-            // Repeat for second half-round
-            l ^= p_box[2];
-            let mut tmp2 = s3[(l & 0xFF) as usize];
-            tmp2 = tmp2.wrapping_add(s2[((l >> 8) & 0xFF) as usize]);
-            tmp2 ^= s1[((l >> 16) & 0xFF) as usize];
-            tmp2 = tmp2.wrapping_add(s0[(l >> 24) as usize]);
-            r ^= p_box[3]; r ^= tmp2;
-            let tmp_l2 = r; r = l; l = tmp_l2;
-        }
-        let old_r = r ^ p_box[BF_N + 1];
-        r = l;
-        l = old_r;
-        p_box[i] = l;
-
-        l ^= salt_words[2]; r ^= salt_words[3];
-        for _ in 0..16 {
-            l ^= p_box[0];
-            let mut tmp = s3[(l & 0xFF) as usize];
-            tmp = tmp.wrapping_add(s2[((l >> 8) & 0xFF) as usize]);
-            tmp ^= s1[((l >> 16) & 0xFF) as usize];
-            tmp = tmp.wrapping_add(s0[(l >> 24) as usize]);
-            r ^= p_box[1]; r ^= tmp;
-            let tmp_l = r; r = l; l = tmp_l;
-            l ^= p_box[2];
-            let mut tmp2 = s3[(l & 0xFF) as usize];
-            tmp2 = tmp2.wrapping_add(s2[((l >> 8) & 0xFF) as usize]);
-            tmp2 ^= s1[((l >> 16) & 0xFF) as usize];
-            tmp2 = tmp2.wrapping_add(s0[(l >> 24) as usize]);
-            r ^= p_box[3]; r ^= tmp2;
-            let tmp_l2 = r; r = l; l = tmp_l2;
-        }
-        let old_r2 = r ^ p_box[BF_N + 1];
-        r = l;
-        l = old_r2;
-        if i + 1 < BF_N + 2 { p_box[i + 1] = r; }
+    let mut i = 0usize;
+    while i < ps.len() {
+        let (nl, nr) = bf_encrypt_block(&ps, l ^ salt_words[0], r ^ salt_words[1]);
+        ps[i] = nl;
+        ps[i + 1] = nr;
+        l = nl; r = nr;
+        i += 2;
+        if i >= ps.len() { break; }
+        let (nl2, nr2) = bf_encrypt_block(&ps, l ^ salt_words[2], r ^ salt_words[3]);
+        ps[i] = nl2;
+        ps[i + 1] = nr2;
+        l = nl2; r = nr2;
+        i += 2;
     }
 
-    // ponytail: Phase 2 is the expensive Eksblowfish expansion.
-    // This is the exact musl algorithm using BF_encrypt through entire state.
-    // We flatten P+S into a single array to match musl's BF_ctx union.
-    let mut ps = [0u32; 18 + 4 * 256];
-    ps[..18].copy_from_slice(&p_box);
-    ps[18..274].copy_from_slice(&s0);
-    ps[274..530].copy_from_slice(&s1);
-    ps[530..786].copy_from_slice(&s2);
-    ps[786..1042].copy_from_slice(&s3);
-
     for _ in 0..count {
-        // XOR P-box with expanded key
-        for i in (0..BF_N + 2).step_by(2) {
+        for i in 0..BF_N + 2 {
             ps[i] ^= expanded[i];
-            ps[i + 1] ^= expanded[i + 1];
         }
-        // Encrypt (0,0) through entire PS state
         bf_encrypt_full(&mut ps, 0, 0);
-        // XOR P-box with salt
         for i in (0..BF_N).step_by(4) {
             ps[i] ^= salt_words[0];
             ps[i + 1] ^= salt_words[1];
@@ -676,7 +639,6 @@ fn bf_crypt_inner(key: &[u8], setting: &[u8], output: &mut [u8], min: u32) -> Op
         }
         ps[16] ^= salt_words[0];
         ps[17] ^= salt_words[1];
-        // Encrypt (0,0) through entire PS state again
         bf_encrypt_full(&mut ps, 0, 0);
     }
 
@@ -686,18 +648,8 @@ fn bf_crypt_inner(key: &[u8], setting: &[u8], output: &mut [u8], min: u32) -> Op
         let mut l = BF_MAGIC_W[i];
         let mut r = BF_MAGIC_W[i + 1];
         for _ in 0..64 {
-            for j in (0..16).step_by(2) {
-                l ^= ps[j];
-                let mut tmp = ps[786 + (l & 0xFF) as usize];
-                tmp = tmp.wrapping_add(ps[530 + ((l >> 8) & 0xFF) as usize]);
-                tmp ^= ps[274 + ((l >> 16) & 0xFF) as usize];
-                tmp = tmp.wrapping_add(ps[18 + (l >> 24) as usize]);
-                r ^= ps[j + 1]; r ^= tmp;
-                let tl = r; r = l; l = tl;
-            }
-            let old_r = r ^ ps[BF_N + 1];
-            r = l;
-            l = old_r;
+            let (nl, nr) = bf_encrypt_block(&ps, l, r);
+            l = nl; r = nr;
         }
         output_words[i] = l;
         output_words[i + 1] = r;
@@ -706,7 +658,6 @@ fn bf_crypt_inner(key: &[u8], setting: &[u8], output: &mut [u8], min: u32) -> Op
     // Format output
     output[..7 + 22 - 1].copy_from_slice(&setting[..7 + 22 - 1]);
     output[7 + 22 - 1] = BF_ITOA64[(BF_ATOI64[setting[7 + 22 - 1] as usize - 0x20] & 0x30) as usize];
-    // Byte-swap output words for encoding (little-endian to big-endian)
     for w in output_words.iter_mut() { *w = w.swap_bytes(); }
     let enc_src: &[u8] = unsafe { core::slice::from_raw_parts(output_words.as_ptr() as *const u8, 24) };
     bf_encode(&mut output[7 + 22..], &enc_src[..23]);
@@ -715,30 +666,38 @@ fn bf_crypt_inner(key: &[u8], setting: &[u8], output: &mut [u8], min: u32) -> Op
 }
 
 // Encrypt (l,r) through all 1042 entries of PS array (BF_encrypt with start=&PS[0], end=&PS[PS_SIZE])
+#[inline(always)]
 fn bf_encrypt_full(ps: &mut [u32; 1042], mut l: u32, mut r: u32) {
+    let p = ps.as_mut_ptr();
+    let s0 = unsafe { p.add(18) };
+    let s1 = unsafe { p.add(274) };
+    let s2 = unsafe { p.add(530) };
+    let s3 = unsafe { p.add(786) };
     let mut ptr = 0usize;
     while ptr < 1042 {
-        l ^= ps[0]; // P[0]
+        l ^= unsafe { *p };
         for i in (0..16).step_by(2) {
-            let mut tmp = ps[786 + (l & 0xFF) as usize];
-            tmp = tmp.wrapping_add(ps[530 + ((l >> 8) & 0xFF) as usize]);
-            tmp ^= ps[274 + ((l >> 16) & 0xFF) as usize];
-            tmp = tmp.wrapping_add(ps[18 + (l >> 24) as usize]);
-            r ^= ps[i + 1]; r ^= tmp;
+            let mut tmp = unsafe { *s0.add((l >> 24) as usize) };
+            tmp = tmp.wrapping_add(unsafe { *s1.add(((l >> 16) & 0xFF) as usize) });
+            tmp ^= unsafe { *s2.add(((l >> 8) & 0xFF) as usize) };
+            tmp = tmp.wrapping_add(unsafe { *s3.add((l & 0xFF) as usize) });
+            r ^= unsafe { *p.add(i + 1) }; r ^= tmp;
             let tl = r; r = l; l = tl;
 
-            let mut tmp2 = ps[786 + (l & 0xFF) as usize];
-            tmp2 = tmp2.wrapping_add(ps[530 + ((l >> 8) & 0xFF) as usize]);
-            tmp2 ^= ps[274 + ((l >> 16) & 0xFF) as usize];
-            tmp2 = tmp2.wrapping_add(ps[18 + (l >> 24) as usize]);
-            r ^= ps[i + 2]; r ^= tmp2;
+            let mut tmp2 = unsafe { *s0.add((l >> 24) as usize) };
+            tmp2 = tmp2.wrapping_add(unsafe { *s1.add(((l >> 16) & 0xFF) as usize) });
+            tmp2 ^= unsafe { *s2.add(((l >> 8) & 0xFF) as usize) };
+            tmp2 = tmp2.wrapping_add(unsafe { *s3.add((l & 0xFF) as usize) });
+            r ^= unsafe { *p.add(i + 2) }; r ^= tmp2;
             let tl2 = r; r = l; l = tl2;
         }
-        let old_r = r ^ ps[BF_N + 1];
+        let old_r = r ^ unsafe { *p.add(BF_N + 1) };
         r = l;
         l = old_r;
-        ps[ptr] = l;
-        ps[ptr + 1] = r;
+        unsafe {
+            *p.add(ptr) = l;
+            *p.add(ptr + 1) = r;
+        }
         ptr += 2;
     }
 }
@@ -750,19 +709,20 @@ fn bf_set_key(key: &[u8], expanded: &mut [u32; 18], initial: &mut [u32; 18], fla
     let mut diff: u32 = 0;
     let mut ptr = 0usize;
     let klen = key.len();
-    if klen == 0 { return; }
 
     for i in 0..BF_N + 2 {
         let mut tmp = [0u32; 2];
         for j in 0..4 {
-            tmp[0] <<= 8;
-            tmp[0] |= key[ptr] as u32;
-            tmp[1] <<= 8;
-            tmp[1] |= key[ptr] as i8 as i32 as u32;
+            let b = key[ptr];
+            tmp[0] = (tmp[0] << 8) | (b as u32);
+            tmp[1] = (tmp[1] << 8) | ((b as i8 as i32) as u32);
             if j != 0 { sign |= tmp[1] & 0x80; }
-            ptr += 1;
-            if key[ptr - 1] == 0 { ptr = 0; }
-            if ptr >= klen { ptr = 0; }
+            if b == 0 {
+                ptr = 0;
+            } else {
+                ptr += 1;
+                if ptr >= klen { ptr = 0; }
+            }
         }
         diff |= tmp[0] ^ tmp[1];
         expanded[i] = tmp[bug as usize];
@@ -781,7 +741,7 @@ fn bf_decode(dst: &mut [u8], src: &[u8]) -> bool {
     let mut di = 0usize;
     let mut si = 0usize;
     while di < dst.len() {
-        if si + 3 >= src.len() { return true; }
+        if si + 1 >= src.len() { return true; }
         let c1 = src[si] as usize;
         let c2 = src[si + 1] as usize;
         if c1 < 0x20 || c1 >= 0x80 || c2 < 0x20 || c2 >= 0x80 { return true; }
@@ -790,21 +750,27 @@ fn bf_decode(dst: &mut [u8], src: &[u8]) -> bool {
         if v1 > 63 || v2 > 63 { return true; }
         dst[di] = (v1 << 2) | ((v2 & 0x30) >> 4);
         di += 1;
+        si += 2;
         if di >= dst.len() { break; }
-        let c3 = src[si + 2] as usize;
+
+        if si >= src.len() { return true; }
+        let c3 = src[si] as usize;
+        si += 1;
         if c3 < 0x20 || c3 >= 0x80 { return true; }
         let v3 = BF_ATOI64[c3 - 0x20];
         if v3 > 63 { return true; }
         dst[di] = ((v2 & 0x0F) << 4) | ((v3 & 0x3C) >> 2);
         di += 1;
         if di >= dst.len() { break; }
-        let c4 = src[si + 3] as usize;
+
+        if si >= src.len() { return true; }
+        let c4 = src[si] as usize;
+        si += 1;
         if c4 < 0x20 || c4 >= 0x80 { return true; }
         let v4 = BF_ATOI64[c4 - 0x20];
         if v4 > 63 { return true; }
         dst[di] = ((v3 & 0x03) << 6) | v4;
         di += 1;
-        si += 4;
     }
     false
 }
@@ -836,7 +802,15 @@ pub unsafe extern "C" fn __crypt_blowfish(key: *const c_char, setting: *const c_
     let ss = cstr_bytes(setting);
     let out = core::slice::from_raw_parts_mut(output as *mut u8, 256);
 
-    let retval = bf_crypt_inner(ks, ss, out, 16);
+    let mut key_buf = [0u8; 128];
+    if ks.len() >= key_buf.len() {
+        *output = b'*' as c_char;
+        *output.add(1) = 0;
+        return output;
+    }
+    key_buf[..ks.len()].copy_from_slice(ks);
+
+    let retval = bf_crypt_inner(&key_buf[..ks.len() + 1], ss, out, 16);
     if retval.is_some() {
         out[retval.unwrap()] = 0;
         return output;
