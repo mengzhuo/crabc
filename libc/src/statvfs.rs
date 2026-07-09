@@ -47,30 +47,12 @@ pub const ST_RELATIME: c_ulong = 4096;
 // ponytail: SYS_statfs(137) vs SYS_statfs64(305) identical on x86_64
 #[inline]
 unsafe fn sys_statfs(path: *const c_char, buf: *mut kernel_statfs) -> i64 {
-    let result: i64;
-    core::arch::asm!(
-        "syscall",
-        inlateout("rax") 137i64 => result,
-        in("rdi") path,
-        in("rsi") buf,
-        lateout("rcx") _,
-        lateout("r11") _,
-    );
-    result
+    <Arch as Syscalls>::syscall2(137, path as i64, buf as i64)
 }
 
 #[inline]
 unsafe fn sys_fstatfs(fd: c_int, buf: *mut kernel_statfs) -> i64 {
-    let result: i64;
-    core::arch::asm!(
-        "syscall",
-        inlateout("rax") 138i64 => result,
-        in("rdi") fd as i64,
-        in("rsi") buf,
-        lateout("rcx") _,
-        lateout("r11") _,
-    );
-    result
+    <Arch as Syscalls>::syscall2(138, fd as i64, buf as i64)
 }
 
 unsafe fn fixup(out: *mut statvfs, kbuf: *const kernel_statfs) {

@@ -77,78 +77,177 @@ const MAP_PRIVATE: i32 = 0x02;
 const MAP_ANONYMOUS: i32 = 0x20;
 
 // ============================================================
+// Architecture abstraction for syscalls
+// ============================================================
+
+trait Syscalls {
+    unsafe fn syscall0(n: i64) -> i64;
+    unsafe fn syscall1(n: i64, a1: i64) -> i64;
+    unsafe fn syscall2(n: i64, a1: i64, a2: i64) -> i64;
+    unsafe fn syscall3(n: i64, a1: i64, a2: i64, a3: i64) -> i64;
+    unsafe fn syscall4(n: i64, a1: i64, a2: i64, a3: i64, a4: i64) -> i64;
+    unsafe fn syscall5(n: i64, a1: i64, a2: i64, a3: i64, a4: i64, a5: i64) -> i64;
+    unsafe fn syscall6(n: i64, a1: i64, a2: i64, a3: i64, a4: i64, a5: i64, a6: i64) -> i64;
+    unsafe fn syscall_noreturn1(n: i64, a1: i64) -> !;
+}
+
+struct X86_64;
+struct Aarch64;
+
+impl Syscalls for X86_64 {
+    #[inline(always)]
+    unsafe fn syscall0(n: i64) -> i64 {
+        let result: i64;
+        core::arch::asm!(
+            "syscall",
+            inlateout("rax") n => result,
+            lateout("rcx") _,
+            lateout("r11") _,
+        );
+        result
+    }
+    #[inline(always)]
+    unsafe fn syscall1(n: i64, a1: i64) -> i64 {
+        let result: i64;
+        core::arch::asm!(
+            "syscall",
+            inlateout("rax") n => result,
+            in("rdi") a1,
+            lateout("rcx") _,
+            lateout("r11") _,
+        );
+        result
+    }
+    #[inline(always)]
+    unsafe fn syscall2(n: i64, a1: i64, a2: i64) -> i64 {
+        let result: i64;
+        core::arch::asm!(
+            "syscall",
+            inlateout("rax") n => result,
+            in("rdi") a1,
+            in("rsi") a2,
+            lateout("rcx") _,
+            lateout("r11") _,
+        );
+        result
+    }
+    #[inline(always)]
+    unsafe fn syscall3(n: i64, a1: i64, a2: i64, a3: i64) -> i64 {
+        let result: i64;
+        core::arch::asm!(
+            "syscall",
+            inlateout("rax") n => result,
+            in("rdi") a1,
+            in("rsi") a2,
+            in("rdx") a3,
+            lateout("rcx") _,
+            lateout("r11") _,
+        );
+        result
+    }
+    #[inline(always)]
+    unsafe fn syscall4(n: i64, a1: i64, a2: i64, a3: i64, a4: i64) -> i64 {
+        let result: i64;
+        core::arch::asm!(
+            "syscall",
+            inlateout("rax") n => result,
+            in("rdi") a1,
+            in("rsi") a2,
+            in("rdx") a3,
+            in("r10") a4,
+            lateout("rcx") _,
+            lateout("r11") _,
+        );
+        result
+    }
+    #[inline(always)]
+    unsafe fn syscall5(n: i64, a1: i64, a2: i64, a3: i64, a4: i64, a5: i64) -> i64 {
+        let result: i64;
+        core::arch::asm!(
+            "syscall",
+            inlateout("rax") n => result,
+            in("rdi") a1,
+            in("rsi") a2,
+            in("rdx") a3,
+            in("r10") a4,
+            in("r8") a5,
+            lateout("rcx") _,
+            lateout("r11") _,
+        );
+        result
+    }
+    #[inline(always)]
+    unsafe fn syscall6(n: i64, a1: i64, a2: i64, a3: i64, a4: i64, a5: i64, a6: i64) -> i64 {
+        let result: i64;
+        core::arch::asm!(
+            "syscall",
+            inlateout("rax") n => result,
+            in("rdi") a1,
+            in("rsi") a2,
+            in("rdx") a3,
+            in("r10") a4,
+            in("r8") a5,
+            in("r9") a6,
+            lateout("rcx") _,
+            lateout("r11") _,
+        );
+        result
+    }
+    #[inline(always)]
+    unsafe fn syscall_noreturn1(n: i64, a1: i64) -> ! {
+        core::arch::asm!(
+            "syscall",
+            in("rax") n,
+            in("rdi") a1,
+            options(noreturn)
+        );
+    }
+}
+
+#[cfg(target_arch = "aarch64")]
+impl Syscalls for Aarch64 {
+    unsafe fn syscall0(_n: i64) -> i64 { loop {} }
+    unsafe fn syscall1(_n: i64, _a1: i64) -> i64 { loop {} }
+    unsafe fn syscall2(_n: i64, _a1: i64, _a2: i64) -> i64 { loop {} }
+    unsafe fn syscall3(_n: i64, _a1: i64, _a2: i64, _a3: i64) -> i64 { loop {} }
+    unsafe fn syscall4(_n: i64, _a1: i64, _a2: i64, _a3: i64, _a4: i64) -> i64 { loop {} }
+    unsafe fn syscall5(_n: i64, _a1: i64, _a2: i64, _a3: i64, _a4: i64, _a5: i64) -> i64 { loop {} }
+    unsafe fn syscall6(_n: i64, _a1: i64, _a2: i64, _a3: i64, _a4: i64, _a5: i64, _a6: i64) -> i64 { loop {} }
+    unsafe fn syscall_noreturn1(_n: i64, _a1: i64) -> ! { loop {} }
+}
+
+#[cfg(target_arch = "x86_64")]
+type Arch = X86_64;
+#[cfg(target_arch = "aarch64")]
+type Arch = Aarch64;
+
+// ============================================================
 // Syscall wrappers (raw, no_std)
 // ============================================================
 
 #[inline]
 unsafe fn sys_write(fd: i64, buf: *const u8, count: usize) -> i64 {
-    let result: i64;
-    core::arch::asm!(
-        "syscall",
-        inlateout("rax") 1i64 => result,
-        in("rdi") fd,
-        in("rsi") buf,
-        in("rdx") count,
-        lateout("rcx") _,
-        lateout("r11") _,
-    );
-    result
+    <Arch as Syscalls>::syscall3(1, fd as i64, buf as i64, count as i64)
 }
 
 #[inline]
 unsafe fn sys_read(fd: i64, buf: *mut u8, count: usize) -> i64 {
-    let result: i64;
-    core::arch::asm!(
-        "syscall",
-        inlateout("rax") 0i64 => result,
-        in("rdi") fd,
-        in("rsi") buf,
-        in("rdx") count,
-        lateout("rcx") _,
-        lateout("r11") _,
-    );
-    result
+    <Arch as Syscalls>::syscall3(0, fd as i64, buf as i64, count as i64)
 }
 
 #[inline]
 unsafe fn sys_open(path: *const u8, flags: i64, mode: i64) -> i64 {
-    let result: i64;
-    core::arch::asm!(
-        "syscall",
-        inlateout("rax") 2i64 => result,
-        in("rdi") path,
-        in("rsi") flags,
-        in("rdx") mode,
-        lateout("rcx") _,
-        lateout("r11") _,
-    );
-    result
+    <Arch as Syscalls>::syscall3(2, path as i64, flags as i64, mode as i64)
 }
 
 #[inline]
 unsafe fn sys_close(fd: i64) {
-    core::arch::asm!(
-        "syscall",
-        in("rax") 3i64,
-        in("rdi") fd,
-        lateout("rcx") _,
-        lateout("r11") _,
-    );
+    let _ = <Arch as Syscalls>::syscall1(3, fd as i64);
 }
 
 #[inline]
 unsafe fn sys_lseek(fd: i64, offset: i64, whence: i64) -> i64 {
-    let result: i64;
-    core::arch::asm!(
-        "syscall",
-        inlateout("rax") 8i64 => result,
-        in("rdi") fd,
-        in("rsi") offset,
-        in("rdx") whence,
-        lateout("rcx") _,
-        lateout("r11") _,
-    );
-    result
+    <Arch as Syscalls>::syscall3(8, fd as i64, offset as i64, whence as i64)
 }
 
 unsafe fn sys_mmap(
@@ -159,19 +258,7 @@ unsafe fn sys_mmap(
     fd: i32,
     offset: i64,
 ) -> *mut u8 {
-    let result: i64;
-    core::arch::asm!(
-        "syscall",
-        inlateout("rax") 9i64 => result,
-        in("rdi") addr,
-        in("rsi") length,
-        in("rdx") prot,
-        in("r10") flags,
-        in("r8") fd,
-        in("r9") offset,
-        lateout("rcx") _,
-        lateout("r11") _,
-    );
+    let result = <Arch as Syscalls>::syscall6(9, addr as i64, length as i64, prot as i64, flags as i64, fd as i64, offset);
     if result < 0 && result > -4096 {
         ERRNO = (-result) as c_int;
         return MMAP_FAILED;
@@ -180,16 +267,7 @@ unsafe fn sys_mmap(
 }
 
 unsafe fn sys_munmap(addr: *mut u8, length: usize) -> i64 {
-    let result: i64;
-    core::arch::asm!(
-        "syscall",
-        inlateout("rax") 11i64 => result,
-        in("rdi") addr,
-        in("rsi") length,
-        lateout("rcx") _,
-        lateout("r11") _,
-    );
-    result
+    <Arch as Syscalls>::syscall2(11, addr as i64, length as i64)
 }
 
 // ============================================================
@@ -1180,123 +1258,47 @@ extern "C" {
 }
 
 #[inline]
-unsafe fn sys_rt_sigaction(
-    sig: c_int,
+unsafe fn sys_rt_sigaction(sig: c_int,
     act: *const sigaction,
     oldact: *mut sigaction,
-    sigsetsize: usize,
-) -> i64 {
-    let result: i64;
-    core::arch::asm!(
-        "syscall",
-        inlateout("rax") 13i64 => result,
-        in("rdi") sig as i64,
-        in("rsi") act,
-        in("rdx") oldact,
-        in("r10") sigsetsize,
-        lateout("rcx") _,
-        lateout("r11") _,
-    );
-    result
+    sigsetsize: usize,) -> i64 {
+    <Arch as Syscalls>::syscall4(13, sig as i64, act as i64, oldact as i64, sigsetsize as i64)
 }
 
 #[inline]
-unsafe fn sys_rt_sigprocmask(
-    how: c_int,
+unsafe fn sys_rt_sigprocmask(how: c_int,
     set: *const SigSetT,
     oldset: *mut SigSetT,
-    sigsetsize: usize,
-) -> i64 {
-    let result: i64;
-    core::arch::asm!(
-        "syscall",
-        inlateout("rax") 14i64 => result,
-        in("rdi") how as i64,
-        in("rsi") set,
-        in("rdx") oldset,
-        in("r10") sigsetsize,
-        lateout("rcx") _,
-        lateout("r11") _,
-    );
-    result
+    sigsetsize: usize,) -> i64 {
+    <Arch as Syscalls>::syscall4(14, how as i64, set as i64, oldset as i64, sigsetsize as i64)
 }
 
 #[inline]
 unsafe fn sys_rt_sigpending(set: *mut SigSetT, sigsetsize: usize) -> i64 {
-    let result: i64;
-    core::arch::asm!(
-        "syscall",
-        inlateout("rax") 127i64 => result,
-        in("rdi") set,
-        in("rsi") sigsetsize,
-        lateout("rcx") _,
-        lateout("r11") _,
-    );
-    result
+    <Arch as Syscalls>::syscall2(127, set as i64, sigsetsize as i64)
 }
 
 #[inline]
 unsafe fn sys_rt_sigsuspend(mask: *const SigSetT, sigsetsize: usize) -> i64 {
-    let result: i64;
-    core::arch::asm!(
-        "syscall",
-        inlateout("rax") 130i64 => result,
-        in("rdi") mask,
-        in("rsi") sigsetsize,
-        lateout("rcx") _,
-        lateout("r11") _,
-    );
-    result
+    <Arch as Syscalls>::syscall2(130, mask as i64, sigsetsize as i64)
 }
 
 #[inline]
-unsafe fn sys_rt_sigtimedwait(
-    set: *const SigSetT,
+unsafe fn sys_rt_sigtimedwait(set: *const SigSetT,
     info: *mut siginfo_t,
     timeout: *const timespec,
-    sigsetsize: usize,
-) -> i64 {
-    let result: i64;
-    core::arch::asm!(
-        "syscall",
-        inlateout("rax") 128i64 => result,
-        in("rdi") set,
-        in("rsi") info,
-        in("rdx") timeout,
-        in("r10") sigsetsize,
-        lateout("rcx") _,
-        lateout("r11") _,
-    );
-    result
+    sigsetsize: usize,) -> i64 {
+    <Arch as Syscalls>::syscall4(128, set as i64, info as i64, timeout as i64, sigsetsize as i64)
 }
 
 #[inline]
 unsafe fn sys_sigaltstack(ss: *const stack_t, old_ss: *mut stack_t) -> i64 {
-    let result: i64;
-    core::arch::asm!(
-        "syscall",
-        inlateout("rax") 131i64 => result,
-        in("rdi") ss,
-        in("rsi") old_ss,
-        lateout("rcx") _,
-        lateout("r11") _,
-    );
-    result
+    <Arch as Syscalls>::syscall2(131, ss as i64, old_ss as i64)
 }
 
 #[inline]
 unsafe fn sys_tgkill(tgid: c_int, tid: c_int, sig: c_int) -> i64 {
-    let result: i64;
-    core::arch::asm!(
-        "syscall",
-        inlateout("rax") 234i64 => result,
-        in("rdi") tgid as i64,
-        in("rsi") tid as i64,
-        in("rdx") sig as i64,
-        lateout("rcx") _,
-        lateout("r11") _,
-    );
-    result
+    <Arch as Syscalls>::syscall3(234, tgid as i64, tid as i64, sig as i64)
 }
 
 const CLOCK_REALTIME: c_int = 0;
@@ -1304,16 +1306,7 @@ const CLOCK_MONOTONIC: c_int = 1;
 
 #[inline]
 unsafe fn sys_clock_gettime(clockid: c_int, ts: *mut timespec) -> i64 {
-    let result: i64;
-    core::arch::asm!(
-        "syscall",
-        inlateout("rax") 228i64 => result,
-        in("rdi") clockid as i64,
-        in("rsi") ts,
-        lateout("rcx") _,
-        lateout("r11") _,
-    );
-    result
+    <Arch as Syscalls>::syscall2(228, clockid as i64, ts as i64)
 }
 
 #[no_mangle]
@@ -1345,28 +1338,12 @@ pub unsafe extern "C" fn sigprocmask(
 
 #[inline]
 unsafe fn sys_kill(pid: c_int, sig: c_int) -> i64 {
-    let result: i64;
-    core::arch::asm!(
-        "syscall",
-        inlateout("rax") 62i64 => result,
-        in("rdi") pid as i64,
-        in("rsi") sig as i64,
-        lateout("rcx") _,
-        lateout("r11") _,
-    );
-    result
+    <Arch as Syscalls>::syscall2(62, pid as i64, sig as i64)
 }
 
 #[inline]
 unsafe fn sys_getpid() -> i64 {
-    let result: i64;
-    core::arch::asm!(
-        "syscall",
-        inlateout("rax") 39i64 => result,
-        lateout("rcx") _,
-        lateout("r11") _,
-    );
-    result
+    <Arch as Syscalls>::syscall0(39)
 }
 
 #[no_mangle]
@@ -1691,76 +1668,27 @@ pub unsafe extern "C" fn siglongjmp(env: *const c_ulong, val: c_int) -> ! {
 
 #[inline]
 unsafe fn sys_newfstatat(dirfd: i32, path: *const c_char, buf: *mut u8, flags: i32) -> i64 {
-    let result: i64;
-    core::arch::asm!(
-        "syscall",
-        inlateout("rax") 262i64 => result,
-        in("rdi") dirfd as i64,
-        in("rsi") path,
-        in("rdx") buf,
-        in("r10") flags as i64,
-        lateout("rcx") _,
-        lateout("r11") _,
-    );
-    result
+    <Arch as Syscalls>::syscall4(262, dirfd as i64, path as i64, buf as i64, flags as i64)
 }
 
 #[inline]
 unsafe fn sys_fstat(fd: i32, buf: *mut u8) -> i64 {
-    let result: i64;
-    core::arch::asm!(
-        "syscall",
-        inlateout("rax") 5i64 => result,
-        in("rdi") fd as i64,
-        in("rsi") buf,
-        lateout("rcx") _,
-        lateout("r11") _,
-    );
-    result
+    <Arch as Syscalls>::syscall2(5, fd as i64, buf as i64)
 }
 
 #[inline]
 unsafe fn sys_getrlimit(resource: i32, rlim: *mut u8) -> i64 {
-    let result: i64;
-    core::arch::asm!(
-        "syscall",
-        inlateout("rax") 97i64 => result,
-        in("rdi") resource as i64,
-        in("rsi") rlim,
-        lateout("rcx") _,
-        lateout("r11") _,
-    );
-    result
+    <Arch as Syscalls>::syscall2(97, resource as i64, rlim as i64)
 }
 
 #[inline]
 unsafe fn sys_setrlimit(resource: i32, rlim: *const u8) -> i64 {
-    let result: i64;
-    core::arch::asm!(
-        "syscall",
-        inlateout("rax") 160i64 => result,
-        in("rdi") resource as i64,
-        in("rsi") rlim,
-        lateout("rcx") _,
-        lateout("r11") _,
-    );
-    result
+    <Arch as Syscalls>::syscall2(160, resource as i64, rlim as i64)
 }
 
 #[inline]
 unsafe fn sys_utimensat(dirfd: i32, path: *const c_char, times: *const u8, flags: i32) -> i64 {
-    let result: i64;
-    core::arch::asm!(
-        "syscall",
-        inlateout("rax") 280i64 => result,
-        in("rdi") dirfd as i64,
-        in("rsi") path,
-        in("rdx") times,
-        in("r10") flags as i64,
-        lateout("rcx") _,
-        lateout("r11") _,
-    );
-    result
+    <Arch as Syscalls>::syscall4(280, dirfd as i64, path as i64, times as i64, flags as i64)
 }
 
 // ============================================================
@@ -1769,105 +1697,42 @@ unsafe fn sys_utimensat(dirfd: i32, path: *const c_char, times: *const u8, flags
 
 #[inline]
 unsafe fn sys_fork() -> i64 {
-    let result: i64;
-    core::arch::asm!(
-        "syscall",
-        inlateout("rax") 57i64 => result,
-        lateout("rcx") _,
-        lateout("r11") _,
-    );
-    result
+    <Arch as Syscalls>::syscall0(57)
 }
 
 #[inline]
 unsafe fn sys_execve(path: *const c_char, argv: *const *const c_char, envp: *const *const c_char) -> i64 {
-    let result: i64;
-    core::arch::asm!(
-        "syscall",
-        inlateout("rax") 59i64 => result,
-        in("rdi") path,
-        in("rsi") argv,
-        in("rdx") envp,
-        lateout("rcx") _,
-        lateout("r11") _,
-    );
-    result
+    <Arch as Syscalls>::syscall3(59, path as i64, argv as i64, envp as i64)
 }
 
 #[inline]
 unsafe fn sys_wait4(pid: c_int, status: *mut c_int, options: c_int, rusage: *mut c_void) -> i64 {
-    let result: i64;
-    core::arch::asm!(
-        "syscall",
-        inlateout("rax") 61i64 => result,
-        in("rdi") pid as i64,
-        in("rsi") status,
-        in("rdx") options as i64,
-        in("r10") rusage,
-        lateout("rcx") _,
-        lateout("r11") _,
-    );
-    result
+    <Arch as Syscalls>::syscall4(61, pid as i64, status as i64, options as i64, rusage as i64)
 }
 
 #[inline]
 unsafe fn sys_getppid() -> i64 {
-    let result: i64;
-    core::arch::asm!(
-        "syscall",
-        inlateout("rax") 110i64 => result,
-        lateout("rcx") _,
-        lateout("r11") _,
-    );
-    result
+    <Arch as Syscalls>::syscall0(110)
 }
 
 #[inline]
 unsafe fn sys_getuid() -> i64 {
-    let result: i64;
-    core::arch::asm!(
-        "syscall",
-        inlateout("rax") 102i64 => result,
-        lateout("rcx") _,
-        lateout("r11") _,
-    );
-    result
+    <Arch as Syscalls>::syscall0(102)
 }
 
 #[inline]
 unsafe fn sys_getgid() -> i64 {
-    let result: i64;
-    core::arch::asm!(
-        "syscall",
-        inlateout("rax") 104i64 => result,
-        lateout("rcx") _,
-        lateout("r11") _,
-    );
-    result
+    <Arch as Syscalls>::syscall0(104)
 }
 
 #[inline]
 unsafe fn sys_geteuid() -> i64 {
-    let result: i64;
-    core::arch::asm!(
-        "syscall",
-        inlateout("rax") 107i64 => result,
-        lateout("rcx") _,
-        lateout("r11") _,
-    );
-    result
+    <Arch as Syscalls>::syscall0(107)
 }
 
 #[inline]
 unsafe fn sys_getegid() -> i64 {
-    let result: i64;
-    core::arch::asm!(
-        "syscall",
-        inlateout("rax") 108i64 => result,
-        lateout("rcx") _,
-        lateout("r11") _,
-    );
-    result
+    <Arch as Syscalls>::syscall0(108)
 }
 
 #[no_mangle]
@@ -2254,194 +2119,71 @@ pub struct sockaddr {
 
 #[inline]
 unsafe fn sys_socket(domain: c_int, ty: c_int, protocol: c_int) -> i64 {
-    let result: i64;
-    core::arch::asm!(
-        "syscall",
-        inlateout("rax") 41i64 => result,
-        in("rdi") domain as i64,
-        in("rsi") ty as i64,
-        in("rdx") protocol as i64,
-        lateout("rcx") _,
-        lateout("r11") _,
-    );
-    result
+    <Arch as Syscalls>::syscall3(41, domain as i64, ty as i64, protocol as i64)
 }
 
 #[inline]
 unsafe fn sys_socketpair(domain: c_int, ty: c_int, protocol: c_int, sv: *mut c_int) -> i64 {
-    let result: i64;
-    core::arch::asm!(
-        "syscall",
-        inlateout("rax") 53i64 => result,
-        in("rdi") domain as i64,
-        in("rsi") ty as i64,
-        in("rdx") protocol as i64,
-        in("r10") sv,
-        lateout("rcx") _,
-        lateout("r11") _,
-    );
-    result
+    <Arch as Syscalls>::syscall4(53, domain as i64, ty as i64, protocol as i64, sv as i64)
 }
 
 #[inline]
 unsafe fn sys_bind(fd: c_int, addr: *const sockaddr, len: c_uint) -> i64 {
-    let result: i64;
-    core::arch::asm!(
-        "syscall",
-        inlateout("rax") 49i64 => result,
-        in("rdi") fd as i64,
-        in("rsi") addr,
-        in("rdx") len as i64,
-        lateout("rcx") _,
-        lateout("r11") _,
-    );
-    result
+    <Arch as Syscalls>::syscall3(49, fd as i64, addr as i64, len as i64)
 }
 
 #[inline]
 unsafe fn sys_listen(fd: c_int, backlog: c_int) -> i64 {
-    let result: i64;
-    core::arch::asm!(
-        "syscall",
-        inlateout("rax") 50i64 => result,
-        in("rdi") fd as i64,
-        in("rsi") backlog as i64,
-        lateout("rcx") _,
-        lateout("r11") _,
-    );
-    result
+    <Arch as Syscalls>::syscall2(50, fd as i64, backlog as i64)
 }
 
 #[inline]
 unsafe fn sys_accept(fd: c_int, addr: *mut sockaddr, len: *mut c_uint) -> i64 {
-    let result: i64;
-    core::arch::asm!(
-        "syscall",
-        inlateout("rax") 43i64 => result,
-        in("rdi") fd as i64,
-        in("rsi") addr,
-        in("rdx") len,
-        lateout("rcx") _,
-        lateout("r11") _,
-    );
-    result
+    <Arch as Syscalls>::syscall3(43, fd as i64, addr as i64, len as i64)
 }
 
 #[inline]
 unsafe fn sys_connect(fd: c_int, addr: *const sockaddr, len: c_uint) -> i64 {
-    let result: i64;
-    core::arch::asm!(
-        "syscall",
-        inlateout("rax") 42i64 => result,
-        in("rdi") fd as i64,
-        in("rsi") addr,
-        in("rdx") len as i64,
-        lateout("rcx") _,
-        lateout("r11") _,
-    );
-    result
+    <Arch as Syscalls>::syscall3(42, fd as i64, addr as i64, len as i64)
 }
 
 #[inline]
-unsafe fn sys_sendto(
-    fd: c_int,
+unsafe fn sys_sendto(fd: c_int,
     buf: *const c_void,
     len: usize,
     flags: c_int,
     addr: *const sockaddr,
-    addrlen: c_uint,
-) -> i64 {
-    let result: i64;
-    core::arch::asm!(
-        "syscall",
-        inlateout("rax") 44i64 => result,
-        in("rdi") fd as i64,
-        in("rsi") buf,
-        in("rdx") len,
-        in("r10") flags as i64,
-        in("r8") addr,
-        in("r9") addrlen as i64,
-        lateout("rcx") _,
-        lateout("r11") _,
-    );
-    result
+    addrlen: c_uint,) -> i64 {
+    <Arch as Syscalls>::syscall6(44, fd as i64, buf as i64, len as i64, flags as i64, addr as i64, addrlen as i64)
 }
 
 #[inline]
-unsafe fn sys_recvfrom(
-    fd: c_int,
+unsafe fn sys_recvfrom(fd: c_int,
     buf: *mut c_void,
     len: usize,
     flags: c_int,
     addr: *mut sockaddr,
-    addrlen: *mut c_uint,
-) -> i64 {
-    let result: i64;
-    core::arch::asm!(
-        "syscall",
-        inlateout("rax") 45i64 => result,
-        in("rdi") fd as i64,
-        in("rsi") buf,
-        in("rdx") len,
-        in("r10") flags as i64,
-        in("r8") addr,
-        in("r9") addrlen,
-        lateout("rcx") _,
-        lateout("r11") _,
-    );
-    result
+    addrlen: *mut c_uint,) -> i64 {
+    <Arch as Syscalls>::syscall6(45, fd as i64, buf as i64, len as i64, flags as i64, addr as i64, addrlen as i64)
 }
 
 #[inline]
 unsafe fn sys_shutdown(fd: c_int, how: c_int) -> i64 {
-    let result: i64;
-    core::arch::asm!(
-        "syscall",
-        inlateout("rax") 48i64 => result,
-        in("rdi") fd as i64,
-        in("rsi") how as i64,
-        lateout("rcx") _,
-        lateout("r11") _,
-    );
-    result
+    <Arch as Syscalls>::syscall2(48, fd as i64, how as i64)
 }
 
 #[inline]
-unsafe fn sys_setsockopt(
-    fd: c_int,
+unsafe fn sys_setsockopt(fd: c_int,
     level: c_int,
     optname: c_int,
     optval: *const c_void,
-    optlen: c_uint,
-) -> i64 {
-    let result: i64;
-    core::arch::asm!(
-        "syscall",
-        inlateout("rax") 54i64 => result,
-        in("rdi") fd as i64,
-        in("rsi") level as i64,
-        in("rdx") optname as i64,
-        in("r10") optval,
-        in("r8") optlen as i64,
-        lateout("rcx") _,
-        lateout("r11") _,
-    );
-    result
+    optlen: c_uint,) -> i64 {
+    <Arch as Syscalls>::syscall5(54, fd as i64, level as i64, optname as i64, optval as i64, optlen as i64)
 }
 
 #[inline]
 unsafe fn sys_getsockname(fd: c_int, addr: *mut sockaddr, len: *mut c_uint) -> i64 {
-    let result: i64;
-    core::arch::asm!(
-        "syscall",
-        inlateout("rax") 51i64 => result,
-        in("rdi") fd as i64,
-        in("rsi") addr,
-        in("rdx") len,
-        lateout("rcx") _,
-        lateout("r11") _,
-    );
-    result
+    <Arch as Syscalls>::syscall3(51, fd as i64, addr as i64, len as i64)
 }
 
 #[no_mangle]
@@ -2781,39 +2523,17 @@ pub extern "C" fn __rc_tls_block_size() -> usize {
 
 #[inline]
 unsafe fn sys_gettid() -> i64 {
-    let result: i64;
-    core::arch::asm!(
-        "syscall",
-        inlateout("rax") 186i64 => result,
-        lateout("rcx") _,
-        lateout("r11") _,
-    );
-    result
+    <Arch as Syscalls>::syscall0(186)
 }
 
 #[inline]
-unsafe fn sys_futex(
-    uaddr: *mut c_int,
+unsafe fn sys_futex(uaddr: *mut c_int,
     futex_op: c_int,
     val: c_int,
     timeout: *mut c_void,
     uaddr2: *mut c_int,
-    val3: c_int,
-) -> i64 {
-    let result: i64;
-    core::arch::asm!(
-        "syscall",
-        inlateout("rax") 202i64 => result,
-        in("rdi") uaddr,
-        in("rsi") futex_op as i64,
-        in("rdx") val as i64,
-        in("r10") timeout,
-        in("r8") uaddr2,
-        in("r9") val3 as i64,
-        lateout("rcx") _,
-        lateout("r11") _,
-    );
-    result
+    val3: c_int,) -> i64 {
+    <Arch as Syscalls>::syscall6(202, uaddr as i64, futex_op as i64, val as i64, timeout as i64, uaddr2 as i64, val3 as i64)
 }
 
 const MAX_THREADS: usize = 64;
@@ -2886,16 +2606,7 @@ unsafe fn futex_unlock_pi(addr: *mut c_int) -> c_int {
 
 #[inline]
 unsafe fn sys_set_robust_list(head: *mut robust_list_head, len: usize) -> i64 {
-    let result: i64;
-    core::arch::asm!(
-        "syscall",
-        inlateout("rax") 273i64 => result,
-        in("rdi") head,
-        in("rsi") len,
-        lateout("rcx") _,
-        lateout("r11") _,
-    );
-    result
+    <Arch as Syscalls>::syscall2(273, head as i64, len as i64)
 }
 
 unsafe fn futex_timedwait(addr: *mut c_int, expected: c_int, abs_timeout: *const timespec) -> c_int {
@@ -5296,93 +5007,32 @@ struct winsize {
 
 #[inline]
 unsafe fn sys_pipe2(fds: *mut c_int, flags: i32) -> i64 {
-    let result: i64;
-    core::arch::asm!(
-        "syscall",
-        inlateout("rax") 293i64 => result,
-        in("rdi") fds,
-        in("rsi") flags as i64,
-        lateout("rcx") _,
-        lateout("r11") _,
-    );
-    result
+    <Arch as Syscalls>::syscall2(293, fds as i64, flags as i64)
 }
 
 #[inline]
 unsafe fn sys_dup3(oldfd: i32, newfd: i32, flags: i32) -> i64 {
-    let result: i64;
-    core::arch::asm!(
-        "syscall",
-        inlateout("rax") 292i64 => result,
-        in("rdi") oldfd as i64,
-        in("rsi") newfd as i64,
-        in("rdx") flags as i64,
-        lateout("rcx") _,
-        lateout("r11") _,
-    );
-    result
+    <Arch as Syscalls>::syscall3(292, oldfd as i64, newfd as i64, flags as i64)
 }
 
 #[inline]
 unsafe fn sys_fcntl(fd: i32, cmd: i32, arg: i64) -> i64 {
-    let result: i64;
-    core::arch::asm!(
-        "syscall",
-        inlateout("rax") 72i64 => result,
-        in("rdi") fd as i64,
-        in("rsi") cmd as i64,
-        in("rdx") arg,
-        lateout("rcx") _,
-        lateout("r11") _,
-    );
-    result
+    <Arch as Syscalls>::syscall3(72, fd as i64, cmd as i64, arg as i64)
 }
 
 #[inline]
 unsafe fn sys_ioctl(fd: c_int, request: u32, arg: *mut u8) -> i64 {
-    let result: i64;
-    core::arch::asm!(
-        "syscall",
-        inlateout("rax") 16i64 => result,
-        in("rdi") fd as i64,
-        in("rsi") request as i64,
-        in("rdx") arg,
-        lateout("rcx") _,
-        lateout("r11") _,
-    );
-    result
+    <Arch as Syscalls>::syscall3(16, fd as i64, request as i64, arg as i64)
 }
 
 #[inline]
 unsafe fn sys_unlinkat(dirfd: i32, path: *const u8, flags: i32) -> i64 {
-    let result: i64;
-    core::arch::asm!(
-        "syscall",
-        inlateout("rax") 263i64 => result,
-        in("rdi") dirfd as i64,
-        in("rsi") path,
-        in("rdx") flags as i64,
-        lateout("rcx") _,
-        lateout("r11") _,
-    );
-    result
+    <Arch as Syscalls>::syscall3(263, dirfd as i64, path as i64, flags as i64)
 }
 
 #[inline]
 unsafe fn sys_renameat2(olddirfd: i32, oldpath: *const u8, newdirfd: i32, newpath: *const u8, flags: u32) -> i64 {
-    let result: i64;
-    core::arch::asm!(
-        "syscall",
-        inlateout("rax") 316i64 => result,
-        in("rdi") olddirfd as i64,
-        in("rsi") oldpath,
-        in("rdx") newdirfd as i64,
-        in("r10") newpath,
-        in("r8") flags as i64,
-        lateout("rcx") _,
-        lateout("r11") _,
-    );
-    result
+    <Arch as Syscalls>::syscall5(316, olddirfd as i64, oldpath as i64, newdirfd as i64, newpath as i64, flags as i64)
 }
 
 // ============================================================
@@ -8244,22 +7894,12 @@ pub unsafe extern "C" fn _exit(code: c_int) -> ! {
 
 #[inline]
 unsafe fn sys_exit_group(code: c_int) -> ! {
-    core::arch::asm!(
-        "syscall",
-        in("rax") 231i64,
-        in("rdi") code as i64,
-        options(noreturn)
-    );
+    <Arch as Syscalls>::syscall_noreturn1(231, code as i64)
 }
 
 #[inline]
 unsafe fn sys_exit_thread(code: c_int) -> ! {
-    core::arch::asm!(
-        "syscall",
-        in("rax") 60i64,
-        in("rdi") code as i64,
-        options(noreturn)
-    );
+    <Arch as Syscalls>::syscall_noreturn1(60, code as i64)
 }
 
 #[no_mangle]
@@ -10438,21 +10078,15 @@ pub unsafe extern "C" fn ctime_r(t: *const TimeT, buf: *mut c_char) -> *mut c_ch
 // ============================================================
 
 unsafe fn sys_clock_getres(clockid: c_int, ts: *mut timespec) -> i64 {
-    let result: i64;
-    core::arch::asm!("syscall", inlateout("rax") 229i64 => result, in("rdi") clockid as i64, in("rsi") ts, lateout("rcx") _, lateout("r11") _);
-    result
+    <Arch as Syscalls>::syscall2(229, clockid as i64, ts as i64)
 }
 
 unsafe fn sys_clock_settime(clockid: c_int, ts: *const timespec) -> i64 {
-    let result: i64;
-    core::arch::asm!("syscall", inlateout("rax") 230i64 => result, in("rdi") clockid as i64, in("rsi") ts, lateout("rcx") _, lateout("r11") _);
-    result
+    <Arch as Syscalls>::syscall2(230, clockid as i64, ts as i64)
 }
 
 unsafe fn sys_clock_nanosleep(clockid: c_int, flags: c_int, req: *const timespec, rem: *mut timespec) -> i64 {
-    let result: i64;
-    core::arch::asm!("syscall", inlateout("rax") 231i64 => result, in("rdi") clockid as i64, in("rsi") flags as i64, in("rdx") req, in("r10") rem, lateout("rcx") _, lateout("r11") _);
-    result
+    <Arch as Syscalls>::syscall4(231, clockid as i64, flags as i64, req as i64, rem as i64)
 }
 
 #[no_mangle]
@@ -11507,91 +11141,44 @@ unsafe fn sync_environ() {
 
 #[inline]
 unsafe fn sys_dup(oldfd: i32) -> i64 {
-    let result: i64;
-    core::arch::asm!(
-        "syscall",
-        inlateout("rax") 32i64 => result,
-        in("rdi") oldfd as i64,
-        lateout("rcx") _,
-        lateout("r11") _,
-    );
-    result
+    <Arch as Syscalls>::syscall1(32, oldfd as i64)
 }
 
-#[inline]
-unsafe fn sys_dup2(oldfd: i32, newfd: i32) -> i64 {
+#[inline]unsafe fn sys_dup2(oldfd: i32, newfd: i32) -> i64 {
     // ponytail: dup3 with flags=0 is equivalent to dup2
     sys_dup3(oldfd, newfd, 0)
 }
 
 #[inline]
 unsafe fn sys_access(path: *const u8, mode: i32) -> i64 {
-    let result: i64;
-    core::arch::asm!(
-        "syscall",
-        inlateout("rax") 21i64 => result,
-        in("rdi") path,
-        in("rsi") mode as i64,
-        lateout("rcx") _,
-        lateout("r11") _,
-    );
-    result
+    <Arch as Syscalls>::syscall2(21, path as i64, mode as i64)
 }
 
-#[inline]
-unsafe fn sys_unlink(path: *const u8) -> i64 {
+#[inline]unsafe fn sys_unlink(path: *const u8) -> i64 {
     sys_unlinkat(AT_FDCWD, path, 0)
 }
 
-#[inline]
-unsafe fn sys_rmdir(path: *const u8) -> i64 {
+#[inline]unsafe fn sys_rmdir(path: *const u8) -> i64 {
     sys_unlinkat(AT_FDCWD, path, 512) // AT_REMOVEDIR
 }
 
 #[inline]
 unsafe fn sys_chdir(path: *const u8) -> i64 {
-    let result: i64;
-    core::arch::asm!(
-        "syscall",
-        inlateout("rax") 80i64 => result,
-        in("rdi") path,
-        lateout("rcx") _,
-        lateout("r11") _,
-    );
-    result
+    <Arch as Syscalls>::syscall1(80, path as i64)
 }
 
 #[inline]
 unsafe fn sys_getcwd(buf: *mut u8, size: usize) -> i64 {
-    let result: i64;
-    core::arch::asm!(
-        "syscall",
-        inlateout("rax") 79i64 => result,
-        in("rdi") buf,
-        in("rsi") size,
-        lateout("rcx") _,
-        lateout("r11") _,
-    );
-    result
+    <Arch as Syscalls>::syscall2(79, buf as i64, size as i64)
 }
 
 #[inline]
 unsafe fn sys_sethostname(name: *const u8, len: usize) -> i64 {
-    let result: i64;
-    core::arch::asm!(
-        "syscall",
-        inlateout("rax") 170i64 => result,
-        in("rdi") name,
-        in("rsi") len,
-        lateout("rcx") _,
-        lateout("r11") _,
-    );
-    result
+    <Arch as Syscalls>::syscall2(170, name as i64, len as i64)
 }
 
 #[inline]
 unsafe fn sys_gethostname(buf: *mut u8, len: usize) -> i64 {
-    // ponytail: use uname to get hostname
     #[repr(C)]
     struct UtsName {
         sysname: [u8; 65],
@@ -11602,14 +11189,7 @@ unsafe fn sys_gethostname(buf: *mut u8, len: usize) -> i64 {
         domainname: [u8; 65],
     }
     let mut uts: UtsName = core::mem::zeroed();
-    let result: i64;
-    core::arch::asm!(
-        "syscall",
-        inlateout("rax") 63i64 => result,
-        in("rdi") &mut uts as *mut UtsName,
-        lateout("rcx") _,
-        lateout("r11") _,
-    );
+    let result = <Arch as Syscalls>::syscall1(63, &mut uts as *mut UtsName as i64);
     if result < 0 {
         return result;
     }
@@ -11621,295 +11201,95 @@ unsafe fn sys_gethostname(buf: *mut u8, len: usize) -> i64 {
 }
 
 unsafe fn sys_truncate(path: *const u8, length: i64) -> i64 {
-    let result: i64;
-    core::arch::asm!(
-        "syscall",
-        inlateout("rax") 76i64 => result,
-        in("rdi") path,
-        in("rsi") length,
-        lateout("rcx") _,
-        lateout("r11") _,
-    );
-    result
+    <Arch as Syscalls>::syscall2(76, path as i64, length as i64)
 }
 
 unsafe fn sys_ftruncate(fd: i32, length: i64) -> i64 {
-    let result: i64;
-    core::arch::asm!(
-        "syscall",
-        inlateout("rax") 77i64 => result,
-        in("rdi") fd as i64,
-        in("rsi") length,
-        lateout("rcx") _,
-        lateout("r11") _,
-    );
-    result
+    <Arch as Syscalls>::syscall2(77, fd as i64, length as i64)
 }
 
 unsafe fn sys_nanosleep(req: *const timespec, rem: *mut timespec) -> i64 {
-    let result: i64;
-    core::arch::asm!(
-        "syscall",
-        inlateout("rax") 35i64 => result,
-        in("rdi") req,
-        in("rsi") rem,
-        lateout("rcx") _,
-        lateout("r11") _,
-    );
-    result
+    <Arch as Syscalls>::syscall2(35, req as i64, rem as i64)
 }
 
 unsafe fn sys_alarm(seconds: c_uint) -> i64 {
-    let result: i64;
-    core::arch::asm!(
-        "syscall",
-        inlateout("rax") 37i64 => result,
-        in("rdi") seconds as i64,
-        lateout("rcx") _,
-        lateout("r11") _,
-    );
-    result
+    <Arch as Syscalls>::syscall1(37, seconds as i64)
 }
 
 unsafe fn sys_pause() -> i64 {
-    let result: i64;
-    core::arch::asm!(
-        "syscall",
-        inlateout("rax") 34i64 => result,
-        lateout("rcx") _,
-        lateout("r11") _,
-    );
-    result
+    <Arch as Syscalls>::syscall0(34)
 }
 
 unsafe fn sys_fsync(fd: i32) -> i64 {
-    let result: i64;
-    core::arch::asm!(
-        "syscall",
-        inlateout("rax") 74i64 => result,
-        in("rdi") fd as i64,
-        lateout("rcx") _,
-        lateout("r11") _,
-    );
-    result
+    <Arch as Syscalls>::syscall1(74, fd as i64)
 }
 
 unsafe fn sys_fdatasync(fd: i32) -> i64 {
-    let result: i64;
-    core::arch::asm!(
-        "syscall",
-        inlateout("rax") 306i64 => result,
-        in("rdi") fd as i64,
-        lateout("rcx") _,
-        lateout("r11") _,
-    );
-    result
+    <Arch as Syscalls>::syscall1(306, fd as i64)
 }
 
 unsafe fn sys_sync() {
-    core::arch::asm!(
-        "syscall",
-        in("rax") 162i64,
-        lateout("rcx") _,
-        lateout("r11") _,
-    );
+    let _ = <Arch as Syscalls>::syscall0(162);
 }
 
 unsafe fn sys_symlink(target: *const u8, linkpath: *const u8) -> i64 {
-    let result: i64;
-    core::arch::asm!(
-        "syscall",
-        inlateout("rax") 88i64 => result,
-        in("rdi") target,
-        in("rsi") linkpath,
-        lateout("rcx") _,
-        lateout("r11") _,
-    );
-    result
+    <Arch as Syscalls>::syscall2(88, target as i64, linkpath as i64)
 }
 
 unsafe fn sys_symlinkat(target: *const u8, newdirfd: i32, linkpath: *const u8) -> i64 {
-    let result: i64;
-    core::arch::asm!(
-        "syscall",
-        inlateout("rax") 266i64 => result,
-        in("rdi") target,
-        in("rsi") newdirfd as i64,
-        in("rdx") linkpath,
-        lateout("rcx") _,
-        lateout("r11") _,
-    );
-    result
+    <Arch as Syscalls>::syscall3(266, target as i64, newdirfd as i64, linkpath as i64)
 }
 
 unsafe fn sys_readlinkat(dirfd: i32, path: *const u8, buf: *mut u8, bufsiz: usize) -> i64 {
-    let result: i64;
-    core::arch::asm!(
-        "syscall",
-        inlateout("rax") 267i64 => result,
-        in("rdi") dirfd as i64,
-        in("rsi") path,
-        in("rdx") buf,
-        in("r10") bufsiz,
-        lateout("rcx") _,
-        lateout("r11") _,
-    );
-    result
+    <Arch as Syscalls>::syscall4(267, dirfd as i64, path as i64, buf as i64, bufsiz as i64)
 }
 
 unsafe fn sys_linkat(olddirfd: i32, oldpath: *const u8, newdirfd: i32, newpath: *const u8, flags: i32) -> i64 {
-    let result: i64;
-    core::arch::asm!(
-        "syscall",
-        inlateout("rax") 265i64 => result,
-        in("rdi") olddirfd as i64,
-        in("rsi") oldpath,
-        in("rdx") newdirfd as i64,
-        in("r10") newpath,
-        in("r8") flags as i64,
-        lateout("rcx") _,
-        lateout("r11") _,
-    );
-    result
+    <Arch as Syscalls>::syscall5(265, olddirfd as i64, oldpath as i64, newdirfd as i64, newpath as i64, flags as i64)
 }
 
 unsafe fn sys_fchmod(fd: i32, mode: u32) -> i64 {
-    let result: i64;
-    core::arch::asm!(
-        "syscall",
-        inlateout("rax") 91i64 => result,
-        in("rdi") fd as i64,
-        in("rsi") mode as i64,
-        lateout("rcx") _,
-        lateout("r11") _,
-    );
-    result
+    <Arch as Syscalls>::syscall2(91, fd as i64, mode as i64)
 }
 
 unsafe fn sys_fchmodat(dirfd: i32, path: *const u8, mode: u32, flags: i32) -> i64 {
-    let result: i64;
-    core::arch::asm!(
-        "syscall",
-        inlateout("rax") 268i64 => result,
-        in("rdi") dirfd as i64,
-        in("rsi") path,
-        in("rdx") mode as i64,
-        in("r10") flags as i64,
-        lateout("rcx") _,
-        lateout("r11") _,
-    );
-    result
+    <Arch as Syscalls>::syscall4(268, dirfd as i64, path as i64, mode as i64, flags as i64)
 }
 
 unsafe fn sys_umask(mask: u32) -> u32 {
-    let result: i64;
-    core::arch::asm!(
-        "syscall",
-        inlateout("rax") 95i64 => result,
-        in("rdi") mask as i64,
-        lateout("rcx") _,
-        lateout("r11") _,
-    );
-    result as u32
+    <Arch as Syscalls>::syscall1(95, mask as i64) as u32
 }
 
 unsafe fn sys_getgroups(size: i32, list: *mut c_uint) -> i64 {
-    let result: i64;
-    core::arch::asm!(
-        "syscall",
-        inlateout("rax") 115i64 => result,
-        in("rdi") size as i64,
-        in("rsi") list,
-        lateout("rcx") _,
-        lateout("r11") _,
-    );
-    result
+    <Arch as Syscalls>::syscall2(115, size as i64, list as i64)
 }
 
 unsafe fn sys_setuid(uid: c_uint) -> i64 {
-    let result: i64;
-    core::arch::asm!(
-        "syscall",
-        inlateout("rax") 105i64 => result,
-        in("rdi") uid as i64,
-        lateout("rcx") _,
-        lateout("r11") _,
-    );
-    result
+    <Arch as Syscalls>::syscall1(105, uid as i64)
 }
 
 unsafe fn sys_setgid(gid: c_uint) -> i64 {
-    let result: i64;
-    core::arch::asm!(
-        "syscall",
-        inlateout("rax") 106i64 => result,
-        in("rdi") gid as i64,
-        lateout("rcx") _,
-        lateout("r11") _,
-    );
-    result
+    <Arch as Syscalls>::syscall1(106, gid as i64)
 }
 
 unsafe fn sys_setsid() -> i64 {
-    let result: i64;
-    core::arch::asm!(
-        "syscall",
-        inlateout("rax") 112i64 => result,
-        lateout("rcx") _,
-        lateout("r11") _,
-    );
-    result
+    <Arch as Syscalls>::syscall0(112)
 }
 
 unsafe fn sys_setpgid(pid: c_int, pgid: c_int) -> i64 {
-    let result: i64;
-    core::arch::asm!(
-        "syscall",
-        inlateout("rax") 109i64 => result,
-        in("rdi") pid as i64,
-        in("rsi") pgid as i64,
-        lateout("rcx") _,
-        lateout("r11") _,
-    );
-    result
+    <Arch as Syscalls>::syscall2(109, pid as i64, pgid as i64)
 }
 
 unsafe fn sys_getpgid(pid: c_int) -> i64 {
-    let result: i64;
-    core::arch::asm!(
-        "syscall",
-        inlateout("rax") 121i64 => result,
-        in("rdi") pid as i64,
-        lateout("rcx") _,
-        lateout("r11") _,
-    );
-    result
+    <Arch as Syscalls>::syscall1(121, pid as i64)
 }
 
 unsafe fn sys_getsid(pid: c_int) -> i64 {
-    let result: i64;
-    core::arch::asm!(
-        "syscall",
-        inlateout("rax") 124i64 => result,
-        in("rdi") pid as i64,
-        lateout("rcx") _,
-        lateout("r11") _,
-    );
-    result
+    <Arch as Syscalls>::syscall1(124, pid as i64)
 }
 
 unsafe fn sys_mkdirat(dirfd: i32, path: *const u8, mode: u32) -> i64 {
-    let result: i64;
-    core::arch::asm!(
-        "syscall",
-        inlateout("rax") 258i64 => result,
-        in("rdi") dirfd as i64,
-        in("rsi") path,
-        in("rdx") mode as i64,
-        lateout("rcx") _,
-        lateout("r11") _,
-    );
-    result
+    <Arch as Syscalls>::syscall3(258, dirfd as i64, path as i64, mode as i64)
 }
 
 // Public C ABI wrappers for unistd
@@ -13159,16 +12539,7 @@ struct kernel_stat64 {
 // sys_stat = 4 on x86_64
 #[inline]
 unsafe fn sys_stat(path: *const u8, statbuf: *mut kernel_stat64) -> i64 {
-    let result: i64;
-    core::arch::asm!(
-        "syscall",
-        inlateout("rax") 4i64 => result,
-        in("rdi") path,
-        in("rsi") statbuf,
-        lateout("rcx") _,
-        lateout("r11") _,
-    );
-    result
+    <Arch as Syscalls>::syscall2(4, path as i64, statbuf as i64)
 }
 
 // ============================================================
@@ -14290,168 +13661,57 @@ const EIDRM: c_int = 43;
 
 #[inline]
 unsafe fn sys_msgget(key: c_int, msgflg: c_int) -> i64 {
-    let result: i64;
-    core::arch::asm!(
-        "syscall",
-        inlateout("rax") 68i64 => result,
-        in("rdi") key,
-        in("rsi") msgflg,
-        lateout("rcx") _,
-        lateout("r11") _,
-    );
-    result
+    <Arch as Syscalls>::syscall2(68, key as i64, msgflg as i64)
 }
 
 #[inline]
 unsafe fn sys_msgsnd(msqid: c_int, msgp: *const c_void, msgsz: usize, msgflg: c_int) -> i64 {
-    let result: i64;
-    core::arch::asm!(
-        "syscall",
-        inlateout("rax") 69i64 => result,
-        in("rdi") msqid,
-        in("rsi") msgp,
-        in("rdx") msgsz,
-        in("r10") msgflg,
-        lateout("rcx") _,
-        lateout("r11") _,
-    );
-    result
+    <Arch as Syscalls>::syscall4(69, msqid as i64, msgp as i64, msgsz as i64, msgflg as i64)
 }
 
 #[inline]
 unsafe fn sys_msgrcv(msqid: c_int, msgp: *mut c_void, msgsz: usize, msgtyp: c_long, msgflg: c_int) -> i64 {
-    let result: i64;
-    core::arch::asm!(
-        "syscall",
-        inlateout("rax") 70i64 => result,
-        in("rdi") msqid,
-        in("rsi") msgp,
-        in("rdx") msgsz,
-        in("r10") msgtyp,
-        in("r8") msgflg,
-        lateout("rcx") _,
-        lateout("r11") _,
-    );
-    result
+    <Arch as Syscalls>::syscall5(70, msqid as i64, msgp as i64, msgsz as i64, msgtyp as i64, msgflg as i64)
 }
 
 #[inline]
 unsafe fn sys_msgctl(msqid: c_int, cmd: c_int, buf: *mut c_void) -> i64 {
-    let result: i64;
-    core::arch::asm!(
-        "syscall",
-        inlateout("rax") 71i64 => result,
-        in("rdi") msqid,
-        in("rsi") cmd,
-        in("rdx") buf,
-        lateout("rcx") _,
-        lateout("r11") _,
-    );
-    result
+    <Arch as Syscalls>::syscall3(71, msqid as i64, cmd as i64, buf as i64)
 }
 
 #[inline]
 unsafe fn sys_semget(key: c_int, nsems: c_int, semflg: c_int) -> i64 {
-    let result: i64;
-    core::arch::asm!(
-        "syscall",
-        inlateout("rax") 64i64 => result,
-        in("rdi") key,
-        in("rsi") nsems,
-        in("rdx") semflg,
-        lateout("rcx") _,
-        lateout("r11") _,
-    );
-    result
+    <Arch as Syscalls>::syscall3(64, key as i64, nsems as i64, semflg as i64)
 }
 
 #[inline]
 unsafe fn sys_semop(semid: c_int, sops: *const c_void, nsops: usize) -> i64 {
-    let result: i64;
-    core::arch::asm!(
-        "syscall",
-        inlateout("rax") 65i64 => result,
-        in("rdi") semid,
-        in("rsi") sops,
-        in("rdx") nsops,
-        lateout("rcx") _,
-        lateout("r11") _,
-    );
-    result
+    <Arch as Syscalls>::syscall3(65, semid as i64, sops as i64, nsops as i64)
 }
 
 #[inline]
 unsafe fn sys_semctl(semid: c_int, semnum: c_int, cmd: c_int, arg: *mut c_void) -> i64 {
-    let result: i64;
-    core::arch::asm!(
-        "syscall",
-        inlateout("rax") 66i64 => result,
-        in("rdi") semid,
-        in("rsi") semnum,
-        in("rdx") cmd,
-        in("r10") arg,
-        lateout("rcx") _,
-        lateout("r11") _,
-    );
-    result
+    <Arch as Syscalls>::syscall4(66, semid as i64, semnum as i64, cmd as i64, arg as i64)
 }
 
 #[inline]
 unsafe fn sys_shmget(key: c_int, size: usize, shmflg: c_int) -> i64 {
-    let result: i64;
-    core::arch::asm!(
-        "syscall",
-        inlateout("rax") 29i64 => result,
-        in("rdi") key,
-        in("rsi") size,
-        in("rdx") shmflg,
-        lateout("rcx") _,
-        lateout("r11") _,
-    );
-    result
+    <Arch as Syscalls>::syscall3(29, key as i64, size as i64, shmflg as i64)
 }
 
 #[inline]
 unsafe fn sys_shmat(shmid: c_int, shmaddr: *const c_void, shmflg: c_int) -> i64 {
-    let result: i64;
-    core::arch::asm!(
-        "syscall",
-        inlateout("rax") 30i64 => result,
-        in("rdi") shmid,
-        in("rsi") shmaddr,
-        in("rdx") shmflg,
-        lateout("rcx") _,
-        lateout("r11") _,
-    );
-    result
+    <Arch as Syscalls>::syscall3(30, shmid as i64, shmaddr as i64, shmflg as i64)
 }
 
 #[inline]
 unsafe fn sys_shmdt(shmaddr: *const c_void) -> i64 {
-    let result: i64;
-    core::arch::asm!(
-        "syscall",
-        inlateout("rax") 67i64 => result,
-        in("rdi") shmaddr,
-        lateout("rcx") _,
-        lateout("r11") _,
-    );
-    result
+    <Arch as Syscalls>::syscall1(67, shmaddr as i64)
 }
 
 #[inline]
 unsafe fn sys_shmctl(shmid: c_int, cmd: c_int, buf: *mut c_void) -> i64 {
-    let result: i64;
-    core::arch::asm!(
-        "syscall",
-        inlateout("rax") 31i64 => result,
-        in("rdi") shmid,
-        in("rsi") cmd,
-        in("rdx") buf,
-        lateout("rcx") _,
-        lateout("r11") _,
-    );
-    result
+    <Arch as Syscalls>::syscall3(31, shmid as i64, cmd as i64, buf as i64)
 }
 
 // ftok
