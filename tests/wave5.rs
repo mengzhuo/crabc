@@ -52,6 +52,6 @@ fn wave5_libc_test_functional_networking_and_fcntl() {
 
     let pass = parse_count(&stdout, "PASS:");
     let fail = parse_count(&stdout, "FAIL:");
-    assert!(pass >= 64, "expected PASS count of at least 64, got {}", pass);
-    assert!(fail <= 5, "expected FAIL count of at most 5, got {}", fail);
+    assert!(pass >= 69, "expected PASS count of at least 69, got {}", pass);
+    assert!(fail == 0, "expected FAIL count of 0, got {}", fail);
 }
