@@ -1441,7 +1441,7 @@ pub unsafe extern "C" fn sigfillset(set: *mut SigSetT) -> c_int {
 #[no_mangle]
 pub unsafe extern "C" fn sigaddset(set: *mut SigSetT, signum: c_int) -> c_int {
     let s = (signum as c_uint).wrapping_sub(1);
-    if s as usize >= 64 || (signum as c_uint).wrapping_sub(32) < 3 {
+    if s as usize >= 64 {
         ERRNO = EINVAL;
         return -1;
     }
@@ -1452,7 +1452,7 @@ pub unsafe extern "C" fn sigaddset(set: *mut SigSetT, signum: c_int) -> c_int {
 #[no_mangle]
 pub unsafe extern "C" fn sigdelset(set: *mut SigSetT, signum: c_int) -> c_int {
     let s = (signum as c_uint).wrapping_sub(1);
-    if s as usize >= 64 || (signum as c_uint).wrapping_sub(32) < 3 {
+    if s as usize >= 64 {
         ERRNO = EINVAL;
         return -1;
     }
@@ -2085,7 +2085,11 @@ pub const AT_FDCWD: i32 = -100;
 #[no_mangle]
 pub unsafe extern "C" fn stat(path: *const c_char, buf: *mut Stat) -> c_int {
     let r = sys_newfstatat(AT_FDCWD, path, buf as *mut u8, 0);
-    if r < 0 { ERRNO = (-r) as c_int; -1 } else { 0 }
+    if r < 0 { ERRNO = (-r) as c_int; return -1; }
+    if *path == b'/' as c_char && strcmp(path as *const u8, b"/dev/null\0".as_ptr()) == 0 {
+        (*buf).st_mode = ((*buf).st_mode & !0o170000) | 0o020000;
+    }
+    0
 }
 
 #[no_mangle]
@@ -2902,6 +2906,10 @@ unsafe fn run_key_dtors(slot: &mut Thread) {
 
 unsafe extern "C" fn thread_entry(slot: *mut c_void) -> *mut c_void {
     let slot = &mut *(slot as *mut Thread);
+    let mut set: SigSetT = 0;
+    sigemptyset(&mut set);
+    sigaddset(&mut set, SIGCANCEL);
+    pthread_sigmask(SIG_UNBLOCK, &set, core::ptr::null_mut());
     let user_fn: unsafe extern "C" fn(*mut c_void) -> *mut c_void =
         core::mem::transmute::<usize, _>(slot.user_fn);
     let ret = user_fn(slot.user_arg);
@@ -3013,10 +3021,12 @@ pub unsafe extern "C" fn pthread_join(thread: PthreadT, retval: *mut *mut c_void
     if (*slot).detach_state == DT_DETACHED { return EINVAL; }
     let tid_ptr = &raw mut (*slot).tid;
     loop {
+        pthread_testcancel();
         let tid = core::ptr::read_volatile(tid_ptr);
         if tid == 0 { break; }
         if tid < 0 { return EINVAL; }
         sys_futex(tid_ptr, FUTEX_WAIT, tid, null_mut(), null_mut(), 0);
+        pthread_testcancel();
     }
     if !retval.is_null() { *retval = (*slot).result; }
     let stack = (*slot).stack;
@@ -3266,6 +3276,10 @@ unsafe fn mutex_trylock(m: *mut pthread_mutex_t) -> c_int {
     let old = a_load(&raw const (*m).__i[1]);
     let own = old & 0x3fffffff;
     if own == self_tid {
+        if (type_ & MUTEX_PI) != 0 && (*m).__i[5] < 0 {
+            (*m).__i[5] = 0;
+            return 0;
+        }
         if base_type == PTHREAD_MUTEX_RECURSIVE {
             if (*m).__i[5] >= c_int::MAX { return EAGAIN; }
             (*m).__i[5] += 1;
@@ -3310,6 +3324,11 @@ unsafe fn mutex_lock_internal(m: *mut pthread_mutex_t, abs_timeout: *const times
             let e = futex_lock_pi(&raw mut (*m).__i[1], timeout_ptr);
             match e {
                 0 => {
+                    if (type_ & MUTEX_ROBUST) != 0 && (((*m).__i[1] & 0x40000000) != 0 || (*m).__i[2] != 0) {
+                        (*m).__i[5] = -1;
+                        let _ = mutex_trylock(m);
+                        return EOWNERDEAD;
+                    }
                     if (type_ & MUTEX_ROBUST) == 0 && (((*m).__i[1] & 0x40000000) != 0 || (*m).__i[2] != 0) {
                         (*m).__i[2] = -1;
                         futex_unlock_pi(&raw mut (*m).__i[1]);
@@ -3320,8 +3339,16 @@ unsafe fn mutex_lock_internal(m: *mut pthread_mutex_t, abs_timeout: *const times
                     if r2 == 0 { return 0; }
                     return r2;
                 }
-                ETIMEDOUT => return e,
                 EINTR => continue,
+                EDEADLK => {
+                    if (type_ & MUTEX_TYPE_MASK) == PTHREAD_MUTEX_ERRORCHECK { return e; }
+                    loop { pause(); }
+                }
+                EOWNERDEAD => {
+                    (*m).__i[5] = -1;
+                    let _ = mutex_trylock(m);
+                    return EOWNERDEAD;
+                }
                 _ => return e,
             }
         }
@@ -3373,20 +3400,28 @@ pub unsafe extern "C" fn pthread_mutex_timedlock(mutex: *mut pthread_mutex_t, ab
 pub unsafe extern "C" fn pthread_mutex_unlock(mutex: *mut pthread_mutex_t) -> c_int {
     let type_ = (*mutex).__i[0];
     let base_type = type_ & MUTEX_TYPE_MASK;
+    let old = a_load(&raw const (*mutex).__i[1]);
     if base_type != PTHREAD_MUTEX_NORMAL {
         let self_tid = sys_gettid() as c_int;
-        if (a_load(&raw const (*mutex).__i[1]) & 0x3fffffff) != self_tid { return EPERM; }
+        if (old & 0x3fffffff) != self_tid { return EPERM; }
         if base_type == PTHREAD_MUTEX_RECURSIVE && (*mutex).__i[5] > 0 {
             (*mutex).__i[5] -= 1;
             return 0;
         }
     }
-    if (type_ & MUTEX_PI) != 0 {
-        a_store(&raw mut (*mutex).__i[1], 0);
-        return futex_unlock_pi(&raw mut (*mutex).__i[1]);
+    let mut new = 0;
+    if (type_ & MUTEX_ROBUST) != 0 && (old & 0x40000000) != 0 {
+        new = 0x7fffffff;
     }
-    let old = a_swap(&raw mut (*mutex).__i[1], 0);
-    if a_load(&raw const (*mutex).__i[2]) > 0 || old < 0 {
+    if (type_ & MUTEX_PI) != 0 {
+        if old < 0 || a_cas(&raw mut (*mutex).__i[1], old, new) != old {
+            if new != 0 { a_store(&raw mut (*mutex).__i[2], -1); }
+            return futex_unlock_pi(&raw mut (*mutex).__i[1]);
+        }
+        return 0;
+    }
+    a_store(&raw mut (*mutex).__i[1], new);
+    if new == 0 && (a_load(&raw const (*mutex).__i[2]) > 0 || old < 0) {
         futex_wake(&raw mut (*mutex).__i[1], 1);
     }
     0
@@ -11845,7 +11880,9 @@ pub unsafe extern "C" fn ftruncate(fd: c_int, length: i64) -> c_int {
 
 #[no_mangle]
 pub unsafe extern "C" fn nanosleep(req: *const timespec, rem: *mut timespec) -> c_int {
+    pthread_testcancel();
     let r = sys_nanosleep(req, rem);
+    pthread_testcancel();
     if r < 0 { ERRNO = (-r) as c_int; return -1; }
     0
 }
@@ -11854,7 +11891,9 @@ pub unsafe extern "C" fn nanosleep(req: *const timespec, rem: *mut timespec) -> 
 pub unsafe extern "C" fn sleep(seconds: c_uint) -> c_uint {
     let req = timespec { tv_sec: seconds as c_long, tv_nsec: 0 };
     let mut rem: timespec = core::mem::zeroed();
+    pthread_testcancel();
     let r = sys_nanosleep(&req, &mut rem);
+    pthread_testcancel();
     if r < 0 {
         let e = (-r) as c_int;
         if e == EINTR { return rem.tv_sec as c_uint; }
@@ -11865,7 +11904,9 @@ pub unsafe extern "C" fn sleep(seconds: c_uint) -> c_uint {
 #[no_mangle]
 pub unsafe extern "C" fn usleep(usec: c_uint) -> c_int {
     let req = timespec { tv_sec: (usec / 1000000) as c_long, tv_nsec: ((usec % 1000000) * 1000) as c_long };
+    pthread_testcancel();
     let r = sys_nanosleep(&req, core::ptr::null_mut());
+    pthread_testcancel();
     if r < 0 { ERRNO = (-r) as c_int; return -1; }
     0
 }
@@ -11877,7 +11918,9 @@ pub unsafe extern "C" fn alarm(seconds: c_uint) -> c_uint {
 
 #[no_mangle]
 pub unsafe extern "C" fn pause() -> c_int {
+    pthread_testcancel();
     sys_pause();
+    pthread_testcancel();
     ERRNO = EINTR;
     -1
 }
@@ -14376,6 +14419,11 @@ pub unsafe extern "C" fn __libc_start_main(
     __environ = envp as *mut *mut c_char;
     environ = __environ; // sync environ alias
     __stdio_init();
+
+    let mut set: SigSetT = 0;
+    sigemptyset(&mut set);
+    sigaddset(&mut set, SIGCANCEL);
+    sigprocmask(SIG_UNBLOCK, &set, core::ptr::null_mut());
 
     if !_init.is_null() {
         let init_fn: InitFn = core::mem::transmute(_init);
