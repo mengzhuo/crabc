@@ -100,14 +100,21 @@ for dir in $DIRS; do
     DIR_BUILD="$BUILD_DIR/$dir"
     mkdir -p "$DIR_BUILD"
 
+    for dso_cfile in "$SRC_DIR"/*_dso.c; do
+        [ -f "$dso_cfile" ] || continue
+        dso_base=$(basename "$dso_cfile" .c)
+        SO="$DIR_BUILD/${dso_base}.so"
+        musl-gcc $CFLAGS -shared -fPIC \
+            -o "$SO" "$dso_cfile" -L"$FAKE_LIBS" -lc \
+            2>"$DIR_BUILD/${dso_base}.so.err" || true
+        ln -sf "$SO" "$SRC_DIR/${dso_base}.so"
+    done
+
     for cfile in "$SRC_DIR"/*.c; do
         [ -f "$cfile" ] || continue
         base=$(basename "$cfile" .c)
 
-        if echo "$base" | grep -q "dlopen"; then
-            echo "BUILDERROR $dir/$base: skipped (dlopen)" >> "$RAW_REPORT"
-            BUILDERROR=$((BUILDERROR + 1))
-            TOTAL=$((TOTAL + 1))
+        if [[ "$base" == *_dso ]]; then
             continue
         fi
 
@@ -136,10 +143,13 @@ for dir in $DIRS; do
         fi
 
         EXE="$DIR_BUILD/${base}.exe"
+        COMPANION_SO="$DIR_BUILD/${base}_dso.so"
+        COMPANION_LD=""
+        [ -f "$COMPANION_SO" ] && COMPANION_LD="$COMPANION_SO"
         LINK_RC=0
-        musl-gcc -L"$FAKE_LIBS" -g -o "$EXE" \
-            -Wl,--dynamic-linker="$LDSO_SO" \
-            "$OBJ" "$COMMON_BUILD/libtest.a" \
+        musl-gcc -L"$FAKE_LIBS" -g -rdynamic -o "$EXE" \
+            -Wl,--dynamic-linker="$LDSO_SO" -Wl,--allow-shlib-undefined -Wl,-rpath='$ORIGIN' \
+            "$OBJ" $COMPANION_LD "$COMMON_BUILD/libtest.a" \
             -lpthread -lm -lrt -lcrypt -ldl -lresolv -lutil \
             2>"$DIR_BUILD/${base}.ld.err" || LINK_RC=$?
 
@@ -152,8 +162,8 @@ for dir in $DIRS; do
 
         ERRFILE="$DIR_BUILD/${base}.err"
         RUN_RC=0
-        timeout 30 env LD_LIBRARY_PATH="$FAKE_LIBS" \
-            "$COMMON_BUILD/runtest.exe" -w '' "$EXE" > "$ERRFILE" 2>&1 || RUN_RC=$?
+        (cd "$LIBC_TEST_DIR" && timeout 30 env LD_LIBRARY_PATH="$FAKE_LIBS" \
+            "$COMMON_BUILD/runtest.exe" -w '' "$EXE" > "$ERRFILE" 2>&1) || RUN_RC=$?
 
         if [ $RUN_RC -eq 124 ]; then
             echo "TIMEOUT $dir/$base" >> "$RAW_REPORT"

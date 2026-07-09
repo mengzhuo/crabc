@@ -2,7 +2,8 @@
 #![no_main]
 #![allow(dead_code, deref_nullptr)]
 
-use core::ffi::c_void;
+use core::ffi::{c_char, c_void};
+use core::sync::atomic::{AtomicBool, Ordering};
 
 #[cfg(not(test))]
 #[panic_handler]
@@ -24,12 +25,22 @@ const PF_X: u32 = 1;
 const DT_NULL: u64 = 0;
 const DT_NEEDED: u64 = 1;
 const DT_PLTRELSZ: u64 = 2;
+const DT_HASH: u64 = 4;
 const DT_STRTAB: u64 = 5;
 const DT_SYMTAB: u64 = 6;
 const DT_RELA: u64 = 7;
 const DT_RELASZ: u64 = 8;
 const DT_STRSZ: u64 = 10;
+const DT_INIT: u64 = 12;
+const DT_FINI: u64 = 13;
+const DT_RPATH: u64 = 15;
 const DT_JMPREL: u64 = 23;
+const DT_INIT_ARRAY: u64 = 25;
+const DT_FINI_ARRAY: u64 = 26;
+const DT_INIT_ARRAYSZ: u64 = 27;
+const DT_FINI_ARRAYSZ: u64 = 28;
+const DT_RUNPATH: u64 = 29;
+const DT_GNU_HASH: u64 = 0x6ffffef5;
 
 const R_X86_64_64: u64 = 1;
 const R_X86_64_COPY: u64 = 5;
@@ -39,6 +50,11 @@ const R_X86_64_RELATIVE: u64 = 8;
 const R_X86_64_DTPMOD64: u64 = 16;
 const R_X86_64_DTPOFF64: u64 = 17;
 const R_X86_64_TPOFF64: u64 = 18;
+
+const RTLD_LAZY: i32 = 1;
+const RTLD_NOW: i32 = 2;
+const RTLD_LOCAL: i32 = 0;
+const RTLD_GLOBAL: i32 = 0x100;
 
 const AT_NULL: u64 = 0;
 const AT_PHDR: u64 = 3;
@@ -88,6 +104,13 @@ struct LoadedObject {
     tls_filesz: u64,
     tls_memsz: u64,
     tls_align: u64,
+    init: u64,
+    init_array: u64,
+    init_array_sz: u64,
+    init_present: bool,
+    init_array_present: bool,
+    global: bool,
+    name: [u8; 256],
 }
 
 const EMPTY_OBJ: LoadedObject = LoadedObject {
@@ -102,6 +125,13 @@ const EMPTY_OBJ: LoadedObject = LoadedObject {
     tls_filesz: 0,
     tls_memsz: 0,
     tls_align: 0,
+    init: 0,
+    init_array: 0,
+    init_array_sz: 0,
+    init_present: false,
+    init_array_present: false,
+    global: false,
+    name: [0; 256],
 };
 
 // Safety: only accessed from single-threaded _start -> run_main
@@ -114,6 +144,15 @@ static mut TLS_FILESZ: [u64; MAX_LOADED] = [0; MAX_LOADED];
 static mut TLS_MEMSZ: [u64; MAX_LOADED] = [0; MAX_LOADED];
 static mut TLS_IMAGE: [*const u8; MAX_LOADED] = [core::ptr::null(); MAX_LOADED];
 static mut TLS_MODULE_COUNT: usize = 0;
+static mut TLS_GENERATION: u64 = 1;
+static mut TLS_OLD_TOTAL: usize = 0;
+static mut TLS_OLD_MODULE_COUNT: usize = 0;
+static TLS_LOCK: AtomicBool = AtomicBool::new(false);
+static mut LD_LIBRARY_PATH: *const u8 = core::ptr::null();
+static mut RUNPATH: *const u8 = core::ptr::null();
+static mut RUNPATH_LEN: usize = 0;
+static mut ORIGIN_DIR: [u8; 256] = [0; 256];
+static mut ORIGIN_LEN: usize = 0;
 
 // ============================================================
 // _start: self-relocate ldso, then call run_main(sp)
@@ -219,20 +258,85 @@ core::arch::global_asm!(
 // ============================================================
 
 #[no_mangle]
-pub unsafe extern "C" fn run_main(sp: usize) -> ! {
-    unsafe { load_and_jump(sp) }
+pub unsafe extern "C" fn run_main(sp: usize, ldso_base: u64) -> ! {
+    unsafe { load_and_jump(sp, ldso_base) }
 }
 
 // ============================================================
 // String helpers (no_std)
 // ============================================================
 
-unsafe fn strlen(s: *const u8) -> usize {
+unsafe fn str_len(s: *const u8) -> usize {
     let mut len = 0;
     while *s.add(len) != 0 {
         len += 1;
     }
     len
+}
+
+unsafe fn sym_count_from_gnu_hash(gh: usize) -> usize {
+    let nb = u32::from_le_bytes(core::ptr::read_unaligned(gh as *const [u8; 4])) as usize;
+    let symoffset = u32::from_le_bytes(core::ptr::read_unaligned((gh + 4) as *const [u8; 4])) as usize;
+    let bloom_size = u32::from_le_bytes(core::ptr::read_unaligned((gh + 8) as *const [u8; 4])) as usize;
+    let buckets = gh + 16 + bloom_size * 8;
+    let chain = buckets + nb * 4;
+    let mut max_idx = 0usize;
+    let mut has_any = false;
+    for i in 0..nb {
+        let symidx = u32::from_le_bytes(core::ptr::read_unaligned((buckets + i * 4) as *const [u8; 4])) as usize;
+        if symidx == 0 || symidx < symoffset {
+            continue;
+        }
+        let mut idx = symidx;
+        loop {
+            let cidx = idx - symoffset;
+            if cidx > max_idx {
+                max_idx = cidx;
+            }
+            has_any = true;
+            let entry = u32::from_le_bytes(core::ptr::read_unaligned((chain + cidx * 4) as *const [u8; 4]));
+            if entry & 1 != 0 {
+                break;
+            }
+            idx += 1;
+        }
+    }
+    if has_any {
+        symoffset + max_idx + 1
+    } else {
+        symoffset
+    }
+}
+
+unsafe fn sym_count_from_hash(h: usize) -> usize {
+    let nchain = u32::from_le_bytes(core::ptr::read_unaligned((h + 4) as *const [u8; 4])) as usize;
+    nchain
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn strlen(s: *const c_char) -> usize {
+    str_len(s as *const u8)
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn memcmp(a: *const c_void, b: *const c_void, n: usize) -> i32 {
+    let a = a as *const u8;
+    let b = b as *const u8;
+    let mut i = 0;
+    while i < n {
+        let va = *a.add(i);
+        let vb = *b.add(i);
+        if va != vb {
+            return va as i32 - vb as i32;
+        }
+        i += 1;
+    }
+    0
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn bcmp(a: *const c_void, b: *const c_void, n: usize) -> i32 {
+    memcmp(a, b, n)
 }
 
 /// Compare null-terminated `a` (with known length) against null-terminated `b`.
@@ -287,6 +391,22 @@ fn sys_open(path: *const u8) -> i64 {
             inlateout("rax") 2i64 => result,
             in("rdi") path,
             in("rsi") 0i64,
+            lateout("rcx") _,
+            lateout("r11") _,
+        );
+    }
+    result
+}
+
+fn sys_readlink(path: *const u8, buf: *mut u8, bufsz: usize) -> i64 {
+    let result: i64;
+    unsafe {
+        core::arch::asm!(
+            "syscall",
+            inlateout("rax") 89i64 => result,
+            in("rdi") path,
+            in("rsi") buf,
+            in("rdx") bufsz,
             lateout("rcx") _,
             lateout("r11") _,
         );
@@ -385,6 +505,9 @@ fn sys_mmap(
             lateout("r11") _,
         );
     }
+    if result < 0 && result > -4096 {
+        return MAP_FAILED as *mut u8;
+    }
     result as *mut u8
 }
 
@@ -452,9 +575,86 @@ fn prot_from_flags(flags: u32) -> i32 {
 // Library search
 // ============================================================
 
-/// Try to open `lib_name` (null-terminated, length known) by searching:
-///   LD_LIBRARY_PATH, then /lib, /usr/lib, /usr/local/lib.
-/// Returns fd >= 0 on success, -1 on failure.
+unsafe fn try_open(
+    path_buf: &mut [u8; 512],
+    dir: *const u8,
+    dir_len: usize,
+    lib_name: *const u8,
+    lib_name_len: usize,
+) -> i64 {
+    if dir_len + 1 + lib_name_len >= 512 {
+        return -1;
+    }
+    let mut pos = 0;
+    let mut i = 0;
+    while i < dir_len {
+        path_buf[pos] = *dir.add(i);
+        pos += 1;
+        i += 1;
+    }
+    path_buf[pos] = b'/';
+    pos += 1;
+    let mut i = 0;
+    while i < lib_name_len {
+        path_buf[pos] = *lib_name.add(i);
+        pos += 1;
+        i += 1;
+    }
+    path_buf[pos] = 0;
+    sys_open(path_buf.as_ptr())
+}
+
+unsafe fn try_open_expanded(
+    path_buf: &mut [u8; 512],
+    dir: *const u8,
+    dir_len: usize,
+    lib_name: *const u8,
+    lib_name_len: usize,
+) -> i64 {
+    if dir_len >= 7 {
+        let origin = b"$ORIGIN";
+        let mut matches = true;
+        let mut i = 0;
+        while i < 7 {
+            if *dir.add(i) != origin[i] {
+                matches = false;
+                break;
+            }
+            i += 1;
+        }
+        if matches {
+            let rem_len = dir_len - 7;
+            if ORIGIN_LEN + rem_len + 1 + lib_name_len >= 512 {
+                return -1;
+            }
+            let mut pos = 0;
+            let mut i = 0;
+            while i < ORIGIN_LEN {
+                path_buf[pos] = ORIGIN_DIR[i];
+                pos += 1;
+                i += 1;
+            }
+            let mut i = 0;
+            while i < rem_len {
+                path_buf[pos] = *dir.add(7 + i);
+                pos += 1;
+                i += 1;
+            }
+            path_buf[pos] = b'/';
+            pos += 1;
+            let mut i = 0;
+            while i < lib_name_len {
+                path_buf[pos] = *lib_name.add(i);
+                pos += 1;
+                i += 1;
+            }
+            path_buf[pos] = 0;
+            return sys_open(path_buf.as_ptr());
+        }
+    }
+    try_open(path_buf, dir, dir_len, lib_name, lib_name_len)
+}
+
 unsafe fn find_library_fd(
     lib_name: *const u8,
     lib_name_len: usize,
@@ -462,39 +662,15 @@ unsafe fn find_library_fd(
 ) -> i64 {
     let mut path_buf = [0u8; 512];
 
-    // Helper: try to open dir/lib_name.  Returns fd or -1.
-    unsafe fn try_open(
-        path_buf: &mut [u8; 512],
-        dir: *const u8,
-        dir_len: usize,
-        lib_name: *const u8,
-        lib_name_len: usize,
-    ) -> i64 {
-        if dir_len + 1 + lib_name_len >= 512 {
-            return -1;
+    if lib_name_len > 0 {
+        let fd = sys_open(lib_name);
+        if fd >= 0 {
+            return fd;
         }
-        let mut pos = 0;
-        let mut i = 0;
-        while i < dir_len {
-            path_buf[pos] = *dir.add(i);
-            pos += 1;
-            i += 1;
-        }
-        path_buf[pos] = b'/';
-        pos += 1;
-        let mut i = 0;
-        while i < lib_name_len {
-            path_buf[pos] = *lib_name.add(i);
-            pos += 1;
-            i += 1;
-        }
-        path_buf[pos] = 0;
-        sys_open(path_buf.as_ptr())
     }
 
-    // 1. LD_LIBRARY_PATH (colon-separated)
     if let Some(ldp) = ld_path {
-        let ldp_len = strlen(ldp);
+        let ldp_len = str_len(ldp);
         let mut start = 0usize;
         while start < ldp_len {
             let mut end = start;
@@ -514,7 +690,28 @@ unsafe fn find_library_fd(
         }
     }
 
-    // 2. Default paths
+    if RUNPATH_LEN > 0 {
+        let rp = RUNPATH;
+        let rp_len = RUNPATH_LEN;
+        let mut start = 0usize;
+        while start < rp_len {
+            let mut end = start;
+            while end < rp_len && *rp.add(end) != b':' {
+                end += 1;
+            }
+            if end > start {
+                let fd = try_open_expanded(&mut path_buf, rp.add(start), end - start, lib_name, lib_name_len);
+                if fd >= 0 {
+                    return fd;
+                }
+            }
+            if end >= rp_len {
+                break;
+            }
+            start = end + 1;
+        }
+    }
+
     let defaults: &[(&[u8], usize)] = &[
         (b"/lib", 4),
         (b"/usr/lib", 8),
@@ -657,16 +854,33 @@ unsafe fn load_dso_from_fd(fd: i64, desired_base: u64) -> Option<u64> {
         let map_len = ((seg.p_memsz + adj + PAGE - 1) & !(PAGE - 1)) as usize;
         let prot = prot_from_flags(seg.p_flags);
 
+        // Map the whole segment anonymously first so the tail (bss) is backed
+        // by zeroed anonymous pages, then overlay the file-backed portion.
         let ptr = sys_mmap(
             map_addr as *mut u8,
             map_len,
             prot,
-            MAP_PRIVATE | MAP_FIXED,
-            fd as i32,
-            map_off as i64,
+            MAP_PRIVATE | MAP_FIXED | MAP_ANONYMOUS,
+            -1,
+            0,
         );
         if ptr as usize == MAP_FAILED {
             return None;
+        }
+
+        let file_map_len = ((seg.p_filesz + adj + PAGE - 1) & !(PAGE - 1)) as usize;
+        if file_map_len > 0 {
+            let fptr = sys_mmap(
+                map_addr as *mut u8,
+                file_map_len,
+                prot,
+                MAP_PRIVATE | MAP_FIXED,
+                fd as i32,
+                map_off as i64,
+            );
+            if fptr as usize == MAP_FAILED {
+                return None;
+            }
         }
 
         if seg.p_memsz > seg.p_filesz {
@@ -699,6 +913,13 @@ unsafe fn load_dso_from_fd(fd: i64, desired_base: u64) -> Option<u64> {
     let mut dt_symtab: u64 = 0;
     let mut dt_strtab: u64 = 0;
     let mut dt_strsz: u64 = 0;
+    let mut dt_init: u64 = 0;
+    let mut dt_init_array: u64 = 0;
+    let mut dt_init_array_sz: u64 = 0;
+    let mut dt_init_present = false;
+    let mut dt_init_array_present = false;
+    let mut dt_gnu_hash: u64 = 0;
+    let mut dt_hash: u64 = 0;
     let mut dp = dyn_addr;
     while dp + 16 <= dyn_end {
         let d_tag = u64::from_le_bytes(core::ptr::read_unaligned(dp as *const [u8; 8]));
@@ -710,6 +931,11 @@ unsafe fn load_dso_from_fd(fd: i64, desired_base: u64) -> Option<u64> {
             DT_SYMTAB => dt_symtab = d_val,
             DT_STRTAB => dt_strtab = d_val,
             DT_STRSZ => dt_strsz = d_val,
+            DT_GNU_HASH => dt_gnu_hash = d_val,
+            DT_HASH => dt_hash = d_val,
+            DT_INIT => { dt_init = d_val; dt_init_present = true; }
+            DT_INIT_ARRAY => { dt_init_array = d_val; dt_init_array_present = true; }
+            DT_INIT_ARRAYSZ => dt_init_array_sz = d_val,
             _ => {}
         }
         dp += 16;
@@ -719,11 +945,14 @@ unsafe fn load_dso_from_fd(fd: i64, desired_base: u64) -> Option<u64> {
     let strtab_ptr = (actual_base + dt_strtab) as *const u8;
     let strsz = dt_strsz as usize;
 
-    let sym_count = if dt_strtab > dt_symtab && dt_strtab - dt_symtab >= SYMTAB_ENT_SIZE as u64 {
-        ((dt_strtab - dt_symtab) / SYMTAB_ENT_SIZE as u64) as usize
-    } else {
-        0
-    };
+    let mut sym_count: usize = 0;
+    if dt_gnu_hash != 0 {
+        sym_count = sym_count_from_gnu_hash((actual_base + dt_gnu_hash) as usize);
+    } else if dt_hash != 0 {
+        sym_count = sym_count_from_hash((actual_base + dt_hash) as usize);
+    } else if dt_strtab > dt_symtab && dt_strtab - dt_symtab >= SYMTAB_ENT_SIZE as u64 {
+        sym_count = ((dt_strtab - dt_symtab) / SYMTAB_ENT_SIZE as u64) as usize;
+    }
 
     if LOADED_COUNT < MAX_LOADED {
         LOADED[LOADED_COUNT] = LoadedObject {
@@ -738,6 +967,13 @@ unsafe fn load_dso_from_fd(fd: i64, desired_base: u64) -> Option<u64> {
             tls_filesz,
             tls_memsz,
             tls_align,
+            init: actual_base + dt_init,
+            init_array: actual_base + dt_init_array,
+            init_array_sz: dt_init_array_sz,
+            init_present: dt_init_present,
+            init_array_present: dt_init_array_present,
+            global: false,
+            name: [0; 256],
         };
         LOADED_COUNT += 1;
     }
@@ -753,9 +989,6 @@ unsafe fn load_dso_from_fd(fd: i64, desired_base: u64) -> Option<u64> {
 unsafe fn resolve_symbol_from_index(obj_idx: usize, sym_idx: usize) -> u64 {
     let obj = &LOADED[obj_idx];
     if sym_idx == 0 || obj.symtab.is_null() || obj.strtab.is_null() {
-        return 0;
-    }
-    if sym_idx * SYMTAB_ENT_SIZE >= obj.sym_count * SYMTAB_ENT_SIZE {
         return 0;
     }
     let sym_entry = obj.symtab.add(sym_idx * SYMTAB_ENT_SIZE);
@@ -776,7 +1009,7 @@ unsafe fn resolve_symbol(name: *const u8) -> u64 {
 /// Same as resolve_symbol but also returns the defining symbol's st_size.
 /// `exclude` is an object index to skip (use usize::MAX to skip nothing).
 unsafe fn resolve_symbol_with_size(name: *const u8, exclude: usize) -> (u64, usize) {
-    let name_len = strlen(name);
+    let name_len = str_len(name);
     if name_len == 0 {
         return (0, 0);
     }
@@ -802,6 +1035,10 @@ unsafe fn resolve_symbol_with_size(name: *const u8, exclude: usize) -> (u64, usi
             let sym_entry = obj.symtab.add(j * SYMTAB_ENT_SIZE);
             let st_name_off =
                 u32::from_le_bytes(core::ptr::read_unaligned(sym_entry as *const [u8; 4])) as usize;
+            let st_info = *sym_entry.add(4);
+            if st_info >> 4 == 0 {
+                continue;
+            }
             let st_value = u64::from_le_bytes(core::ptr::read_unaligned(
                 sym_entry.add(8) as *const [u8; 8],
             ));
@@ -860,7 +1097,7 @@ unsafe fn resolve_symbol_module(obj_idx: usize, sym_idx: usize) -> usize {
         return obj_idx;
     }
     let name = obj.strtab.add(st_name);
-    let name_len = strlen(name);
+    let name_len = str_len(name);
     for i in 0..LOADED_COUNT {
         let o = &LOADED[i];
         if o.symtab.is_null() || o.strtab.is_null() {
@@ -1028,6 +1265,285 @@ unsafe fn apply_rela_table(
     }
 }
 
+unsafe fn run_constructors() {
+    for i in 0..LOADED_COUNT {
+        run_constructors_for(i);
+    }
+}
+
+unsafe fn run_constructors_for(idx: usize) {
+    let obj = &LOADED[idx];
+    if obj.init_present && obj.init != 0 {
+        let f: extern "C" fn() = core::mem::transmute(obj.init);
+        f();
+    }
+    if obj.init_array_present && obj.init_array != 0 && obj.init_array_sz >= 8 {
+        let count = (obj.init_array_sz / 8) as usize;
+        for j in 0..count {
+            let entry = (obj.init_array as *const u8).add(j * 8);
+            let fp = u64::from_le_bytes(core::ptr::read_unaligned(entry as *const [u8; 8]));
+            if fp != 0 {
+                let f: extern "C" fn() = core::mem::transmute(fp);
+                f();
+            }
+        }
+    }
+}
+
+unsafe fn tls_lock() {
+    while TLS_LOCK.swap(true, Ordering::Acquire) {}
+}
+
+unsafe fn tls_unlock() {
+    TLS_LOCK.store(false, Ordering::Release);
+}
+
+unsafe fn expand_thread_tls(old_total: usize, old_module_count: usize) {
+    let total = TLS_TOTAL_SIZE + TCB_SIZE;
+    let block = sys_mmap(
+        core::ptr::null_mut(),
+        total,
+        PROT_READ | PROT_WRITE,
+        MAP_PRIVATE | MAP_ANONYMOUS,
+        -1,
+        0,
+    );
+    if block as usize == MAP_FAILED {
+        return;
+    }
+    let old_fs: usize;
+    core::arch::asm!("mov {}, fs:[0]", out(reg) old_fs);
+    let old_base = old_fs - old_total;
+    if old_total > 0 {
+        core::ptr::copy_nonoverlapping(old_base as *const u8, block, old_total);
+    }
+    for i in old_module_count..TLS_MODULE_COUNT {
+        if TLS_MEMSZ[i] == 0 {
+            continue;
+        }
+        let dst = block.add(TLS_LAYOUT_OFFSET[i]);
+        let src = TLS_IMAGE[i];
+        let filesz = TLS_FILESZ[i] as usize;
+        let memsz = TLS_MEMSZ[i] as usize;
+        if filesz > 0 {
+            core::ptr::copy_nonoverlapping(src, dst, filesz);
+        }
+        if memsz > filesz {
+            core::ptr::write_bytes(dst.add(filesz), 0, memsz - filesz);
+        }
+    }
+    let tcb = block.add(TLS_TOTAL_SIZE);
+    core::ptr::write_unaligned(tcb as *mut u64, tcb as u64);
+    core::ptr::write_unaligned((tcb as *mut u64).add(1), TLS_GENERATION);
+    sys_arch_prctl(0x1002, tcb as u64);
+}
+
+unsafe fn update_tls_for_new_module(idx: usize) {
+    let obj = &LOADED[idx];
+    if obj.tls_memsz == 0 {
+        return;
+    }
+    tls_lock();
+    let old_total = TLS_TOTAL_SIZE;
+    let old_module_count = TLS_MODULE_COUNT;
+    let align = if obj.tls_align > 0 { obj.tls_align as usize } else { 1 };
+
+    let mut highest_end: usize = 0;
+    for i in 0..old_module_count {
+        let block_size = ((TLS_MEMSZ[i] as usize + align - 1) / align) * align;
+        let end = TLS_LAYOUT_OFFSET[i] + block_size;
+        if end > highest_end {
+            highest_end = end;
+        }
+    }
+
+    let new_offset = (highest_end + align - 1) & !(align - 1);
+    TLS_LAYOUT_OFFSET[idx] = new_offset;
+    TLS_FILESZ[idx] = obj.tls_filesz;
+    TLS_MEMSZ[idx] = obj.tls_memsz;
+    TLS_IMAGE[idx] = obj.tls_image;
+    TLS_MODULE_COUNT = LOADED_COUNT;
+    TLS_GENERATION = TLS_GENERATION.wrapping_add(1);
+    if TLS_GENERATION == 0 {
+        TLS_GENERATION = 1;
+    }
+
+    expand_thread_tls(old_total, old_module_count);
+
+    TLS_OLD_TOTAL = old_total;
+    TLS_OLD_MODULE_COUNT = old_module_count;
+    TLS_OLD_MODULE_COUNT = old_module_count;
+    tls_unlock();
+}
+
+unsafe fn lookup_symbol_in_object(obj_idx: usize, name: *const u8, name_len: usize) -> u64 {
+    let obj = &LOADED[obj_idx];
+    if obj.symtab.is_null() || obj.strtab.is_null() {
+        return 0;
+    }
+    for j in 0..obj.sym_count {
+        let sym_entry = obj.symtab.add(j * SYMTAB_ENT_SIZE);
+        let st_name_off = u32::from_le_bytes(core::ptr::read_unaligned(sym_entry as *const [u8; 4])) as usize;
+        let st_value = u64::from_le_bytes(core::ptr::read_unaligned(sym_entry.add(8) as *const [u8; 8]));
+        if st_value == 0 {
+            continue;
+        }
+        if st_name_off >= obj.strsz {
+            continue;
+        }
+        let sym_name = obj.strtab.add(st_name_off);
+        if str_eq(name, name_len, sym_name) {
+            return obj.base + st_value;
+        }
+    }
+    0
+}
+
+static mut DLERROR_BUF: [u8; 128] = [0; 128];
+static mut DLERROR_SET: bool = false;
+const DLERROR_BUF_SIZE: usize = 128;
+
+unsafe fn set_dlerror(msg: &[u8]) {
+    let len = if msg.len() >= DLERROR_BUF_SIZE {
+        DLERROR_BUF_SIZE - 1
+    } else {
+        msg.len()
+    };
+    core::ptr::copy_nonoverlapping(
+        msg.as_ptr(),
+        core::ptr::addr_of_mut!(DLERROR_BUF).cast::<u8>(),
+        len,
+    );
+    DLERROR_BUF[len] = 0;
+    DLERROR_SET = true;
+}
+
+const DL_GLOBAL_SENTINEL: *mut u8 = 1usize as *mut u8;
+
+type LdsoDlopenFn = unsafe extern "C" fn(*const u8, i32) -> *mut u8;
+type LdsoDlsymFn = unsafe extern "C" fn(*mut u8, *const u8) -> *mut u8;
+type LdsoDlcloseFn = unsafe extern "C" fn(*mut u8) -> i32;
+type LdsoDlerrorFn = unsafe extern "C" fn() -> *const u8;
+
+unsafe fn register_dlopen_callbacks() {
+    let reg_open = resolve_symbol(b"__ldso_register_dlopen\0".as_ptr());
+    if reg_open != 0 {
+        let f: extern "C" fn(LdsoDlopenFn) = core::mem::transmute(reg_open);
+        f(__ldso_dlopen as LdsoDlopenFn);
+    }
+    let reg_sym = resolve_symbol(b"__ldso_register_dlsym\0".as_ptr());
+    if reg_sym != 0 {
+        let f: extern "C" fn(LdsoDlsymFn) = core::mem::transmute(reg_sym);
+        f(__ldso_dlsym as LdsoDlsymFn);
+    }
+    let reg_close = resolve_symbol(b"__ldso_register_dlclose\0".as_ptr());
+    if reg_close != 0 {
+        let f: extern "C" fn(LdsoDlcloseFn) = core::mem::transmute(reg_close);
+        f(__ldso_dlclose as LdsoDlcloseFn);
+    }
+    let reg_error = resolve_symbol(b"__ldso_register_dlerror\0".as_ptr());
+    if reg_error != 0 {
+        let f: extern "C" fn(LdsoDlerrorFn) = core::mem::transmute(reg_error);
+        f(__ldso_dlerror as LdsoDlerrorFn);
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn __ldso_dlopen(filename: *const u8, flags: i32) -> *mut u8 {
+    DLERROR_SET = false;
+    if filename.is_null() {
+        return DL_GLOBAL_SENTINEL;
+    }
+    let name_len = str_len(filename);
+    if let Some(idx) = loaded_object_by_name(filename, name_len) {
+        LOADED[idx].global = LOADED[idx].global || (flags & RTLD_GLOBAL) != 0;
+        return &mut LOADED[idx] as *mut LoadedObject as *mut u8;
+    }
+    let ld = if LD_LIBRARY_PATH.is_null() {
+        None
+    } else {
+        Some(LD_LIBRARY_PATH)
+    };
+    let fd = find_library_fd(filename, name_len, ld);
+    if fd < 0 {
+        set_dlerror(b"dlopen: cannot open file\0");
+        return core::ptr::null_mut();
+    }
+    let desired = DSO_BASE_START + (LOADED_COUNT as u64) * DSO_BASE_STRIDE;
+    let _base = match load_dso_from_fd(fd, desired) {
+        Some(b) => b,
+        None => {
+            sys_close(fd);
+            set_dlerror(b"dlopen: failed to load\0");
+            return core::ptr::null_mut();
+        }
+    };
+    sys_close(fd);
+    let idx = LOADED_COUNT - 1;
+    set_loaded_name(idx, filename, name_len);
+    LOADED[idx].global = (flags & RTLD_GLOBAL) != 0;
+    process_all_relocations();
+    update_tls_for_new_module(idx);
+    run_constructors_for(idx);
+    &mut LOADED[idx] as *mut LoadedObject as *mut u8
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn __ldso_dlsym(handle: *mut u8, symbol: *const u8) -> *mut u8 {
+    DLERROR_SET = false;
+    if symbol.is_null() {
+        set_dlerror(b"dlsym: null symbol\0");
+        return core::ptr::null_mut();
+    }
+    let name_len = str_len(symbol);
+    let mut result: u64 = 0;
+    if handle == DL_GLOBAL_SENTINEL {
+        for i in 0..LOADED_COUNT {
+            if i == 0 || LOADED[i].global {
+                result = lookup_symbol_in_object(i, symbol, name_len);
+                if result != 0 {
+                    break;
+                }
+            }
+        }
+    } else {
+        let idx = ((handle as usize - core::ptr::addr_of_mut!(LOADED) as usize)
+            / core::mem::size_of::<LoadedObject>()) as usize;
+        if idx < LOADED_COUNT {
+            result = lookup_symbol_in_object(idx, symbol, name_len);
+        }
+        if result == 0 {
+            for i in 0..LOADED_COUNT {
+                if i == 0 || LOADED[i].global {
+                    result = lookup_symbol_in_object(i, symbol, name_len);
+                    if result != 0 {
+                        break;
+                    }
+                }
+            }
+        }
+    }
+    if result == 0 {
+        set_dlerror(b"dlsym: symbol not found\0");
+    }
+    result as *mut u8
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn __ldso_dlclose(_handle: *mut u8) -> i32 {
+    0
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn __ldso_dlerror() -> *const u8 {
+    if DLERROR_SET {
+        DLERROR_SET = false;
+        core::ptr::addr_of_mut!(DLERROR_BUF).cast::<u8>()
+    } else {
+        core::ptr::null()
+    }
+}
+
 unsafe fn compute_tls_layout() {
     let mut total: usize = 0;
     for i in 0..LOADED_COUNT {
@@ -1036,14 +1552,26 @@ unsafe fn compute_tls_layout() {
         let block_size = ((obj.tls_memsz as usize + align - 1) / align) * align;
         total += block_size;
     }
+    if total < 4096 {
+        total = 4096;
+    }
+    total += total;
     TLS_TOTAL_SIZE = (total + 4095) & !4095;
 
     let mut end = TLS_TOTAL_SIZE;
     for i in 0..LOADED_COUNT {
         let obj = &LOADED[i];
+        if obj.tls_memsz == 0 {
+            TLS_LAYOUT_OFFSET[i] = 0;
+            TLS_FILESZ[i] = 0;
+            TLS_MEMSZ[i] = 0;
+            TLS_IMAGE[i] = core::ptr::null();
+            continue;
+        }
         let align = if obj.tls_align > 0 { obj.tls_align as usize } else { 1 };
         let block_size = ((obj.tls_memsz as usize + align - 1) / align) * align;
         end -= block_size;
+        end &= !(align - 1);
         TLS_LAYOUT_OFFSET[i] = end;
         TLS_FILESZ[i] = obj.tls_filesz;
         TLS_MEMSZ[i] = obj.tls_memsz;
@@ -1070,6 +1598,7 @@ unsafe fn init_tls_block(block: *mut u8) -> *mut u8 {
     }
     let tcb = block.add(TLS_TOTAL_SIZE);
     core::ptr::write_unaligned(tcb as *mut u64, tcb as u64);
+    core::ptr::write_unaligned((tcb as *mut u64).add(1), TLS_GENERATION);
     tcb
 }
 
@@ -1085,7 +1614,19 @@ pub unsafe extern "C" fn __tls_get_addr(ti: *const TlsIndex) -> *mut u8 {
     let offset = (*ti).ti_offset;
     let fs_base: usize;
     core::arch::asm!("mov {}, fs:[0]", out(reg) fs_base);
-    let tls_base = fs_base - TLS_TOTAL_SIZE;
+    let tcb = fs_base;
+    let thread_gen = core::ptr::read_unaligned((tcb as *const u64).add(1));
+    if thread_gen != TLS_GENERATION {
+        tls_lock();
+        let thread_gen2 = core::ptr::read_unaligned((tcb as *const u64).add(1));
+        if thread_gen2 != TLS_GENERATION {
+            expand_thread_tls(TLS_OLD_TOTAL, TLS_OLD_MODULE_COUNT);
+        }
+        tls_unlock();
+    }
+    let fs_base2: usize;
+    core::arch::asm!("mov {}, fs:[0]", out(reg) fs_base2);
+    let tls_base = fs_base2 - TLS_TOTAL_SIZE;
     (tls_base as *mut u8).add(TLS_LAYOUT_OFFSET[module]).add(offset) as *mut u8
 }
 
@@ -1114,19 +1655,139 @@ pub unsafe extern "C" fn __rc_tls_block_size() -> usize {
     TLS_TOTAL_SIZE + TCB_SIZE
 }
 
+unsafe fn register_self(ldso_base: u64) {
+    let ehdr = ldso_base as *const u8;
+    if *ehdr != 0x7f || *ehdr.add(1) != b'E' {
+        return;
+    }
+    let e_phoff = u64::from_le_bytes(core::ptr::read_unaligned(ehdr.add(32) as *const [u8; 8]));
+    let e_phnum = u16::from_le_bytes(core::ptr::read_unaligned(ehdr.add(56) as *const [u8; 2])) as usize;
+    let mut dyn_vaddr: u64 = 0;
+    let mut dyn_memsz: u64 = 0;
+    for i in 0..e_phnum {
+        let ph = ehdr.add(e_phoff as usize + i * PHDR_SIZE);
+        let p_type = u32::from_le_bytes(core::ptr::read_unaligned(ph as *const [u8; 4]));
+        if p_type == PT_DYNAMIC {
+            dyn_vaddr = u64::from_le_bytes(core::ptr::read_unaligned(ph.add(PH_VADDR) as *const [u8; 8]));
+            dyn_memsz = u64::from_le_bytes(core::ptr::read_unaligned(ph.add(PH_MEMSZ) as *const [u8; 8]));
+            break;
+        }
+    }
+    if dyn_vaddr == 0 {
+        return;
+    }
+    let dyn_addr = (ldso_base + dyn_vaddr) as usize;
+    let dyn_end = dyn_addr + dyn_memsz as usize;
+    let mut dt_symtab: u64 = 0;
+    let mut dt_strtab: u64 = 0;
+    let mut dt_strsz: u64 = 0;
+    let mut pos = dyn_addr;
+    while pos + 16 <= dyn_end {
+        let d_tag = u64::from_le_bytes(core::ptr::read_unaligned(pos as *const [u8; 8]));
+        let d_val = u64::from_le_bytes(core::ptr::read_unaligned((pos + 8) as *const [u8; 8]));
+        if d_tag == DT_NULL {
+            break;
+        }
+        match d_tag {
+            DT_SYMTAB => dt_symtab = d_val,
+            DT_STRTAB => dt_strtab = d_val,
+            DT_STRSZ => dt_strsz = d_val,
+            _ => {}
+        }
+        pos += 16;
+    }
+    if dt_symtab == 0 || dt_strtab == 0 {
+        return;
+    }
+    let symtab_ptr = (ldso_base + dt_symtab) as *const u8;
+    let strtab_ptr = (ldso_base + dt_strtab) as *const u8;
+    let sym_count = ((dt_strtab - dt_symtab) / SYMTAB_ENT_SIZE as u64) as usize;
+    if LOADED_COUNT < MAX_LOADED {
+        LOADED[LOADED_COUNT] = LoadedObject {
+            base: ldso_base,
+            symtab: symtab_ptr,
+            sym_count,
+            strtab: strtab_ptr,
+            strsz: dt_strsz as usize,
+            dyn_addr,
+            dyn_memsz: dyn_memsz as usize,
+            tls_image: core::ptr::null(),
+            tls_filesz: 0,
+            tls_memsz: 0,
+            tls_align: 0,
+            init: 0,
+            init_array: 0,
+            init_array_sz: 0,
+            init_present: false,
+            init_array_present: false,
+            global: false,
+            name: [0; 256],
+        };
+        LOADED_COUNT += 1;
+    }
+}
+
+unsafe fn set_loaded_name(idx: usize, name: *const u8, name_len: usize) {
+    if idx >= MAX_LOADED {
+        return;
+    }
+    let len = if name_len >= 255 { 255 } else { name_len };
+    let buf = &mut LOADED[idx].name;
+    for i in 0..len {
+        buf[i] = *name.add(i);
+    }
+    buf[len] = 0;
+}
+
+unsafe fn loaded_object_by_name(name: *const u8, name_len: usize) -> Option<usize> {
+    if name_len == 0 {
+        return None;
+    }
+    for i in 0..LOADED_COUNT {
+        if LOADED[i].name[0] == 0 {
+            continue;
+        }
+        if str_eq(name, name_len, LOADED[i].name.as_ptr()) {
+            return Some(i);
+        }
+    }
+    None
+}
+
 // ============================================================
 // Main flow: load executable + dependencies, relocate, jump
 // ============================================================
 
-unsafe fn load_and_jump(sp: usize) -> ! {
+unsafe fn load_and_jump(sp: usize, ldso_base: u64) -> ! {
     // 1. Find LD_LIBRARY_PATH from kernel envp
     let ld_path = find_env(sp, b"LD_LIBRARY_PATH=");
+    LD_LIBRARY_PATH = ld_path.unwrap_or(core::ptr::null());
 
     // 2. Open and read the executable (the PIE that invoked us as PT_INTERP)
     let proc_exe = b"/proc/self/exe\0";
     let fd = sys_open(proc_exe.as_ptr());
     if fd < 0 {
         die(99, b"open_exe", fd as usize);
+    }
+    {
+        let mut exe_path = [0u8; 256];
+        let r = sys_readlink(proc_exe.as_ptr(), exe_path.as_mut_ptr(), exe_path.len());
+        if r > 0 {
+            let len = r as usize;
+            let mut slash = len;
+            while slash > 0 {
+                slash -= 1;
+                if exe_path[slash] == b'/' {
+                    break;
+                }
+            }
+            ORIGIN_LEN = slash;
+            let mut i = 0;
+            while i < slash {
+                ORIGIN_DIR[i] = exe_path[i];
+                i += 1;
+            }
+        }
     }
 
     let mut buf = [0u8; 4096];
@@ -1202,16 +1863,33 @@ unsafe fn load_and_jump(sp: usize) -> ! {
         let map_len = ((p_memsz + adj + page - 1) & !(page - 1)) as usize;
         let prot = prot_from_flags(p_flags);
 
+        // Map the whole segment anonymously first so the tail (bss) is backed
+        // by zeroed anonymous pages, then overlay the file-backed portion.
         let ptr = sys_mmap(
             map_addr as *mut u8,
             map_len,
             prot,
-            MAP_PRIVATE | MAP_FIXED,
-            fd as i32,
-            map_off as i64,
+            MAP_PRIVATE | MAP_FIXED | MAP_ANONYMOUS,
+            -1,
+            0,
         );
         if ptr as usize == MAP_FAILED {
             die(95, b"map_exec", map_addr as usize);
+        }
+
+        let file_map_len = ((p_filesz + adj + page - 1) & !(page - 1)) as usize;
+        if file_map_len > 0 {
+            let fptr = sys_mmap(
+                map_addr as *mut u8,
+                file_map_len,
+                prot,
+                MAP_PRIVATE | MAP_FIXED,
+                fd as i32,
+                map_off as i64,
+            );
+            if fptr as usize == MAP_FAILED {
+                die(95, b"map_exec_file", map_addr as usize);
+            }
         }
 
         if p_memsz > p_filesz {
@@ -1256,6 +1934,17 @@ unsafe fn load_and_jump(sp: usize) -> ! {
     let mut dt_symtab: u64 = 0;
     let mut dt_strtab: u64 = 0;
     let mut dt_strsz: u64 = 0;
+    let mut dt_init: u64 = 0;
+    let mut dt_init_array: u64 = 0;
+    let mut dt_init_array_sz: u64 = 0;
+    let mut dt_init_present = false;
+    let mut dt_init_array_present = false;
+    let mut dt_runpath_off: u64 = 0;
+    let mut dt_runpath_present = false;
+    let mut dt_rpath_off: u64 = 0;
+    let mut dt_rpath_present = false;
+    let mut dt_gnu_hash: u64 = 0;
+    let mut dt_hash: u64 = 0;
 
     // ponytail: max 32 DT_NEEDED, enough for any realistic binary
     let mut needed_offsets: [u64; 32] = [0; 32];
@@ -1281,6 +1970,13 @@ unsafe fn load_and_jump(sp: usize) -> ! {
                 DT_SYMTAB => dt_symtab = d_val,
                 DT_STRTAB => dt_strtab = d_val,
                 DT_STRSZ => dt_strsz = d_val,
+                DT_GNU_HASH => dt_gnu_hash = d_val,
+                DT_HASH => dt_hash = d_val,
+                DT_INIT => { dt_init = d_val; dt_init_present = true; }
+                DT_INIT_ARRAY => { dt_init_array = d_val; dt_init_array_present = true; }
+                DT_INIT_ARRAYSZ => dt_init_array_sz = d_val,
+                DT_RUNPATH => { dt_runpath_off = d_val; dt_runpath_present = true; }
+                DT_RPATH => { dt_rpath_off = d_val; dt_rpath_present = true; }
                 _ => {}
             }
             dp += 16;
@@ -1291,16 +1987,27 @@ unsafe fn load_and_jump(sp: usize) -> ! {
     let mut needed_names: [(*const u8, usize); 32] = [(core::ptr::null(), 0); 32];
     for i in 0..needed_count {
         let name_ptr = (exec_base + dt_strtab + needed_offsets[i]) as *const u8;
-        let name_len = strlen(name_ptr);
+        let name_len = str_len(name_ptr);
         needed_names[i] = (name_ptr, name_len);
     }
 
+    if dt_runpath_present {
+        RUNPATH = (exec_base + dt_strtab + dt_runpath_off) as *const u8;
+        RUNPATH_LEN = str_len(RUNPATH);
+    } else if dt_rpath_present {
+        RUNPATH = (exec_base + dt_strtab + dt_rpath_off) as *const u8;
+        RUNPATH_LEN = str_len(RUNPATH);
+    }
+
     // Register executable as LOADED[0]
-    let exec_sym_count = if dt_strtab > dt_symtab && dt_strtab - dt_symtab >= SYMTAB_ENT_SIZE as u64 {
-        ((dt_strtab - dt_symtab) / SYMTAB_ENT_SIZE as u64) as usize
-    } else {
-        0
-    };
+    let mut exec_sym_count: usize = 0;
+    if dt_gnu_hash != 0 {
+        exec_sym_count = sym_count_from_gnu_hash((exec_base + dt_gnu_hash) as usize);
+    } else if dt_hash != 0 {
+        exec_sym_count = sym_count_from_hash((exec_base + dt_hash) as usize);
+    } else if dt_strtab > dt_symtab && dt_strtab - dt_symtab >= SYMTAB_ENT_SIZE as u64 {
+        exec_sym_count = ((dt_strtab - dt_symtab) / SYMTAB_ENT_SIZE as u64) as usize;
+    }
     LOADED[0] = LoadedObject {
         base: exec_base,
         symtab: (exec_base + dt_symtab) as *const u8,
@@ -1313,8 +2020,16 @@ unsafe fn load_and_jump(sp: usize) -> ! {
         tls_filesz: exec_tls_filesz,
         tls_memsz: exec_tls_memsz,
         tls_align: exec_tls_align,
+        init: exec_base + dt_init,
+        init_array: exec_base + dt_init_array,
+        init_array_sz: dt_init_array_sz,
+        init_present: dt_init_present,
+        init_array_present: dt_init_array_present,
+        global: true,
+        name: [0; 256],
     };
     LOADED_COUNT = 1;
+    register_self(ldso_base);
 
     // 5. Load each DT_NEEDED DSO
     for i in 0..needed_count {
@@ -1329,11 +2044,15 @@ unsafe fn load_and_jump(sp: usize) -> ! {
             die(88, b"load_dso", desired_base as usize);
         }
         sys_close(lib_fd);
+        set_loaded_name(LOADED_COUNT - 1, name_ptr, name_len);
     }
 
     compute_tls_layout();
+    TLS_OLD_TOTAL = TLS_TOTAL_SIZE;
+    TLS_OLD_MODULE_COUNT = TLS_MODULE_COUNT;
 
     process_all_relocations();
+    register_dlopen_callbacks();
 
     // Always allocate a TCB so that %fs-relative accesses (e.g. stack canary
     // at %fs:0x28) work even when there is no TLS data in the binary.
@@ -1353,6 +2072,8 @@ unsafe fn load_and_jump(sp: usize) -> ! {
         let tcb = init_tls_block(tls_block);
         sys_arch_prctl(0x1002, tcb as u64);
     }
+
+    run_constructors();
 
     let phdr_addr = exec_base + e_phoff;
     build_and_jump(exec_base + e_entry, phdr_addr, e_phnum, sp)
@@ -1393,7 +2114,7 @@ unsafe fn build_and_jump(entry: u64, phdr_addr: u64, phnum: u16, orig_sp: usize)
     let mut new_argv: [usize; 128] = [0; 128];
     for i in 0..max_args {
         let s = *((argv_start + i * 8) as *const u64) as *const u8;
-        let len = strlen(s);
+        let len = str_len(s);
         sp -= len + 1;
         core::ptr::copy_nonoverlapping(s, sp as *mut u8, len + 1);
         new_argv[i] = sp;
@@ -1402,7 +2123,7 @@ unsafe fn build_and_jump(entry: u64, phdr_addr: u64, phnum: u16, orig_sp: usize)
     let mut new_envp: [usize; 512] = [0; 512];
     for i in 0..max_env {
         let s = *((envp_start + i * 8) as *const u64) as *const u8;
-        let len = strlen(s);
+        let len = str_len(s);
         sp -= len + 1;
         core::ptr::copy_nonoverlapping(s, sp as *mut u8, len + 1);
         new_envp[i] = sp;

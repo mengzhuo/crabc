@@ -199,8 +199,8 @@ pub const FP_NORMAL: c_int = 4;
 pub const FP_ILOGB0: c_int = -2147483648i32;
 pub const FP_ILOGBNAN: c_int = 2147483647i32;
 
-#[inline]
-pub fn __fpclassify(x: f64) -> c_int {
+#[no_mangle]
+pub unsafe extern "C" fn __fpclassify(x: f64) -> c_int {
     let u = asuint64(x);
     let e = (u >> 52) & 0x7ff;
     if e == 0 {
@@ -212,8 +212,8 @@ pub fn __fpclassify(x: f64) -> c_int {
     }
 }
 
-#[inline]
-pub fn __fpclassifyf(x: f32) -> c_int {
+#[no_mangle]
+pub unsafe extern "C" fn __fpclassifyf(x: f32) -> c_int {
     let u = asuint(x);
     let e = (u >> 23) & 0xff;
     if e == 0 {
