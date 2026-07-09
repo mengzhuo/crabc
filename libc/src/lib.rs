@@ -172,6 +172,10 @@ unsafe fn sys_mmap(
         lateout("rcx") _,
         lateout("r11") _,
     );
+    if result < 0 && result > -4096 {
+        ERRNO = (-result) as c_int;
+        return MMAP_FAILED;
+    }
     result as *mut u8
 }
 
@@ -1323,7 +1327,19 @@ pub unsafe extern "C" fn sigprocmask(
     set: *const SigSetT,
     oldset: *mut SigSetT,
 ) -> c_int {
-    let r = sys_rt_sigprocmask(how, set, oldset, core::mem::size_of::<SigSetT>());
+    // ponytail: mask out internal rt signals (32, 33) before touching the kernel
+    let internal_mask: SigSetT = (1u64 << 31) | (1u64 << 32);
+    let filtered: SigSetT;
+    let set_ptr: *const SigSetT = if set.is_null() {
+        set
+    } else {
+        filtered = *set & !internal_mask;
+        &filtered
+    };
+    let r = sys_rt_sigprocmask(how, set_ptr, oldset, core::mem::size_of::<SigSetT>());
+    if !oldset.is_null() {
+        *oldset &= !internal_mask;
+    }
     if r < 0 { -1 } else { 0 }
 }
 
@@ -1445,6 +1461,10 @@ pub unsafe extern "C" fn sigaddset(set: *mut SigSetT, signum: c_int) -> c_int {
         ERRNO = EINVAL;
         return -1;
     }
+    // ponytail: internal rt signals (32, 33) cannot be manipulated
+    if signum >= 32 && signum < __libc_current_sigrtmin() {
+        return 0;
+    }
     *set |= 1u64 << s;
     0
 }
@@ -1456,6 +1476,10 @@ pub unsafe extern "C" fn sigdelset(set: *mut SigSetT, signum: c_int) -> c_int {
         ERRNO = EINVAL;
         return -1;
     }
+    // ponytail: internal rt signals (32, 33) are never members
+    if signum >= 32 && signum < __libc_current_sigrtmin() {
+        return 0;
+    }
     *set &= !(1u64 << s);
     0
 }
@@ -1464,6 +1488,10 @@ pub unsafe extern "C" fn sigdelset(set: *mut SigSetT, signum: c_int) -> c_int {
 pub unsafe extern "C" fn sigismember(set: *const SigSetT, signum: c_int) -> c_int {
     let s = (signum as c_uint).wrapping_sub(1);
     if s as usize >= 64 { return 0; }
+    // ponytail: internal rt signals (32, 33) are never members
+    if signum >= 32 && signum < __libc_current_sigrtmin() {
+        return 0;
+    }
     ((*set & (1u64 << s)) != 0) as c_int
 }
 
@@ -1552,6 +1580,7 @@ pub unsafe extern "C" fn sigaltstack(ss: *const stack_t, old_ss: *mut stack_t) -
 // ============================================================
 
 #[no_mangle]
+#[inline(never)]
 pub unsafe extern "C" fn setjmp(env: *mut c_ulong) -> c_int {
     core::arch::asm!(
         "mov rax, [rsp]",
@@ -1573,6 +1602,7 @@ pub unsafe extern "C" fn setjmp(env: *mut c_ulong) -> c_int {
 }
 
 #[no_mangle]
+#[inline(never)]
 pub unsafe extern "C" fn longjmp(env: *const c_ulong, val: c_int) -> ! {
     let ret = if val == 0 { 1 } else { val } as u32;
     core::arch::asm!(
@@ -1591,23 +1621,67 @@ pub unsafe extern "C" fn longjmp(env: *const c_ulong, val: c_int) -> ! {
     );
 }
 
+// ponytail: sigsetjmp is implemented in raw assembly because the Rust compiler
+// rewrites naked_asm that touches rbx into incorrect push/pop sequences,
+// corrupting the caller's rbx across the initial return. The exported wrappers
+// jump to a local hidden assembly implementation; the layout matches musl:
+// env[0..7] = __jmp_buf, env[8] = saved return address, env[9] = saved signal
+// mask, env[10] = saved rbx.
+
 #[no_mangle]
-pub unsafe extern "C" fn sigsetjmp(env: *mut c_ulong, savemask: c_int) -> c_int {
-    let ret = setjmp(env);
-    if ret == 0 {
-        *env.add(8) = savemask as c_ulong;
-        if savemask != 0 {
-            sigprocmask(SIG_BLOCK, core::ptr::null(), env.add(9) as *mut SigSetT);
-        }
-    }
-    ret
+#[unsafe(naked)]
+pub unsafe extern "C" fn sigsetjmp(_env: *mut c_ulong, _savemask: c_int) -> c_int {
+    core::arch::naked_asm!("jmp sigsetjmp_real");
 }
 
 #[no_mangle]
+#[unsafe(naked)]
+pub unsafe extern "C" fn __sigsetjmp(_env: *mut c_ulong, _savemask: c_int) -> c_int {
+    core::arch::naked_asm!("jmp sigsetjmp_real");
+}
+
+core::arch::global_asm!(
+    ".type sigsetjmp_real, @function",
+    "sigsetjmp_real:",
+    "   test esi, esi",
+    "   jz 1f",
+    "   pop qword ptr [rdi + 64]",
+    "   mov qword ptr [rdi + 80], rbx",
+    "   push rbx",
+    "   mov rbx, rdi",
+    "   call setjmp",
+    "   push qword ptr [rbx + 64]",
+    "   mov rdi, rbx",
+    "   mov esi, eax",
+    "   mov rbx, qword ptr [rbx + 80]",
+    "   lea rdx, [rdi + 72]",
+    "   test esi, esi",
+    "   jz 2f",
+    "   mov rsi, rdx",
+    "   xor rdx, rdx",
+    "   mov edi, 2",
+    "   jmp 3f",
+    "2:",
+    "   xor rsi, rsi",
+    "   mov edi, 2",
+    "3:",
+    "   mov eax, 14",
+    "   mov r10d, 8",
+    "   syscall",
+    "   test esi, esi",
+    "   jnz 4f",
+    "   mov rax, 0xfffffffe7fffffff",
+    "   and qword ptr [rdx], rax",
+    "4:",
+    "   mov eax, esi",
+    "   ret",
+    "1:",
+    "   jmp setjmp",
+);
+
+#[no_mangle]
+#[inline(never)]
 pub unsafe extern "C" fn siglongjmp(env: *const c_ulong, val: c_int) -> ! {
-    if *env.add(8) != 0 {
-        sigprocmask(SIG_SETMASK, env.add(9) as *const SigSetT, core::ptr::null_mut());
-    }
     longjmp(env, val);
 }
 
@@ -2981,9 +3055,9 @@ pub unsafe extern "C" fn pthread_create(
         if s > 0 { s } else { STACK_SIZE }
     } else { STACK_SIZE };
     let stack = sys_mmap(null_mut(), stack_size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-    if stack == MMAP_FAILED { return ENOMEM; }
+    if stack == MMAP_FAILED { return EAGAIN; }
     let fs_base = __rc_create_thread_tls();
-    if fs_base.is_null() { sys_munmap(stack, stack_size); return ENOMEM; }
+    if fs_base.is_null() { sys_munmap(stack, stack_size); return EAGAIN; }
     (*slot).detach_state = DT_JOINABLE;
     (*slot).result = core::ptr::null_mut();
     (*slot).cancel = 0;
@@ -6813,60 +6887,147 @@ unsafe fn format_f64_full(
         return pos;
     }
 
-    // === %e/%g format (unchanged) ===
-    let mantissa = v / libm::pow(10.0, exp as f64);
-    let mut int_part = mantissa as u64;
-    let frac_part = mantissa - int_part as f64;
+    // === %e/%g format: exact big-integer digit extraction ===
+    // D = floor(v * 10^(p+1-exp)), using v = mant_b * 2^(bin_exp-52)
+    let mut fbuf = [0u8; 20];
+    let mut int_part: u64;
+    {
+        let bits_v = v.to_bits();
+        let raw_mant_v = bits_v & 0x000FFFFFFFFFFFFF;
+        let raw_exp_v = ((bits_v >> 52) & 0x7FF) as i32;
+        let (mant_b_v, bin_exp_v) = if raw_exp_v == 0 {
+            (raw_mant_v, -1022i32)
+        } else {
+            (raw_mant_v | (1u64 << 52), raw_exp_v - 1023)
+        };
 
-    let mut fbuf = [0u8; 4120];
-    if p > 0 {
-        {
-            // %e/%g format: use repeated multiply-by-10 on the scaled mantissa.
-            let mut frac = if frac_part > 0.0 { frac_part } else { 0.0 };
-            for i in 0..p.min(18) {
-                frac *= 10.0;
-                let digit = frac as u64;
-                fbuf[i] = (digit % 10) as u8;
-                frac -= digit as f64;
-            }
-            for i in 18..p { fbuf[i] = 0; }
-            // Round based on remaining fractional value
-            if p > 0 {
-                let sig = p.min(18);
-                let round_up = frac > 0.5 || (frac == 0.5 && fbuf[sig - 1] & 1 != 0);
-                if round_up {
-                    let mut j = sig;
-                    loop {
-                        if j == 0 { int_part += 1; break; }
-                        j -= 1;
-                        fbuf[j] += 1;
-                        if fbuf[j] < 10 { break; }
-                        fbuf[j] = 0;
-                    }
+        let s: i32 = (p as i32) + 1 - exp;
+        let bs: i32 = bin_exp_v - 52 + s;
+
+        let mut limbs = [0u32; 40];
+        limbs[0] = mant_b_v as u32;
+        limbs[1] = (mant_b_v >> 32) as u32;
+        let mut nlimbs: usize = if limbs[1] != 0 { 2 } else { 1 };
+
+        if s > 0 {
+            for _ in 0..(s as usize) {
+                let mut carry = 0u64;
+                for j in 0..nlimbs {
+                    let val = limbs[j] as u64 * 5 + carry;
+                    limbs[j] = val as u32;
+                    carry = val >> 32;
                 }
+                if carry > 0 { limbs[nlimbs] = carry as u32; nlimbs += 1; }
             }
         }
-    }
 
-    // For p=0 %e style: round int_part based on first fractional digit
-    if p == 0 && !use_f {
-        let first_digit = if frac_part > 0.0 {
-            let scaled1 = frac_part * 10.0;
-            let d = libm::trunc(scaled1) as u8;
-            let rem1 = scaled1 - d as f64;
-            let tol1 = 0.5 * f64::EPSILON * if scaled1 > 1.0 { scaled1 } else { 1.0 };
-            if rem1 > 0.5 + tol1 { d + 1 }
-            else if rem1 < 0.5 - tol1 { d }
-            else if d & 1 != 0 { d + 1 }
-            else { d }
-        } else { 0 };
-        if first_digit >= 5 {
-            int_part += 1;
-            if int_part >= 10 { int_part = 1; exp += 1; }
+        if bs > 0 {
+            let ws = (bs as u32 / 32) as usize;
+            let bit = bs as u32 % 32;
+            if ws > 0 {
+                let mut i = nlimbs;
+                while i > 0 { i -= 1; if i + ws < 40 { limbs[i + ws] = limbs[i]; } limbs[i] = 0; }
+                nlimbs += ws;
+            }
+            if bit > 0 {
+                let mut carry = 0u32;
+                for i in ws..nlimbs {
+                    let new_val = (limbs[i] << bit) | carry;
+                    carry = limbs[i] >> (32 - bit);
+                    limbs[i] = new_val;
+                }
+                if carry > 0 && nlimbs < 40 { limbs[nlimbs] = carry; nlimbs += 1; }
+            }
         }
+
+        let mut has_rest = false;
+        if s < 0 {
+            for _ in 0..(-s as usize) {
+                let mut rem = 0u64;
+                for i in (0..nlimbs).rev() {
+                    let val = (rem << 32) | limbs[i] as u64;
+                    limbs[i] = (val / 5) as u32;
+                    rem = val % 5;
+                }
+                if rem != 0 { has_rest = true; }
+            }
+        }
+
+        if bs < 0 {
+            let rshift = (-bs) as u32;
+            let ws = (rshift / 32) as usize;
+            let bit = rshift % 32;
+            if ws > 0 {
+                for j in 0..ws.min(nlimbs) { if limbs[j] != 0 { has_rest = true; } }
+                for i in ws..nlimbs { limbs[i - ws] = limbs[i]; }
+                nlimbs = nlimbs.saturating_sub(ws);
+            }
+            if bit > 0 && nlimbs > 0 {
+                let mask = (1u32 << bit) - 1;
+                if limbs[0] & mask != 0 { has_rest = true; }
+                for i in 0..nlimbs - 1 {
+                    limbs[i] = (limbs[i] >> bit) | (limbs[i + 1] << (32 - bit));
+                }
+                limbs[nlimbs - 1] >>= bit;
+            }
+        }
+
+        while nlimbs > 0 && limbs[nlimbs - 1] == 0 { nlimbs -= 1; }
+
+        let ndigits = p + 2;
+        let mut all_digits = [0u8; 25];
+        let mut nd = 0usize;
+        if nlimbs > 0 {
+            loop {
+                let mut all_zero = true;
+                for i in 0..nlimbs { if limbs[i] != 0 { all_zero = false; break; } }
+                if all_zero { break; }
+                let mut rem64 = 0u64;
+                for i in (0..nlimbs).rev() {
+                    let val = (rem64 << 32) | limbs[i] as u64;
+                    limbs[i] = (val / 10) as u32;
+                    rem64 = val % 10;
+                }
+                if nd < 25 { all_digits[nd] = rem64 as u8; }
+                nd += 1;
+            }
+        }
+
+        if nd >= ndigits {
+            for i in 0..ndigits { fbuf[ndigits - 1 - i] = all_digits[i]; }
+        } else {
+            for i in 0..nd { fbuf[ndigits - 1 - i] = all_digits[i]; }
+            for i in nd..ndigits { fbuf[ndigits - 1 - i] = 0; }
+        }
+
+        int_part = fbuf[0] as u64;
+
+        // Round half to even: next_d is the rounding digit beyond precision
+        if p > 0 {
+            let next_d = fbuf[p + 1];
+            let last_d = fbuf[p];
+            if next_d > 5 || (next_d == 5 && (has_rest || last_d & 1 != 0)) {
+                let mut carry = true;
+                for j in (1..=p).rev() {
+                    if !carry { break; }
+                    let d = fbuf[j] + 1;
+                    if d < 10 { fbuf[j] = d; carry = false; break; }
+                    fbuf[j] = 0;
+                }
+                if carry { int_part += 1; }
+            }
+        } else {
+            let next_d = fbuf[1];
+            if next_d > 5 || (next_d == 5 && (has_rest || int_part & 1 != 0)) {
+                int_part += 1;
+            }
+        }
+
+        // fbuf[1..=p] are now the fractional digits for output
+        // Shift them to fbuf[0..p] so output code can index fbuf[0..p]
+        for i in 0..p { fbuf[i] = fbuf[i + 1]; }
     }
 
-    // For %e: after rounding, if int_part >= 10, normalize
     if !use_f && int_part >= 10 {
         exp += 1;
         int_part = 1;
@@ -14440,6 +14601,72 @@ pub unsafe extern "C" fn __libc_start_main(
     exit(result);
 }
 
+type LdsoDlopenFn = unsafe extern "C" fn(*const c_char, c_int) -> *mut c_void;
+type LdsoDlsymFn = unsafe extern "C" fn(*mut c_void, *const c_char) -> *mut c_void;
+type LdsoDlcloseFn = unsafe extern "C" fn(*mut c_void) -> c_int;
+type LdsoDlerrorFn = unsafe extern "C" fn() -> *const c_char;
+
+static mut LDSO_DLOPEN: Option<LdsoDlopenFn> = None;
+static mut LDSO_DLSYM: Option<LdsoDlsymFn> = None;
+static mut LDSO_DLCLOSE: Option<LdsoDlcloseFn> = None;
+static mut LDSO_DLERROR: Option<LdsoDlerrorFn> = None;
+
+#[no_mangle]
+pub unsafe extern "C" fn __ldso_register_dlopen(f: LdsoDlopenFn) {
+    LDSO_DLOPEN = Some(f);
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn __ldso_register_dlsym(f: LdsoDlsymFn) {
+    LDSO_DLSYM = Some(f);
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn __ldso_register_dlclose(f: LdsoDlcloseFn) {
+    LDSO_DLCLOSE = Some(f);
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn __ldso_register_dlerror(f: LdsoDlerrorFn) {
+    LDSO_DLERROR = Some(f);
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn dlopen(filename: *const c_char, flags: c_int) -> *mut c_void {
+    if let Some(f) = LDSO_DLOPEN {
+        f(filename, flags)
+    } else {
+        null_mut()
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn dlsym(handle: *mut c_void, symbol: *const c_char) -> *mut c_void {
+    if let Some(f) = LDSO_DLSYM {
+        f(handle, symbol)
+    } else {
+        null_mut()
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn dlclose(handle: *mut c_void) -> c_int {
+    if let Some(f) = LDSO_DLCLOSE {
+        f(handle)
+    } else {
+        0
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn dlerror() -> *const c_char {
+    if let Some(f) = LDSO_DLERROR {
+        f()
+    } else {
+        core::ptr::null()
+    }
+}
+
 include!("crypt_impl.rs");
 include!("statvfs.rs");
 include!("daemon.rs");
@@ -14450,6 +14677,30 @@ include!("syscall.rs");
 include!("pthread_atfork.rs");
 include!("fenv.rs");
 include!("locale_ctype.rs");
+include!("regression_stubs.rs");
+
+// ============================================================
+// regex.h
+// ============================================================
+
+type regoff_t = c_int;
+
+#[repr(C)]
+pub struct regex_t {
+    pub re_nsub: usize,
+    pub __opaque: *mut c_void,
+    pub __padding: [*mut c_void; 4],
+    pub __nsub2: usize,
+    pub __padding2: c_char,
+}
+
+#[repr(C)]
+pub struct regmatch_t {
+    pub rm_so: regoff_t,
+    pub rm_eo: regoff_t,
+}
+
+include!("regex.rs");
 
 #[cfg(test)]
 mod libc_unit_stub {
