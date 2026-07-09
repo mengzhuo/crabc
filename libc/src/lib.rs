@@ -4251,7 +4251,10 @@ pub struct lconv {
     pub int_n_sign_posn: c_char,
 }
 
-static mut LOCALE_NAME: [c_char; 2] = [b'C' as c_char, 0];
+static UTF8_NAME: [u8; 6] = [b'U', b'T', b'F', b'-', b'8', 0];
+static C_NAME: [u8; 2] = [b'C', 0];
+static mut LOCALE_NAME: *const c_char = C_NAME.as_ptr() as *const c_char;
+static mut LOCALE_CTYPE_UTF8: bool = true;
 static mut EMPTY_STR: [c_char; 1] = [0];
 static mut DECIMAL_POINT: [c_char; 2] = [b'.' as c_char, 0];
 static mut LCONV: lconv = lconv {
@@ -4281,12 +4284,33 @@ static mut LCONV: lconv = lconv {
     int_n_sign_posn: -1,
 };
 
+unsafe fn cstr_contains_ci(s: *const u8, needle: &[u8]) -> bool {
+    let len = strlen(s as *const c_char) as usize;
+    let s_slice = core::slice::from_raw_parts(s, len);
+    if needle.len() > len { return false; }
+    for i in 0..=len - needle.len() {
+        if s_slice[i..i + needle.len()].eq_ignore_ascii_case(needle) {
+            return true;
+        }
+    }
+    false
+}
+
 #[no_mangle]
 pub unsafe extern "C" fn setlocale(_category: c_int, locale: *const c_char) -> *mut c_char {
-    if !locale.is_null() && *locale != 0 {
-        // ponytail: ignore locale changes, stay in C locale
+    if locale.is_null() || *locale == 0 {
+        return LOCALE_NAME as *mut c_char;
     }
-    core::ptr::addr_of_mut!(LOCALE_NAME) as *mut c_char
+    let name = locale as *const u8;
+    if strcmp(name, b"C\0".as_ptr()) == 0 || strcmp(name, b"POSIX\0".as_ptr()) == 0 {
+        LOCALE_CTYPE_UTF8 = false;
+        return LOCALE_NAME as *mut c_char;
+    }
+    if cstr_contains_ci(name, b"UTF-8") || cstr_contains_ci(name, b"UTF8") {
+        LOCALE_CTYPE_UTF8 = true;
+        return LOCALE_NAME as *mut c_char;
+    }
+    core::ptr::null_mut()
 }
 
 #[no_mangle]
@@ -4381,7 +4405,11 @@ unsafe fn langinfo_str(table: *const u8, mut idx: c_int) -> *mut c_char {
 #[no_mangle]
 pub unsafe extern "C" fn nl_langinfo(item: c_int) -> *mut c_char {
     if item == NL_ITEM_CODESET {
-        return b"UTF-8\0".as_ptr() as *mut c_char;
+        return if LOCALE_CTYPE_UTF8 {
+            b"UTF-8\0".as_ptr() as *mut c_char
+        } else {
+            b"US-ASCII\0".as_ptr() as *mut c_char
+        };
     }
     let cat = item >> 16;
     let idx = item & 0xFFFF;
@@ -8354,11 +8382,12 @@ fn mb_oob(c: u32, b: u8) -> u32 {
 
 static mut MB_STATE: c_uint = 0;
 
-const MB_CUR_MAX_VAL: usize = 4;
+const MB_CUR_MAX_VAL_UTF8: usize = 4;
+const MB_CUR_MAX_VAL_C: usize = 1;
 
 #[no_mangle]
 pub extern "C" fn __ctype_get_mb_cur_max() -> usize {
-    MB_CUR_MAX_VAL
+    unsafe { if LOCALE_CTYPE_UTF8 { MB_CUR_MAX_VAL_UTF8 } else { MB_CUR_MAX_VAL_C } }
 }
 
 #[no_mangle]
@@ -8384,6 +8413,12 @@ pub unsafe extern "C" fn mbrtowc(
     }
 
     if n == 0 { return !1usize; }
+
+    if unsafe { !LOCALE_CTYPE_UTF8 } {
+        let b = *s;
+        *wc = b as c_int;
+        return if b == 0 { 0 } else { 1 };
+    }
 
     if c == 0 {
         if *s < 0x80 {
@@ -8430,27 +8465,35 @@ pub unsafe extern "C" fn wcrtomb(
     _st: *mut c_uint,
 ) -> usize {
     if s.is_null() { return 1; }
-    let wc = wc as u32;
-    if wc < 0x80 {
+    let wc_u = wc as u32;
+    if unsafe { !LOCALE_CTYPE_UTF8 } {
+        if wc_u > 0xFF {
+            ERRNO = EILSEQ;
+            return !0usize;
+        }
         *s = wc as c_char;
         return 1;
     }
-    if wc < 0x800 {
-        *s = (0xC0 | (wc >> 6)) as c_char;
-        *s.add(1) = (0x80 | (wc & 0x3F)) as c_char;
+    if wc_u < 0x80 {
+        *s = wc as c_char;
+        return 1;
+    }
+    if wc_u < 0x800 {
+        *s = (0xC0 | (wc_u >> 6)) as c_char;
+        *s.add(1) = (0x80 | (wc_u & 0x3F)) as c_char;
         return 2;
     }
-    if wc < 0xD800 || wc.wrapping_sub(0xE000) < 0x2000 {
-        *s = (0xE0 | (wc >> 12)) as c_char;
-        *s.add(1) = (0x80 | ((wc >> 6) & 0x3F)) as c_char;
-        *s.add(2) = (0x80 | (wc & 0x3F)) as c_char;
+    if wc_u < 0xD800 || wc_u.wrapping_sub(0xE000) < 0x2000 {
+        *s = (0xE0 | (wc_u >> 12)) as c_char;
+        *s.add(1) = (0x80 | ((wc_u >> 6) & 0x3F)) as c_char;
+        *s.add(2) = (0x80 | (wc_u & 0x3F)) as c_char;
         return 3;
     }
-    if wc.wrapping_sub(0x10000) < 0x100000 {
-        *s = (0xF0 | (wc >> 18)) as c_char;
-        *s.add(1) = (0x80 | ((wc >> 12) & 0x3F)) as c_char;
-        *s.add(2) = (0x80 | ((wc >> 6) & 0x3F)) as c_char;
-        *s.add(3) = (0x80 | (wc & 0x3F)) as c_char;
+    if wc_u.wrapping_sub(0x10000) < 0x100000 {
+        *s = (0xF0 | (wc_u >> 18)) as c_char;
+        *s.add(1) = (0x80 | ((wc_u >> 12) & 0x3F)) as c_char;
+        *s.add(2) = (0x80 | ((wc_u >> 6) & 0x3F)) as c_char;
+        *s.add(3) = (0x80 | (wc_u & 0x3F)) as c_char;
         return 4;
     }
     ERRNO = EILSEQ;
@@ -8630,12 +8673,24 @@ pub unsafe extern "C" fn wcstombs(
 #[no_mangle]
 pub extern "C" fn btowc(c: c_int) -> wint_t {
     if c == -1 { return WEOF; }
-    if (c as u32) < 128 { c as wint_t } else { WEOF }
+    unsafe {
+        if LOCALE_CTYPE_UTF8 {
+            if (c as u32) < 128 { c as wint_t } else { WEOF }
+        } else {
+            (c as u8) as wint_t
+        }
+    }
 }
 
 #[no_mangle]
 pub extern "C" fn wctob(c: wint_t) -> c_int {
-    if c < 128 { c as c_int } else { -1 }
+    unsafe {
+        if LOCALE_CTYPE_UTF8 {
+            if c < 128 { c as c_int } else { -1 }
+        } else {
+            if c <= 0xFF { c as c_int } else { -1 }
+        }
+    }
 }
 
 #[no_mangle]
