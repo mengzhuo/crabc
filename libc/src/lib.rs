@@ -3888,8 +3888,8 @@ pub unsafe extern "C" fn sem_open(name: *const c_char, flags: c_int, mut args: .
         if n == 0 || pos == 0 { break; }
         pos -= 1;
     }
-    // shift to start of number part
-    let tmp_path = tmp.as_ptr().add(pos);
+        // shift to start of number part
+        let tmp_path = tmp.as_ptr();
 
     let mut newsem: sem_t = core::mem::zeroed();
     newsem.__val[0] = value as c_int;
@@ -7706,13 +7706,52 @@ pub unsafe extern "C" fn vfscanf(stream: *mut FILE, fmt: *const c_char, mut args
 
     let mut line = [0u8; 4096];
     let mut pos = 0usize;
-    while pos < line.len() - 1 {
-        let c = fgetc(stream);
-        if c == -1 { break; }
-        line[pos] = c as u8;
-        pos += 1;
-        if c == b'\n' as c_int { break; }
+
+    if start_pos >= 0 {
+        // Seekable: read via fgetc until \n or EOF (existing behavior)
+        while pos < line.len() - 1 {
+            let c = fgetc(stream);
+            if c == -1 { break; }
+            line[pos] = c as u8;
+            pos += 1;
+            if c == b'\n' as c_int { break; }
+        }
+    } else {
+        // Non-seekable (pipe/socket): drain pushback, then read all available
+        // data non-blocking so we don't stop at \n boundaries.
+
+        // 1. Drain ungotten bytes (LIFO order)
+        while f.ungotten_count > 0 && pos < line.len() - 1 {
+            f.ungotten_count -= 1;
+            line[pos] = f.ungotten[f.ungotten_count as usize] as u8;
+            pos += 1;
+        }
+        // 2. Drain rpos/rend pushback buffer
+        while !f.rpos.is_null() && f.rpos < f.rend && pos < line.len() - 1 {
+            line[pos] = *f.rpos;
+            f.rpos = f.rpos.add(1);
+            pos += 1;
+        }
+        // 3. Read available data from the fd without blocking
+        let fd = f.fd;
+        let old_flags = sys_fcntl(fd, F_GETFL, 0);
+        if old_flags >= 0 {
+            let _ = sys_fcntl(fd, F_SETFL, old_flags | O_NONBLOCK as i64);
+        }
+        while pos < line.len() - 1 {
+            let n = sys_read(fd as i64, line.as_mut_ptr().add(pos), line.len() - 1 - pos);
+            if n <= 0 { break; }
+            pos += n as usize;
+        }
+        if old_flags >= 0 {
+            let _ = sys_fcntl(fd, F_SETFL, old_flags);
+        }
+        // Clear flags that the failed non-blocking read may have set
+        f._eof = 0;
+        f._err = 0;
+        f.flags &= !(F_EOF | F_ERR);
     }
+
     line[pos] = 0;
     if pos == 0 { return 0; }
 
@@ -7720,6 +7759,7 @@ pub unsafe extern "C" fn vfscanf(stream: *mut FILE, fmt: *const c_char, mut args
     let assigned = do_vsscanf(line.as_ptr(), pos, fmt, &mut args, &mut consumed);
 
     if start_pos >= 0 {
+        // Seekable: seek back to start + consumed, restore ungotten
         let file_consumed = consumed.saturating_sub(start_ungotten_count);
         let target = start_pos + file_consumed as i64;
         if let Some(sfunc) = sfunc {
@@ -7727,9 +7767,25 @@ pub unsafe extern "C" fn vfscanf(stream: *mut FILE, fmt: *const c_char, mut args
         }
         f.rpos = core::ptr::null_mut();
         f.rend = core::ptr::null_mut();
-        f._eof = 0;
+        if consumed < pos { f._eof = 0; }
         let remaining = start_ungotten_count.saturating_sub(consumed);
         f.ungotten_count = remaining as c_int;
+    } else {
+        // Non-seekable: push back unconsumed bytes into FILE read buffer
+        let unconsumed = pos.saturating_sub(consumed);
+        if unconsumed > 0 && !f.buf.is_null() {
+            let copy_count = core::cmp::min(unconsumed, f.buf_size);
+            core::ptr::copy(
+                line.as_ptr().add(consumed),
+                f.buf,
+                copy_count,
+            );
+            f.rpos = f.buf;
+            f.rend = f.buf.add(copy_count);
+        }
+        f.ungotten_count = 0;
+        f._eof = 0;
+        f.flags &= !F_EOF;
     }
     assigned
 }
