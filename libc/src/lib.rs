@@ -5310,6 +5310,9 @@ pub struct FILE {
     wpos: *mut u8,
     mustbezero_1: *mut u8,
     wbase: *mut u8,
+    read_fn: Option<unsafe extern "C" fn(*mut FILE, *mut u8, usize) -> usize>,
+    write_fn: Option<unsafe extern "C" fn(*mut FILE, *const u8, usize) -> usize>,
+    seek_fn: Option<unsafe extern "C" fn(*mut FILE, i64, c_int) -> i64>,
     buf: *mut u8,
     buf_size: usize,
     prev: *mut FILE,
@@ -5341,6 +5344,7 @@ static mut STDIN_FILE: FILE = FILE {
     flags: 0, rpos: core::ptr::null_mut(), rend: core::ptr::null_mut(),
     close: None, wend: core::ptr::null_mut(), wpos: core::ptr::null_mut(),
     mustbezero_1: core::ptr::null_mut(), wbase: core::ptr::null_mut(),
+    read_fn: None, write_fn: None, seek_fn: None,
     buf: core::ptr::null_mut(), buf_size: BUFSIZ,
     prev: core::ptr::null_mut(), next: core::ptr::null_mut(),
     fd: 0, pipe_pid: 0, lockcount: 0, mode: 0, lock: -1, lbf: -1,
@@ -5353,6 +5357,7 @@ static mut STDOUT_FILE: FILE = FILE {
     flags: F_NOWR as u32 + F_SVB as u32, rpos: core::ptr::null_mut(), rend: core::ptr::null_mut(),
     close: None, wend: core::ptr::null_mut(), wpos: core::ptr::null_mut(),
     mustbezero_1: core::ptr::null_mut(), wbase: core::ptr::null_mut(),
+    read_fn: None, write_fn: None, seek_fn: None,
     buf: core::ptr::null_mut(), buf_size: BUFSIZ,
     prev: core::ptr::null_mut(), next: core::ptr::null_mut(),
     fd: 1, pipe_pid: 0, lockcount: 0, mode: 0, lock: -1, lbf: -1,
@@ -5365,6 +5370,7 @@ static mut STDERR_FILE: FILE = FILE {
     flags: F_NOWR as u32, rpos: core::ptr::null_mut(), rend: core::ptr::null_mut(),
     close: None, wend: core::ptr::null_mut(), wpos: core::ptr::null_mut(),
     mustbezero_1: core::ptr::null_mut(), wbase: core::ptr::null_mut(),
+    read_fn: None, write_fn: None, seek_fn: None,
     buf: core::ptr::null_mut(), buf_size: BUFSIZ,
     prev: core::ptr::null_mut(), next: core::ptr::null_mut(),
     fd: 2, pipe_pid: 0, lockcount: 0, mode: 0, lock: -1, lbf: -1,
@@ -5388,15 +5394,72 @@ pub static mut stderr: *mut FILE = &raw mut STDERR_FILE as *mut FILE;
 unsafe fn __stdio_init() {
     STDIN_FILE.buf = core::ptr::addr_of_mut!(STDIN_BUF) as *mut u8;
     STDIN_FILE.buf_size = BUFSIZ;
+    STDIN_FILE.read_fn = Some(__stdio_read);
+    STDIN_FILE.write_fn = Some(__stdio_write);
+    STDIN_FILE.seek_fn = Some(__stdio_seek);
     STDOUT_FILE.buf = core::ptr::addr_of_mut!(STDOUT_BUF) as *mut u8;
     STDOUT_FILE.buf_size = BUFSIZ;
     STDOUT_FILE.lbf = b'\n' as c_int;
+    STDOUT_FILE.read_fn = Some(__stdio_read);
+    STDOUT_FILE.write_fn = Some(__stdio_write);
+    STDOUT_FILE.seek_fn = Some(__stdio_seek);
     STDERR_FILE.buf = core::ptr::addr_of_mut!(STDERR_BUF) as *mut u8;
     STDERR_FILE.buf_size = BUFSIZ;
+    STDERR_FILE.read_fn = Some(__stdio_read);
+    STDERR_FILE.write_fn = Some(__stdio_write);
+    STDERR_FILE.seek_fn = Some(__stdio_seek);
 }
 
 unsafe fn buf_ptr(f: *mut FILE) -> *mut u8 {
     (f as *mut u8).add(core::mem::size_of::<FILE>())
+}
+
+unsafe extern "C" fn __stdio_read(f: *mut FILE, buf: *mut u8, len: usize) -> usize {
+    let n = sys_read((*f).fd as i64, buf, len);
+    if n <= 0 {
+        if n == 0 { (*f).flags |= F_EOF; } else { (*f).flags |= F_ERR; (*f)._err = 1; }
+        return 0;
+    }
+    n as usize
+}
+
+unsafe extern "C" fn __stdio_write(f: *mut FILE, buf: *const u8, len: usize) -> usize {
+    let l = (*f).wpos as usize - (*f).wbase as usize;
+    let mut iov = [
+        ((*f).wbase as *const u8, l),
+        (buf, len),
+    ];
+    if iov[0].1 == 0 { iov = [iov[1], (core::ptr::null(), 0)]; }
+    if (*f).flags & F_APP != 0 {
+        let _ = sys_lseek((*f).fd as i64, 0, SEEK_END as i64);
+    }
+    let mut rem = iov[0].1 + iov[1].1;
+    let mut idx = 0usize;
+    while rem > 0 {
+        let ptr = iov[idx].0;
+        let cnt = iov[idx].1;
+        if cnt == 0 { idx += 1; continue; }
+        let n = sys_write((*f).fd as i64, ptr, cnt);
+        if n <= 0 {
+            (*f).wpos = core::ptr::null_mut();
+            (*f).wbase = core::ptr::null_mut();
+            (*f).wend = core::ptr::null_mut();
+            (*f).flags |= F_ERR;
+            return if iov[idx].0 == buf { 0 } else { len };
+        }
+        rem -= n as usize;
+        iov[idx].0 = iov[idx].0.add(n as usize);
+        iov[idx].1 -= n as usize;
+        if iov[idx].1 == 0 { idx += 1; }
+    }
+    (*f).wend = (*f).buf.add((*f).buf_size);
+    (*f).wbase = (*f).buf;
+    (*f).wpos = (*f).buf;
+    len
+}
+
+unsafe extern "C" fn __stdio_seek(f: *mut FILE, off: i64, whence: c_int) -> i64 {
+    sys_lseek((*f).fd as i64, off, whence as i64)
 }
 
 unsafe fn init_file(
@@ -5414,6 +5477,9 @@ unsafe fn init_file(
     (*f).lbf = -1;
     (*f).buf = buf_area;
     (*f).buf_size = buf_sz;
+    (*f).read_fn = Some(__stdio_read);
+    (*f).write_fn = Some(__stdio_write);
+    (*f).seek_fn = Some(__stdio_seek);
     let m = *mode;
     let has_plus = !strchr(mode as *const u8, b'+' as c_int).is_null();
     if m == b'r' as c_char && !has_plus {
@@ -5449,34 +5515,20 @@ unsafe fn fmodeflags(mode: *const c_char) -> c_int {
 const O_ACCMODE: c_int = O_RDONLY | O_WRONLY | O_RDWR;
 
 unsafe fn flush_buf(f: *mut FILE) -> c_int {
-    let base = (*f).wbase;
-    let len = (*f).wpos as usize - base as usize;
-    if len == 0 {
-        (*f).wend = (*f).buf.add((*f).buf_size);
-        (*f).wpos = (*f).wbase;
+    if (*f).wpos == (*f).wbase {
+        if !(*f).wpos.is_null() {
+            (*f).wend = (*f).buf.add((*f).buf_size);
+            (*f).wpos = (*f).wbase;
+        }
         return 0;
     }
-    (*f).wpos = (*f).wbase;
-    // Append streams must write at the current end of file.
-    if (*f).flags & F_APP != 0 {
-        let _ = sys_lseek((*f).fd as i64, 0, SEEK_END as i64);
+    if let Some(wfunc) = (*f).write_fn {
+        let ret = wfunc(f, core::ptr::null(), 0);
+        if ret == 0 && (*f).wpos.is_null() { return -1; }
+        return 0;
     }
-    let mut written = 0usize;
-    while written < len {
-        let n = sys_write((*f).fd as i64, base.add(written), len - written);
-        if n <= 0 {
-            (*f).flags |= F_ERR;
-            (*f)._err = 1;
-            (*f).wpos = core::ptr::null_mut();
-            (*f).wbase = core::ptr::null_mut();
-            (*f).wend = core::ptr::null_mut();
-            return -1;
-        }
-        written += n as usize;
-    }
-    (*f).wend = (*f).buf.add((*f).buf_size);
-    (*f).wpos = (*f).wbase;
-    0
+    (*f).flags |= F_ERR;
+    -1
 }
 
 // ============================================================
@@ -5681,8 +5733,13 @@ pub unsafe extern "C" fn fseeko(stream: *mut FILE, offset: i64, whence: c_int) -
     f.wpos = core::ptr::null_mut();
     f.wbase = core::ptr::null_mut();
     f.wend = core::ptr::null_mut();
-    let r = sys_lseek(f.fd as i64, adj_offset, whence as i64);
-    if r < 0 { ERRNO = (-r) as c_int; return -1; }
+    if let Some(sfunc) = f.seek_fn {
+        let r = sfunc(stream, adj_offset, whence);
+        if r < 0 { return -1; }
+    } else {
+        ERRNO = EINVAL;
+        return -1;
+    }
     f.rpos = core::ptr::null_mut();
     f.rend = core::ptr::null_mut();
     f._eof = 0;
@@ -5696,11 +5753,13 @@ pub unsafe extern "C" fn ftello(stream: *mut FILE) -> i64 {
     if f.flags & F_APP != 0 && !f.wpos.is_null() && f.wpos != f.wbase {
         if fflush(stream) != 0 { return -1; }
     }
-    let r = sys_lseek(f.fd as i64, 0, SEEK_CUR as i64);
-    if r < 0 { return -1; }
-    let mut pos = r;
+    let sfunc = match f.seek_fn { Some(s) => s, None => return -1 };
+    let pos = sfunc(stream, 0,
+        if (f.flags & F_APP) != 0 && !f.wpos.is_null() && f.wpos != f.wbase { SEEK_END } else { SEEK_CUR });
+    if pos < 0 { return -1; }
+    let mut pos = pos;
     if !f.rpos.is_null() {
-        pos -= f.rend as i64 - f.rpos as i64;
+        pos += f.rpos as i64 - f.rend as i64;
     } else if !f.wbase.is_null() {
         pos += f.wpos as i64 - f.wbase as i64;
     }
@@ -5736,17 +5795,18 @@ pub unsafe extern "C" fn fgetc(stream: *mut FILE) -> c_int {
         f.rpos = f.rpos.add(1);
         return c as c_int;
     }
-    if f._eof != 0 || f.fd < 0 {
-        f._eof = 1;
-        return -1;
-    }
-    let mut buf = [0u8; 1];
-    let n = sys_read(f.fd as i64, buf.as_mut_ptr(), 1);
-    if n <= 0 {
-        if n == 0 { f._eof = 1; } else { f._err = 1; }
-        -1
-    } else {
+    if f._eof != 0 { return -1; }
+    if let Some(rfunc) = f.read_fn {
+        let mut buf = [0u8; 1];
+        let n = rfunc(stream, buf.as_mut_ptr(), 1);
+        if n == 0 {
+            if f.flags & F_ERR != 0 { f._err = 1; } else { f._eof = 1; }
+            return -1;
+        }
         buf[0] as c_int
+    } else {
+        f._eof = 1;
+        -1
     }
 }
 
@@ -5865,8 +5925,11 @@ unsafe fn __overflow(f: *mut FILE, c: c_int) -> c_int {
     }
     if flush_buf(f) == -1 { return -1; }
     if (*f).wpos >= (*f).wend {
-        let byte = c as u8;
-        write_str((*f).fd, &byte as *const u8, 1);
+        if let Some(wfunc) = (*f).write_fn {
+            let byte = c as u8;
+            let ret = wfunc(f, &byte as *const u8, 1);
+            if ret == 0 { return -1; }
+        }
         return c;
     }
     *(*f).wpos = c as u8;
@@ -5918,14 +5981,11 @@ pub unsafe extern "C" fn fwrite(
     let total = size * nmemb;
     let f = &mut *stream;
     if f.buf_size == 0 {
-        let mut written = 0usize;
-        let src = ptr as *const u8;
-        while written < total {
-            let n = sys_write(f.fd as i64, src.add(written), total - written);
-            if n <= 0 { f._err = 1; break; }
-            written += n as usize;
+        if let Some(wfunc) = f.write_fn {
+            let ret = wfunc(stream, ptr as *const u8, total);
+            return ret / size;
         }
-        return written / size;
+        return 0;
     }
     if f.wpos.is_null() {
         f.wbase = f.buf;
@@ -7418,7 +7478,8 @@ pub unsafe extern "C" fn vsscanf(buf: *const c_char, fmt: *const c_char, mut arg
 pub unsafe extern "C" fn vfscanf(stream: *mut FILE, fmt: *const c_char, mut args: VaList) -> c_int {
     let f = &mut *stream;
     let start_ungotten_count = f.ungotten_count as usize;
-    let start_kernel_pos = sys_lseek(f.fd as i64, 0, SEEK_CUR as i64);
+    let sfunc = f.seek_fn;
+    let start_pos = sfunc.map(|s| s(stream, 0, SEEK_CUR)).unwrap_or(-1);
 
     let mut line = [0u8; 4096];
     let mut pos = 0usize;
@@ -7435,10 +7496,12 @@ pub unsafe extern "C" fn vfscanf(stream: *mut FILE, fmt: *const c_char, mut args
     let mut consumed = 0usize;
     let assigned = do_vsscanf(line.as_ptr(), pos, fmt, &mut args, &mut consumed);
 
-    if start_kernel_pos >= 0 {
+    if start_pos >= 0 {
         let file_consumed = consumed.saturating_sub(start_ungotten_count);
-        let target = start_kernel_pos + file_consumed as i64;
-        sys_lseek(f.fd as i64, target, SEEK_SET as i64);
+        let target = start_pos + file_consumed as i64;
+        if let Some(sfunc) = sfunc {
+            sfunc(stream, target, SEEK_SET);
+        }
         f.rpos = core::ptr::null_mut();
         f.rend = core::ptr::null_mut();
         f._eof = 0;
@@ -9719,207 +9782,339 @@ fn week_num(tm: &tm) -> i32 {
     val
 }
 
-fn fmt_i32(buf: &mut [u8; 32], val: i32, width: usize) -> usize {
-    let mut tmp = [0u8; 12];
-    let mut v = if val < 0 { -val } else { val } as u32;
-    let mut pos = 12;
+// Langinfo constants for strftime
+const ABDAY_1: c_int = 0x20000;
+const DAY_1: c_int = 0x20007;
+const ABMON_1: c_int = 0x2000E;
+const MON_1: c_int = 0x2001A;
+const AM_STR_LI: c_int = 0x20026;
+const PM_STR_LI: c_int = 0x20027;
+const D_T_FMT: c_int = 0x20028;
+const D_FMT: c_int = 0x20029;
+const T_FMT: c_int = 0x2002A;
+const T_FMT_AMPM: c_int = 0x2002B;
+
+// Format an i64 into buf as decimal with zero/sign padding. Returns (ptr_to_start, length).
+// pad: '-' = no pad, '_' = space pad, '0' or 0 = zero pad. width: minimum digits (excluding sign).
+unsafe fn num_fmt(buf: &mut [u8; 100], val: i64, pad: u8, width: usize) -> (*const u8, usize) {
+    let negative = val < 0;
+    let mut v = if negative { -val as u64 } else { val as u64 };
+    let mut tmp = [0u8; 24];
+    let mut pos = 24usize;
     if v == 0 { pos -= 1; tmp[pos] = b'0'; }
     while v > 0 { pos -= 1; tmp[pos] = b'0' + (v % 10) as u8; v /= 10; }
-    let digits = 12 - pos;
-    let fill = if width > digits { width - digits } else { 0 };
-    let mut p = 0;
-    for _ in 0..fill { buf[p] = b'0'; p += 1; }
+    let digits = 24 - pos;
+    let sign_chars = if negative { 1 } else { 0 };
+    let needed = sign_chars + digits;
+    let fill = if width > needed { width - needed } else { 0 };
+    let total = fill + needed;
+    let mut p = 0usize;
+    match pad {
+        b'-' => { /* no fill */ }
+        b'_' => {
+            for _ in 0..fill { buf[p] = b' '; p += 1; }
+            if negative { buf[p] = b'-'; p += 1; }
+        }
+        _ => {
+            if negative { buf[p] = b'-'; p += 1; }
+            for _ in 0..fill { buf[p] = b'0'; p += 1; }
+        }
+    }
     for i in 0..digits { buf[p] = tmp[pos + i]; p += 1; }
-    p
+    (buf.as_ptr(), total)
 }
 
-fn fmt_i32_inline(buf: &mut [u8; 32], start: usize, val: i32, width: usize) -> usize {
-    let mut tmp = [0u8; 12];
-    let mut v = if val < 0 { -val } else { val } as u32;
-    let mut pos = 12;
-    if v == 0 { pos -= 1; tmp[pos] = b'0'; }
-    while v > 0 { pos -= 1; tmp[pos] = b'0' + (v % 10) as u8; v /= 10; }
-    let digits = 12 - pos;
-    let fill = if width > digits { width - digits } else { 0 };
-    let mut p = start;
-    for _ in 0..fill { buf[p] = b'0'; p += 1; }
-    for i in 0..digits { buf[p] = tmp[pos + i]; p += 1; }
-    p - start
+// Copy a null-terminated C string into buf. Returns (ptr, len).
+unsafe fn str_to_buf(buf: &mut [u8; 100], s: *const c_char) -> (*const u8, usize) {
+    let mut k = 0usize;
+    while *s.add(k) != 0 {
+        buf[k] = *s.add(k) as u8;
+        k += 1;
+    }
+    (buf.as_ptr(), k)
 }
 
-fn fmt_i32_wide(buf: &mut [u8; 32], val: i32) -> usize {
-    let mut tmp = [0u8; 12];
-    let mut v = val;
-    let mut pos = 12;
-    if v < 0 { v = -v; }
-    if v == 0 { pos -= 1; tmp[pos] = b'0'; }
-    while v > 0 { pos -= 1; tmp[pos] = b'0' + (v % 10) as u8; v /= 10; }
-    let mut p = 0;
-    if val < 0 { buf[0] = b'-'; p = 1; }
-    for i in 0..(12 - pos) { buf[p] = tmp[pos + i]; p += 1; }
-    p
+// Core format dispatcher. Returns (ptr, len) where ptr points into buf or a static string.
+// pad=0 means use default; returns (null, 0) for unknown specifiers.
+unsafe fn __strftime_fmt_1(buf: &mut [u8; 100], f: u8, tm: *const tm, pad: u8) -> (*const u8, usize) {
+    let mut val: i64;
+    let mut width: usize = 2;
+    let mut def_pad: u8 = b'0';
+    let fmt: *const c_char;
+
+    match f {
+        b'a' => {
+            if (*tm).tm_wday as u32 > 6 { return (b"\0".as_ptr(), 0); }
+            let p = nl_langinfo(ABDAY_1 + (*tm).tm_wday);
+            return str_to_buf(buf, p);
+        }
+        b'A' => {
+            if (*tm).tm_wday as u32 > 6 { return (b"\0".as_ptr(), 0); }
+            let p = nl_langinfo(DAY_1 + (*tm).tm_wday);
+            return str_to_buf(buf, p);
+        }
+        b'h' | b'b' => {
+            if (*tm).tm_mon as u32 > 11 { return (b"\0".as_ptr(), 0); }
+            let p = nl_langinfo(ABMON_1 + (*tm).tm_mon);
+            return str_to_buf(buf, p);
+        }
+        b'B' => {
+            if (*tm).tm_mon as u32 > 11 { return (b"\0".as_ptr(), 0); }
+            let p = nl_langinfo(MON_1 + (*tm).tm_mon);
+            return str_to_buf(buf, p);
+        }
+        b'c' => {
+            let p = nl_langinfo(D_T_FMT);
+            let l = __strftime_l(buf.as_mut_ptr() as *mut c_char, 100, p, tm);
+            return (buf.as_ptr(), l);
+        }
+        b'C' => {
+            val = (1900i64 + (*tm).tm_year as i64) / 100;
+            return num_fmt(buf, val, if pad != 0 { pad } else { def_pad }, width);
+        }
+        b'e' => { def_pad = b'_'; }
+        b'd' => {
+            val = (*tm).tm_mday as i64;
+            return num_fmt(buf, val, if pad != 0 { pad } else { def_pad }, width);
+        }
+        b'D' => {
+            fmt = b"%m/%d/%y\0".as_ptr() as *const c_char;
+            let l = __strftime_l(buf.as_mut_ptr() as *mut c_char, 100, fmt, tm);
+            return (buf.as_ptr(), l);
+        }
+        b'F' => {
+            fmt = b"%Y-%m-%d\0".as_ptr() as *const c_char;
+            let l = __strftime_l(buf.as_mut_ptr() as *mut c_char, 100, fmt, tm);
+            return (buf.as_ptr(), l);
+        }
+        b'g' | b'G' => {
+            val = (*tm).tm_year as i64 + 1900;
+            if (*tm).tm_yday < 3 && week_num(&*tm) != 1 { val -= 1; }
+            else if (*tm).tm_yday > 360 && week_num(&*tm) == 1 { val += 1; }
+            if f == b'g' { val %= 100; }
+            else { width = 4; }
+            return num_fmt(buf, val, if pad != 0 { pad } else { def_pad }, width);
+        }
+        b'H' => {
+            val = (*tm).tm_hour as i64;
+            return num_fmt(buf, val, if pad != 0 { pad } else { def_pad }, width);
+        }
+        b'I' => {
+            val = (*tm).tm_hour as i64;
+            if val == 0 { val = 12; }
+            else if val > 12 { val -= 12; }
+            return num_fmt(buf, val, if pad != 0 { pad } else { def_pad }, width);
+        }
+        b'j' => {
+            val = (*tm).tm_yday as i64 + 1;
+            width = 3;
+            return num_fmt(buf, val, if pad != 0 { pad } else { def_pad }, width);
+        }
+        b'm' => {
+            val = (*tm).tm_mon as i64 + 1;
+            return num_fmt(buf, val, if pad != 0 { pad } else { def_pad }, width);
+        }
+        b'M' => {
+            val = (*tm).tm_min as i64;
+            return num_fmt(buf, val, if pad != 0 { pad } else { def_pad }, width);
+        }
+        b'n' => { buf[0] = b'\n'; return (buf.as_ptr(), 1); }
+        b'p' => {
+            let p = if (*tm).tm_hour >= 12 { nl_langinfo(PM_STR_LI) } else { nl_langinfo(AM_STR_LI) };
+            return str_to_buf(buf, p);
+        }
+        b'r' => {
+            let p = nl_langinfo(T_FMT_AMPM);
+            let l = __strftime_l(buf.as_mut_ptr() as *mut c_char, 100, p, tm);
+            return (buf.as_ptr(), l);
+        }
+        b'R' => {
+            fmt = b"%H:%M\0".as_ptr() as *const c_char;
+            let l = __strftime_l(buf.as_mut_ptr() as *mut c_char, 100, fmt, tm);
+            return (buf.as_ptr(), l);
+        }
+        b's' => {
+            val = tm_to_secs(tm) - (*tm).tm_gmtoff as i64;
+            width = 1;
+            return num_fmt(buf, val, if pad != 0 { pad } else { def_pad }, width);
+        }
+        b'S' => {
+            val = (*tm).tm_sec as i64;
+            return num_fmt(buf, val, if pad != 0 { pad } else { def_pad }, width);
+        }
+        b't' => { buf[0] = b'\t'; return (buf.as_ptr(), 1); }
+        b'T' => {
+            fmt = b"%H:%M:%S\0".as_ptr() as *const c_char;
+            let l = __strftime_l(buf.as_mut_ptr() as *mut c_char, 100, fmt, tm);
+            return (buf.as_ptr(), l);
+        }
+        b'u' => {
+            val = if (*tm).tm_wday != 0 { (*tm).tm_wday as i64 } else { 7 };
+            width = 1;
+            return num_fmt(buf, val, if pad != 0 { pad } else { def_pad }, width);
+        }
+        b'U' => {
+            val = ((*tm).tm_yday as u64 + 7 - (*tm).tm_wday as u64) as i64 / 7;
+            return num_fmt(buf, val, if pad != 0 { pad } else { def_pad }, width);
+        }
+        b'W' => {
+            val = ((*tm).tm_yday as u64 + 7 - ((*tm).tm_wday as u64 + 6) % 7) as i64 / 7;
+            return num_fmt(buf, val, if pad != 0 { pad } else { def_pad }, width);
+        }
+        b'V' => {
+            val = week_num(&*tm) as i64;
+            return num_fmt(buf, val, if pad != 0 { pad } else { def_pad }, width);
+        }
+        b'w' => {
+            val = (*tm).tm_wday as i64;
+            width = 1;
+            return num_fmt(buf, val, if pad != 0 { pad } else { def_pad }, width);
+        }
+        b'x' => {
+            let p = nl_langinfo(D_FMT);
+            let l = __strftime_l(buf.as_mut_ptr() as *mut c_char, 100, p, tm);
+            return (buf.as_ptr(), l);
+        }
+        b'X' => {
+            let p = nl_langinfo(T_FMT);
+            let l = __strftime_l(buf.as_mut_ptr() as *mut c_char, 100, p, tm);
+            return (buf.as_ptr(), l);
+        }
+        b'y' => {
+            val = (1900i64 + (*tm).tm_year as i64) % 100;
+            if val < 0 { val = -val; }
+            return num_fmt(buf, val, if pad != 0 { pad } else { def_pad }, width);
+        }
+        b'Y' => {
+            val = (*tm).tm_year as i64 + 1900;
+            if val >= 10000 {
+                let mut tmp = [0u8; 100];
+                let (_, k) = num_fmt(&mut tmp, val, b'-', 1);
+                buf[0] = b'+';
+                for i in 0..k { buf[1 + i] = tmp[i]; }
+                return (buf.as_ptr(), 1 + k);
+            }
+            width = 4;
+            return num_fmt(buf, val, if pad != 0 { pad } else { def_pad }, width);
+        }
+        b'z' => {
+            if (*tm).tm_isdst < 0 { return (b"\0".as_ptr(), 0); }
+            let gmtoff = (*tm).tm_gmtoff as i64;
+            let sign = if gmtoff >= 0 { b'+' } else { b'-' };
+            let off = if gmtoff < 0 { -gmtoff } else { gmtoff };
+            let hh = (off / 3600) as i32;
+            let mm = ((off % 3600) / 60) as i32;
+            buf[0] = sign;
+            buf[1] = b'0' + (hh / 10) as u8;
+            buf[2] = b'0' + (hh % 10) as u8;
+            buf[3] = b'0' + (mm / 10) as u8;
+            buf[4] = b'0' + (mm % 10) as u8;
+            return (buf.as_ptr(), 5);
+        }
+        b'Z' => {
+            if (*tm).tm_isdst < 0 || (*tm).tm_zone.is_null() { return (b"\0".as_ptr(), 0); }
+            return str_to_buf(buf, (*tm).tm_zone);
+        }
+        b'%' => { buf[0] = b'%'; return (buf.as_ptr(), 1); }
+        _ => { return (core::ptr::null(), 0); }
+    }
+    // fallthrough for 'e' (def_pad='_', same logic as 'd')
+    val = (*tm).tm_mday as i64;
+    num_fmt(buf, val, if pad != 0 { pad } else { def_pad }, width)
 }
 
-fn fmt_hhmmss(buf: &mut [u8; 32], h: i32, m: i32, s: i32) -> usize {
-    let mut p = fmt_i32(buf, h, 2);
-    buf[p] = b':'; p += 1;
-    p += fmt_i32_inline(buf, p, m, 2);
-    buf[p] = b':'; p += 1;
-    p += fmt_i32_inline(buf, p, s, 2);
-    p
-}
-
-fn fmt_hhmm(buf: &mut [u8; 32], h: i32, m: i32) -> usize {
-    let mut p = fmt_i32(buf, h, 2);
-    buf[p] = b':'; p += 1;
-    p += fmt_i32_inline(buf, p, m, 2);
-    p
-}
-
-fn fmt_date_slash(buf: &mut [u8; 32], m: i32, d: i32, y: i32) -> usize {
-    let mut p = fmt_i32(buf, m, 2);
-    buf[p] = b'/'; p += 1;
-    p += fmt_i32_inline(buf, p, d, 2);
-    buf[p] = b'/'; p += 1;
-    p += fmt_i32_inline(buf, p, if y < 0 { -y } else { y }, 2);
-    p
-}
-
-fn fmt_iso_date(buf: &mut [u8; 32], year: i32, m: i32, d: i32) -> usize {
-    let mut p = fmt_i32_wide(buf, year);
-    buf[p] = b'-'; p += 1;
-    p += fmt_i32_inline(buf, p, m, 2);
-    buf[p] = b'-'; p += 1;
-    p += fmt_i32_inline(buf, p, d, 2);
-    p
-}
-
-fn fmt_12h_time(buf: &mut [u8; 32], h: i32, m: i32, s: i32) -> usize {
-    let h12 = if h == 0 { 12 } else if h > 12 { h - 12 } else { h };
-    let ampm: &[u8] = if h >= 12 { b"PM" } else { b"AM" };
-    let mut p = fmt_i32(buf, h12, 2);
-    buf[p] = b':'; p += 1;
-    p += fmt_i32_inline(buf, p, m, 2);
-    buf[p] = b':'; p += 1;
-    p += fmt_i32_inline(buf, p, s, 2);
-    buf[p] = b' '; p += 1;
-    buf[p] = ampm[0]; buf[p + 1] = ampm[1]; p += 2;
-    p
-}
-
-fn fmt_tz_offset(buf: &mut [u8; 32], gmtoff: i64) -> usize {
-    let sign = if gmtoff >= 0 { b'+' } else { b'-' };
-    let mut off = if gmtoff < 0 { -gmtoff } else { gmtoff };
-    let hh = (off / 3600) as i32;
-    off %= 3600;
-    let mm = (off / 60) as i32;
-    buf[0] = sign;
-    let mut p = 1;
-    p += fmt_i32_inline(buf, p, hh, 2);
-    p += fmt_i32_inline(buf, p, mm, 2);
-    p
+unsafe fn __strftime_l(s: *mut c_char, n: usize, f: *const c_char, tm: *const tm) -> usize {
+    let mut l: usize = 0;
+    let mut fi: usize = 0;
+    while l < n {
+        let ch = *f.add(fi) as u8;
+        if ch == 0 {
+            *s.add(l) = 0;
+            return l;
+        }
+        if ch != b'%' {
+            *s.add(l) = ch as c_char;
+            l += 1;
+            fi += 1;
+            continue;
+        }
+        fi += 1;
+        // Parse flags
+        let mut pad: u8 = 0;
+        let fc = *f.add(fi) as u8;
+        if fc == b'-' || fc == b'_' || fc == b'0' { pad = fc; fi += 1; }
+        let plus = *f.add(fi) as u8 == b'+';
+        if plus { fi += 1; }
+        // Parse width
+        let mut width: usize = 0;
+        let mut p_idx = fi;
+        {
+            let fc2 = *f.add(fi) as u8;
+            if fc2 >= b'0' && fc2 <= b'9' {
+                let mut w: usize = 0;
+                while { let c = *f.add(p_idx) as u8; c >= b'0' && c <= b'9' } {
+                    w = w * 10 + (*f.add(p_idx) as usize - b'0' as usize);
+                    p_idx += 1;
+                }
+                width = w;
+            }
+        }
+        let spec_ch = *f.add(p_idx) as u8;
+        if spec_ch == b'C' || spec_ch == b'F' || spec_ch == b'G' || spec_ch == b'Y' {
+            if width == 0 && p_idx != fi { width = 1; }
+        } else {
+            width = 0;
+        }
+        fi = p_idx;
+        // Skip E/O modifier
+        let fc3 = *f.add(fi) as u8;
+        if fc3 == b'E' || fc3 == b'O' { fi += 1; }
+        let fch = *f.add(fi) as u8;
+        // Call formatter
+        let mut buf = [0u8; 100];
+        let (t, k) = __strftime_fmt_1(&mut buf, fch, tm, pad);
+        if t.is_null() { break; }
+        let mut k = k;
+        let mut t = t;
+        if width != 0 {
+            // Strip sign and leading zeros, count remaining digits
+            if *t == b'+' || *t == b'-' { t = t.add(1); k -= 1; }
+            while k > 0 && *t == b'0' && k > 1 && *t.add(1) >= b'0' && *t.add(1) <= b'9' {
+                t = t.add(1); k -= 1;
+            }
+            if width < k { width = k; }
+            let mut d: usize = 0;
+            while d < k && *t.add(d) >= b'0' && *t.add(d) <= b'9' { d += 1; }
+            if (*tm).tm_year < -1900 {
+                if l < n { *s.add(l) = b'-' as c_char; }
+                l += 1;
+                width -= 1;
+            } else if plus && d + (width - k) >= (if spec_ch == b'C' { 3 } else { 5 }) {
+                if l < n { *s.add(l) = b'+' as c_char; }
+                l += 1;
+                width -= 1;
+            }
+            while width > k && l < n {
+                *s.add(l) = b'0' as c_char;
+                l += 1;
+                width -= 1;
+            }
+        }
+        let copy = if k > n - l { n - l } else { k };
+        core::ptr::copy_nonoverlapping(t, s.add(l) as *mut u8, copy);
+        l += copy;
+        fi += 1;
+    }
+    if n > 0 {
+        if l == n { l = n - 1; }
+        *s.add(l) = 0;
+    }
+    0
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn strftime(s: *mut c_char, maxsize: usize, fmt: *const c_char, tm: *const tm) -> usize {
-    let mut pos = 0usize;
-    let mut fi = 0usize;
-    let limit = if maxsize > 0 { maxsize - 1 } else { 0 };
-    loop {
-        let fc = *fmt.add(fi) as u8;
-        if fc == 0 { break; }
-        if fc != b'%' {
-            if pos < limit { *s.add(pos) = fc as c_char; }
-            pos += 1; fi += 1; continue;
-        }
-        fi += 1;
-        let spec = *fmt.add(fi) as u8;
-        let mut tmp = [0u8; 32];
-        let tlen;
-        match spec {
-            b'a' => {
-                let d = (*tm).tm_wday;
-                let names: [&[u8]; 7] = [b"Sun", b"Mon", b"Tue", b"Wed", b"Thu", b"Fri", b"Sat"];
-                let name = if d >= 0 && d < 7 { names[d as usize] } else { b"???" };
-                tlen = 3; for k in 0..3 { tmp[k] = name[k]; }
-            }
-            b'A' => {
-                let d = (*tm).tm_wday;
-                let names: [&[u8]; 7] = [b"Sunday", b"Monday", b"Tuesday", b"Wednesday", b"Thursday", b"Friday", b"Saturday"];
-                let name = if d >= 0 && d < 7 { names[d as usize] } else { b"???" };
-                tlen = name.len(); for k in 0..tlen { tmp[k] = name[k]; }
-            }
-            b'b' | b'h' => {
-                let m = (*tm).tm_mon;
-                let names: [&[u8]; 12] = [b"Jan", b"Feb", b"Mar", b"Apr", b"May", b"Jun", b"Jul", b"Aug", b"Sep", b"Oct", b"Nov", b"Dec"];
-                let name = if m >= 0 && m < 12 { names[m as usize] } else { b"???" };
-                tlen = 3; for k in 0..3 { tmp[k] = name[k]; }
-            }
-            b'B' => {
-                let m = (*tm).tm_mon;
-                let names: [&[u8]; 12] = [b"January", b"February", b"March", b"April", b"May", b"June", b"July", b"August", b"September", b"October", b"November", b"December"];
-                let name = if m >= 0 && m < 12 { names[m as usize] } else { b"???" };
-                tlen = name.len(); for k in 0..tlen { tmp[k] = name[k]; }
-            }
-            b'C' => { tlen = fmt_i32(&mut tmp, ((*tm).tm_year + 1900) / 100, 2); }
-            b'd' => { tlen = fmt_i32(&mut tmp, (*tm).tm_mday, 2); }
-            b'e' => { let v = (*tm).tm_mday; if v < 10 { tmp[0] = b' '; tmp[1] = b'0' + v as u8; tlen = 2; } else { tlen = fmt_i32(&mut tmp, v, 2); } }
-            b'D' => { tlen = fmt_date_slash(&mut tmp, (*tm).tm_mon + 1, (*tm).tm_mday, (*tm).tm_year % 100); }
-            b'F' => { tlen = fmt_iso_date(&mut tmp, (*tm).tm_year + 1900, (*tm).tm_mon + 1, (*tm).tm_mday); }
-            b'H' => { tlen = fmt_i32(&mut tmp, (*tm).tm_hour, 2); }
-            b'I' => { let h = (*tm).tm_hour; let v = if h == 0 { 12 } else if h > 12 { h - 12 } else { h }; tlen = fmt_i32(&mut tmp, v, 2); }
-            b'j' => { tlen = fmt_i32(&mut tmp, (*tm).tm_yday + 1, 3); }
-            b'm' => { tlen = fmt_i32(&mut tmp, (*tm).tm_mon + 1, 2); }
-            b'M' => { tlen = fmt_i32(&mut tmp, (*tm).tm_min, 2); }
-            b'n' => { if pos < limit { *s.add(pos) = b'\n' as c_char; } pos += 1; fi += 1; continue; }
-            b'p' => { let ampm: &[u8] = if (*tm).tm_hour >= 12 { b"PM" } else { b"AM" }; tlen = 2; tmp[0] = ampm[0]; tmp[1] = ampm[1]; }
-            b'r' => { tlen = fmt_12h_time(&mut tmp, (*tm).tm_hour, (*tm).tm_min, (*tm).tm_sec); }
-            b'R' => { tlen = fmt_hhmm(&mut tmp, (*tm).tm_hour, (*tm).tm_min); }
-            b'S' => { tlen = fmt_i32(&mut tmp, (*tm).tm_sec, 2); }
-            b't' => { if pos < limit { *s.add(pos) = b'\t' as c_char; } pos += 1; fi += 1; continue; }
-            b'T' => { tlen = fmt_hhmmss(&mut tmp, (*tm).tm_hour, (*tm).tm_min, (*tm).tm_sec); }
-            b'u' => { let v = if (*tm).tm_wday == 0 { 7 } else { (*tm).tm_wday }; tmp[0] = b'0' + v as u8; tlen = 1; }
-            b'U' => { let v = ((*tm).tm_yday + 7 - (*tm).tm_wday) / 7; tlen = fmt_i32(&mut tmp, v, 2); }
-            b'W' => { let v = ((*tm).tm_yday + 7 - ((*tm).tm_wday + 6) % 7) / 7; tlen = fmt_i32(&mut tmp, v, 2); }
-            b'V' => { tlen = fmt_i32(&mut tmp, week_num(&*tm), 2); }
-            b'w' => { tmp[0] = b'0' + (*tm).tm_wday as u8; tlen = 1; }
-            b'x' => { tlen = fmt_date_slash(&mut tmp, (*tm).tm_mon + 1, (*tm).tm_mday, (*tm).tm_year % 100); }
-            b'X' => { tlen = fmt_hhmmss(&mut tmp, (*tm).tm_hour, (*tm).tm_min, (*tm).tm_sec); }
-            b'y' => { let v = ((*tm).tm_year + 1900) % 100; tlen = fmt_i32(&mut tmp, if v < 0 { -v } else { v }, 2); }
-            b'Y' => { tlen = fmt_i32_wide(&mut tmp, (*tm).tm_year + 1900); }
-            b'z' => { tlen = fmt_tz_offset(&mut tmp, (*tm).tm_gmtoff); }
-            b'Z' => {
-                if (*tm).tm_zone.is_null() { tlen = 0; }
-                else {
-                    let mut k = 0;
-                    while *(*tm).tm_zone.add(k) != 0 { tmp[k] = *(*tm).tm_zone.add(k) as u8; k += 1; }
-                    tlen = k;
-                }
-            }
-            b'%' => { tmp[0] = b'%'; tlen = 1; }
-            b'E' | b'O' => {
-                fi += 1;
-                let sub = *fmt.add(fi) as u8;
-                match sub {
-                    b'Y' => { tlen = fmt_i32_wide(&mut tmp, (*tm).tm_year + 1900); }
-                    b'y' => { let v = ((*tm).tm_year + 1900) % 100; tlen = fmt_i32(&mut tmp, if v < 0 { -v } else { v }, 2); }
-                    b'd' => { tlen = fmt_i32(&mut tmp, (*tm).tm_mday, 2); }
-                    b'H' => { tlen = fmt_i32(&mut tmp, (*tm).tm_hour, 2); }
-                    b'M' => { tlen = fmt_i32(&mut tmp, (*tm).tm_min, 2); }
-                    b'S' => { tlen = fmt_i32(&mut tmp, (*tm).tm_sec, 2); }
-                    _ => { tmp[0] = b'%'; tmp[1] = spec; tmp[2] = sub; tlen = 3; }
-                }
-            }
-            _ => { tmp[0] = b'%'; tmp[1] = spec; tlen = 2; }
-        }
-        for k in 0..tlen {
-            if pos < limit { *s.add(pos) = tmp[k] as c_char; }
-            pos += 1;
-        }
-        fi += 1;
-    }
-    if maxsize > 0 { let null_pos = if pos < limit { pos } else { limit }; *s.add(null_pos) = 0; }
-    pos
+    __strftime_l(s, maxsize, fmt, tm)
 }
 
 // ============================================================
@@ -11926,20 +12121,63 @@ pub unsafe extern "C" fn atof(s: *const c_char) -> f64 {
 // ============================================================
 
 #[repr(C)]
-struct MemStreamState {
+struct MsCookie {
+    bufp: *mut *mut c_char,
+    sizep: *mut usize,
+    pos: usize,
+    len: usize,
     buf: *mut u8,
-    size: usize,       // current content length
-    cap: usize,        // allocated capacity
-    sizep: *mut usize, // pointer to size (for open_memstream)
-    bufp: *mut *mut c_char, // pointer to buffer
+    space: usize,
 }
 
-unsafe extern "C" fn memstream_write(_f: *mut FILE) -> c_int {
-    // no-op for memstream - writes go directly to buffer
-    0
+#[repr(C)]
+struct MfCookie {
+    pos: usize,
+    len: usize,
+    size: usize,
+    buf: *mut u8,
+    mode: c_char,
 }
 
-unsafe extern "C" fn memstream_close(_f: *mut FILE) -> c_int {
+unsafe extern "C" fn ms_seek(f: *mut FILE, off: i64, whence: c_int) -> i64 {
+    let c = (*f).cookie as *mut MsCookie;
+    if whence < 0 || whence > 2 { ERRNO = EINVAL; return -1; }
+    let base: i64 = match whence {
+        0 => 0,
+        1 => (*c).pos as i64,
+        2 => (*c).len as i64,
+        _ => { ERRNO = EINVAL; return -1; }
+    };
+    if off < -base || off > isize::MAX as i64 - base { ERRNO = EINVAL; return -1; }
+    (*c).pos = (base + off) as usize;
+    (*c).pos as i64
+}
+
+unsafe extern "C" fn ms_write(f: *mut FILE, buf: *const u8, len: usize) -> usize {
+    let c = (*f).cookie as *mut MsCookie;
+    let buffered = (*f).wpos as usize - (*f).wbase as usize;
+    if buffered > 0 {
+        (*f).wpos = (*f).wbase;
+        if ms_write(f, (*f).wbase, buffered) < buffered { return 0; }
+    }
+    if len == 0 { return 0; }
+    if (*c).pos + len >= (*c).space {
+        let new_space = 2 * (*c).space + 1 | (*c).pos + len + 1;
+        let newbuf = realloc((*c).buf as *mut c_void, new_space) as *mut u8;
+        if newbuf.is_null() { return 0; }
+        *(*c).bufp = newbuf as *mut c_char;
+        core::ptr::write_bytes(newbuf.add((*c).space), 0, new_space - (*c).space);
+        (*c).buf = newbuf;
+        (*c).space = new_space;
+    }
+    core::ptr::copy_nonoverlapping(buf, (*c).buf.add((*c).pos), len);
+    (*c).pos += len;
+    if (*c).pos >= (*c).len { (*c).len = (*c).pos; }
+    *(*c).sizep = (*c).pos;
+    len
+}
+
+unsafe extern "C" fn ms_close(_f: *mut FILE) -> c_int {
     0
 }
 
@@ -11948,48 +12186,126 @@ pub unsafe extern "C" fn open_memstream(bufp: *mut *mut c_char, sizep: *mut usiz
     if bufp.is_null() || sizep.is_null() { ERRNO = EINVAL; return core::ptr::null_mut(); }
     let f = calloc(1, core::mem::size_of::<FILE>() + UNGET + BUFSIZ) as *mut FILE;
     if f.is_null() { ERRNO = ENOMEM; return core::ptr::null_mut(); }
-    let buf = buf_ptr(f);
-    init_file(f, -1, b"w\0".as_ptr() as *const c_char, Some(memstream_close), buf, BUFSIZ);
-    (*f).flags |= F_SVB;
-    // store memstream state in the FILE struct
-    let state = calloc(1, core::mem::size_of::<MemStreamState>()) as *mut MemStreamState;
-    if state.is_null() { free(f as *mut c_void); ERRNO = ENOMEM; return core::ptr::null_mut(); }
-    (*state).buf = core::ptr::null_mut();
-    (*state).size = 0;
-    (*state).cap = 0;
-    (*state).sizep = sizep;
-    (*state).bufp = bufp;
-    (*f).cookie = state as *mut c_void;
-    // set initial output pointers
+    let buf_area = buf_ptr(f);
+    init_file(f, -1, b"w\0".as_ptr() as *const c_char, Some(ms_close), buf_area, BUFSIZ);
+    (*f).flags = F_NORD | F_SVB;
+    (*f).lbf = -1;
+    let c = calloc(1, core::mem::size_of::<MsCookie>()) as *mut MsCookie;
+    if c.is_null() { free(f as *mut c_void); ERRNO = ENOMEM; return core::ptr::null_mut(); }
+    (*c).bufp = bufp;
+    (*c).sizep = sizep;
+    (*c).pos = 0;
+    (*c).len = 0;
+    (*c).buf = core::ptr::null_mut();
+    (*c).space = 0;
+    (*f).cookie = c as *mut c_void;
+    (*f).write_fn = Some(ms_write);
+    (*f).seek_fn = Some(ms_seek);
     *bufp = core::ptr::null_mut();
     *sizep = 0;
     f
 }
 
+unsafe extern "C" fn mseek(f: *mut FILE, off: i64, whence: c_int) -> i64 {
+    let c = (*f).cookie as *mut MfCookie;
+    if whence < 0 || whence > 2 { ERRNO = EINVAL; return -1; }
+    let base: i64 = match whence {
+        0 => 0,
+        1 => (*c).pos as i64,
+        2 => (*c).len as i64,
+        _ => { ERRNO = EINVAL; return -1; }
+    };
+    if off < -base || off > (*c).size as i64 - base { ERRNO = EINVAL; return -1; }
+    (*c).pos = (base + off) as usize;
+    (*c).pos as i64
+}
+
+unsafe extern "C" fn mread(f: *mut FILE, buf: *mut u8, len: usize) -> usize {
+    let c = (*f).cookie as *mut MfCookie;
+    let mut rem = if (*c).pos <= (*c).len { (*c).len - (*c).pos } else { 0 };
+    let mut l = len;
+    if l > rem {
+        l = rem;
+        (*f).flags |= F_EOF;
+    }
+    core::ptr::copy_nonoverlapping((*c).buf.add((*c).pos), buf, l);
+    (*c).pos += l;
+    rem -= l;
+    if rem > (*f).buf_size { rem = (*f).buf_size; }
+    (*f).rpos = (*f).buf;
+    (*f).rend = (*f).buf.add(rem);
+    core::ptr::copy_nonoverlapping((*c).buf.add((*c).pos), (*f).rpos, rem);
+    (*c).pos += rem;
+    l
+}
+
+unsafe extern "C" fn mwrite(f: *mut FILE, buf: *const u8, len: usize) -> usize {
+    let c = (*f).cookie as *mut MfCookie;
+    let buffered = (*f).wpos as usize - (*f).wbase as usize;
+    if buffered > 0 {
+        (*f).wpos = (*f).wbase;
+        if mwrite(f, (*f).wbase, buffered) < buffered { return 0; }
+    }
+    if len == 0 { return 0; }
+    if (*c).mode == b'a' as c_char { (*c).pos = (*c).len; }
+    let rem = (*c).size - (*c).pos;
+    let mut l = len;
+    if l > rem { l = rem; }
+    core::ptr::copy_nonoverlapping(buf, (*c).buf.add((*c).pos), l);
+    (*c).pos += l;
+    if (*c).pos > (*c).len {
+        (*c).len = (*c).pos;
+        if (*c).len < (*c).size {
+            *(*c).buf.add((*c).len) = 0;
+        } else if ((*f).flags & F_NORD) != 0 && (*c).size > 0 {
+            *(*c).buf.add((*c).size - 1) = 0;
+        }
+    }
+    l
+}
+
+unsafe extern "C" fn mclose(_f: *mut FILE) -> c_int {
+    0
+}
+
 #[no_mangle]
 pub unsafe extern "C" fn fmemopen(buf: *mut c_void, size: usize, mode: *const c_char) -> *mut FILE {
-    if buf.is_null() || mode.is_null() { ERRNO = EINVAL; return core::ptr::null_mut(); }
-    let f = calloc(1, core::mem::size_of::<FILE>() + UNGET + BUFSIZ) as *mut FILE;
+    if mode.is_null() { ERRNO = EINVAL; return core::ptr::null_mut(); }
+    let m = *mode;
+    if m != b'r' as c_char && m != b'w' as c_char && m != b'a' as c_char {
+        ERRNO = EINVAL; return core::ptr::null_mut();
+    }
+    let has_plus = !strchr(mode as *const u8, b'+' as c_int).is_null();
+    let need_alloc = buf.is_null();
+    let alloc_size = core::mem::size_of::<FILE>() + UNGET + BUFSIZ + if need_alloc { size } else { 0 };
+    let f = calloc(1, alloc_size) as *mut FILE;
     if f.is_null() { ERRNO = ENOMEM; return core::ptr::null_mut(); }
     let buf_area = buf_ptr(f);
-    init_file(f, -1, mode, Some(memstream_close), buf_area, BUFSIZ);
+    init_file(f, -1, mode, Some(mclose), buf_area, BUFSIZ);
     (*f).flags |= F_SVB;
-    (*f).buf = buf as *mut u8;
-    (*f).buf_size = size;
-    let m = *mode;
-    if m == b'r' as c_char {
-        let content_len = strnlen(buf as *const u8, size);
-        (*f).rpos = buf as *mut u8;
-        (*f).rend = (buf as *mut u8).add(content_len);
-        (*f).wpos = core::ptr::null_mut();
-        (*f).wbase = core::ptr::null_mut();
-        (*f).wend = core::ptr::null_mut();
+    let actual_buf: *mut u8 = if need_alloc {
+        (f as *mut u8).add(alloc_size - size)
     } else {
-        (*f).wpos = buf as *mut u8;
-        (*f).wbase = buf as *mut u8;
-        (*f).wend = (buf as *mut u8).add(size);
-        (*f).rpos = buf as *mut u8;
-        (*f).rend = buf as *mut u8;
+        buf as *mut u8
+    };
+    if need_alloc { core::ptr::write_bytes(actual_buf, 0, size); }
+    let c = calloc(1, core::mem::size_of::<MfCookie>()) as *mut MfCookie;
+    if c.is_null() { free(f as *mut c_void); ERRNO = ENOMEM; return core::ptr::null_mut(); }
+    (*c).buf = actual_buf;
+    (*c).size = size;
+    (*c).mode = m;
+    (*f).cookie = c as *mut c_void;
+    (*f).read_fn = Some(mread);
+    (*f).write_fn = Some(mwrite);
+    (*f).seek_fn = Some(mseek);
+    if !has_plus { (*f).flags = if m == b'r' as c_char { F_NOWR } else { F_NORD }; }
+    if m == b'r' as c_char {
+        (*c).len = size;
+    } else if m == b'a' as c_char {
+        (*c).len = strnlen(actual_buf, size);
+        (*c).pos = (*c).len;
+    } else if has_plus {
+        *actual_buf = 0;
     }
     f
 }
@@ -13045,14 +13361,7 @@ static SENTINEL_PTR: usize = 1;
 
 // Read one char from FILE buffer directly (avoids musl's static fgets ABI mismatch)
 unsafe fn mntent_fgetc(f: *mut FILE) -> c_int {
-    let ff = &mut *f;
-    if !ff.rpos.is_null() && ff.rpos < ff.rend {
-        let c = *ff.rpos;
-        ff.rpos = ff.rpos.add(1);
-        return c as c_int;
-    }
-    ff._eof = 1;
-    -1
+    fgetc(f)
 }
 
 unsafe fn mntent_fgets(buf: *mut c_char, n: usize, f: *mut FILE) -> *mut c_char {
