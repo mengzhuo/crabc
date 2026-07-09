@@ -383,67 +383,196 @@ unsafe fn find_env(sp: usize, prefix: &[u8]) -> Option<*const u8> {
 // Syscall wrappers (raw, no_std)
 // ============================================================
 
-fn sys_open(path: *const u8) -> i64 {
-    let result: i64;
-    unsafe {
+trait Syscalls {
+    unsafe fn syscall0(n: i64) -> i64;
+    unsafe fn syscall1(n: i64, a1: i64) -> i64;
+    unsafe fn syscall2(n: i64, a1: i64, a2: i64) -> i64;
+    unsafe fn syscall3(n: i64, a1: i64, a2: i64, a3: i64) -> i64;
+    unsafe fn syscall4(n: i64, a1: i64, a2: i64, a3: i64, a4: i64) -> i64;
+    unsafe fn syscall5(n: i64, a1: i64, a2: i64, a3: i64, a4: i64, a5: i64) -> i64;
+    unsafe fn syscall6(n: i64, a1: i64, a2: i64, a3: i64, a4: i64, a5: i64, a6: i64) -> i64;
+    unsafe fn syscall_noreturn1(n: i64, a1: i64) -> !;
+}
+
+struct X86_64;
+struct Aarch64;
+
+impl Syscalls for X86_64 {
+    #[inline(always)]
+    unsafe fn syscall0(n: i64) -> i64 {
+        let result: i64;
         core::arch::asm!(
             "syscall",
-            inlateout("rax") 2i64 => result,
-            in("rdi") path,
-            in("rsi") 0i64,
+            inlateout("rax") n => result,
             lateout("rcx") _,
             lateout("r11") _,
         );
+        result
     }
-    result
+    #[inline(always)]
+    unsafe fn syscall1(n: i64, a1: i64) -> i64 {
+        let result: i64;
+        core::arch::asm!(
+            "syscall",
+            inlateout("rax") n => result,
+            in("rdi") a1,
+            lateout("rcx") _,
+            lateout("r11") _,
+        );
+        result
+    }
+    #[inline(always)]
+    unsafe fn syscall2(n: i64, a1: i64, a2: i64) -> i64 {
+        let result: i64;
+        core::arch::asm!(
+            "syscall",
+            inlateout("rax") n => result,
+            in("rdi") a1,
+            in("rsi") a2,
+            lateout("rcx") _,
+            lateout("r11") _,
+        );
+        result
+    }
+    #[inline(always)]
+    unsafe fn syscall3(n: i64, a1: i64, a2: i64, a3: i64) -> i64 {
+        let result: i64;
+        core::arch::asm!(
+            "syscall",
+            inlateout("rax") n => result,
+            in("rdi") a1,
+            in("rsi") a2,
+            in("rdx") a3,
+            lateout("rcx") _,
+            lateout("r11") _,
+        );
+        result
+    }
+    #[inline(always)]
+    unsafe fn syscall4(n: i64, a1: i64, a2: i64, a3: i64, a4: i64) -> i64 {
+        let result: i64;
+        core::arch::asm!(
+            "syscall",
+            inlateout("rax") n => result,
+            in("rdi") a1,
+            in("rsi") a2,
+            in("rdx") a3,
+            in("r10") a4,
+            lateout("rcx") _,
+            lateout("r11") _,
+        );
+        result
+    }
+    #[inline(always)]
+    unsafe fn syscall5(n: i64, a1: i64, a2: i64, a3: i64, a4: i64, a5: i64) -> i64 {
+        let result: i64;
+        core::arch::asm!(
+            "syscall",
+            inlateout("rax") n => result,
+            in("rdi") a1,
+            in("rsi") a2,
+            in("rdx") a3,
+            in("r10") a4,
+            in("r8") a5,
+            lateout("rcx") _,
+            lateout("r11") _,
+        );
+        result
+    }
+    #[inline(always)]
+    unsafe fn syscall6(n: i64, a1: i64, a2: i64, a3: i64, a4: i64, a5: i64, a6: i64) -> i64 {
+        let result: i64;
+        core::arch::asm!(
+            "syscall",
+            inlateout("rax") n => result,
+            in("rdi") a1,
+            in("rsi") a2,
+            in("rdx") a3,
+            in("r10") a4,
+            in("r8") a5,
+            in("r9") a6,
+            lateout("rcx") _,
+            lateout("r11") _,
+        );
+        result
+    }
+    #[inline(always)]
+    unsafe fn syscall_noreturn1(n: i64, a1: i64) -> ! {
+        core::arch::asm!(
+            "syscall",
+            in("rax") n,
+            in("rdi") a1,
+            options(noreturn)
+        );
+    }
+}
+
+#[cfg(target_arch = "aarch64")]
+impl Syscalls for Aarch64 {
+    unsafe fn syscall0(_n: i64) -> i64 { loop {} }
+    unsafe fn syscall1(_n: i64, _a1: i64) -> i64 { loop {} }
+    unsafe fn syscall2(_n: i64, _a1: i64, _a2: i64) -> i64 { loop {} }
+    unsafe fn syscall3(_n: i64, _a1: i64, _a2: i64, _a3: i64) -> i64 { loop {} }
+    unsafe fn syscall4(_n: i64, _a1: i64, _a2: i64, _a3: i64, _a4: i64) -> i64 { loop {} }
+    unsafe fn syscall5(_n: i64, _a1: i64, _a2: i64, _a3: i64, _a4: i64, _a5: i64) -> i64 { loop {} }
+    unsafe fn syscall6(_n: i64, _a1: i64, _a2: i64, _a3: i64, _a4: i64, _a5: i64, _a6: i64) -> i64 { loop {} }
+    unsafe fn syscall_noreturn1(_n: i64, _a1: i64) -> ! { loop {} }
+}
+
+#[cfg(target_arch = "x86_64")]
+type Arch = X86_64;
+#[cfg(target_arch = "aarch64")]
+type Arch = Aarch64;
+
+// ============================================================
+// Syscall wrappers (raw, no_std)
+// ============================================================
+
+fn sys_open(path: *const u8) -> i64 {
+    unsafe { <Arch as Syscalls>::syscall2(2, path as i64, 0) }
 }
 
 fn sys_readlink(path: *const u8, buf: *mut u8, bufsz: usize) -> i64 {
-    let result: i64;
-    unsafe {
-        core::arch::asm!(
-            "syscall",
-            inlateout("rax") 89i64 => result,
-            in("rdi") path,
-            in("rsi") buf,
-            in("rdx") bufsz,
-            lateout("rcx") _,
-            lateout("r11") _,
-        );
-    }
-    result
+    unsafe { <Arch as Syscalls>::syscall3(89, path as i64, buf as i64, bufsz as i64) }
 }
 
 fn sys_read(fd: i64, buf: *mut u8, count: usize) -> i64 {
-    let result: i64;
-    unsafe {
-        core::arch::asm!(
-            "syscall",
-            inlateout("rax") 0i64 => result,
-            in("rdi") fd,
-            in("rsi") buf,
-            in("rdx") count,
-            lateout("rcx") _,
-            lateout("r11") _,
-        );
-    }
-    result
+    unsafe { <Arch as Syscalls>::syscall3(0, fd, buf as i64, count as i64) }
 }
 
 fn sys_write(fd: i64, buf: *const u8, count: usize) -> i64 {
-    let result: i64;
-    unsafe {
-        core::arch::asm!(
-            "syscall",
-            inlateout("rax") 1i64 => result,
-            in("rdi") fd,
-            in("rsi") buf,
-            in("rdx") count,
-            lateout("rcx") _,
-            lateout("r11") _,
-        );
+    unsafe { <Arch as Syscalls>::syscall3(1, fd, buf as i64, count as i64) }
+}
+
+fn sys_close(fd: i64) {
+    unsafe { <Arch as Syscalls>::syscall1(3, fd); }
+}
+
+fn sys_mmap(
+    addr: *mut u8,
+    length: usize,
+    prot: i32,
+    flags: i32,
+    fd: i32,
+    offset: i64,
+) -> *mut u8 {
+    let result = unsafe { <Arch as Syscalls>::syscall6(9, addr as i64, length as i64, prot as i64, flags as i64, fd as i64, offset) };
+    if result < 0 && result > -4096 {
+        return MAP_FAILED as *mut u8;
     }
-    result
+    result as *mut u8
+}
+
+fn sys_exit(code: i32) -> ! {
+    unsafe { <Arch as Syscalls>::syscall_noreturn1(60, code as i64) }
+}
+
+fn sys_lseek(fd: i64, offset: i64) -> i64 {
+    unsafe { <Arch as Syscalls>::syscall3(8, fd, offset, 0) }
+}
+
+fn sys_arch_prctl(code: i64, addr: u64) -> i64 {
+    unsafe { <Arch as Syscalls>::syscall2(158, code, addr as i64) }
 }
 
 unsafe fn write_stderr(msg: &[u8]) {
@@ -468,89 +597,6 @@ unsafe fn die(code: i32, label: &[u8], detail: usize) -> ! {
     write_hex_stderr(detail);
     write_stderr(b"]\n");
     sys_exit(code)
-}
-
-fn sys_close(fd: i64) {
-    unsafe {
-        core::arch::asm!(
-            "syscall",
-            in("rax") 3i64,
-            in("rdi") fd,
-            lateout("rcx") _,
-            lateout("r11") _,
-        );
-    }
-}
-
-fn sys_mmap(
-    addr: *mut u8,
-    length: usize,
-    prot: i32,
-    flags: i32,
-    fd: i32,
-    offset: i64,
-) -> *mut u8 {
-    let result: i64;
-    unsafe {
-        core::arch::asm!(
-            "syscall",
-            inlateout("rax") 9i64 => result,
-            in("rdi") addr,
-            in("rsi") length,
-            in("rdx") prot,
-            in("r10") flags,
-            in("r8") fd,
-            in("r9") offset,
-            lateout("rcx") _,
-            lateout("r11") _,
-        );
-    }
-    if result < 0 && result > -4096 {
-        return MAP_FAILED as *mut u8;
-    }
-    result as *mut u8
-}
-
-fn sys_exit(code: i32) -> ! {
-    unsafe {
-        core::arch::asm!(
-            "syscall",
-            in("rax") 60i64,
-            in("rdi") code,
-            options(noreturn)
-        );
-    }
-}
-
-fn sys_lseek(fd: i64, offset: i64) -> i64 {
-    let result: i64;
-    unsafe {
-        core::arch::asm!(
-            "syscall",
-            inlateout("rax") 8i64 => result,
-            in("rdi") fd,
-            in("rsi") offset,
-            in("rdx") 0i64, // SEEK_SET
-            lateout("rcx") _,
-            lateout("r11") _,
-        );
-    }
-    result
-}
-
-fn sys_arch_prctl(code: i64, addr: u64) -> i64 {
-    let result: i64;
-    unsafe {
-        core::arch::asm!(
-            "syscall",
-            inlateout("rax") 158i64 => result,
-            in("rdi") code,
-            in("rsi") addr,
-            lateout("rcx") _,
-            lateout("r11") _,
-        );
-    }
-    result
 }
 
 // ============================================================
@@ -734,18 +780,7 @@ unsafe fn find_library_fd(
 /// Load a shared object from an already-open fd at the given base address.
 /// Registers it in the LOADED array. Returns true on success.
 fn sys_munmap(addr: *mut u8, length: usize) -> i64 {
-    let result: i64;
-    unsafe {
-        core::arch::asm!(
-            "syscall",
-            inlateout("rax") 11i64 => result,
-            in("rdi") addr,
-            in("rsi") length,
-            lateout("rcx") _,
-            lateout("r11") _,
-        );
-    }
-    result
+    unsafe { <Arch as Syscalls>::syscall2(11, addr as i64, length as i64) }
 }
 
 unsafe fn load_dso_from_fd(fd: i64, desired_base: u64) -> Option<u64> {

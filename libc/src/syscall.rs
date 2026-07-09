@@ -11,21 +11,10 @@ pub unsafe extern "C" fn syscall(num: c_long, mut args: ...) -> c_long {
     let e: c_long = args.next_arg();
     let f: c_long = args.next_arg();
 
-    let result: i64;
-    core::arch::asm!(
-        "syscall",
-        inlateout("rax") num as i64 => result,
-        in("rdi") a as i64,
-        in("rsi") b as i64,
-        in("rdx") c as i64,
-        in("r10") d as i64,
-        in("r8") e as i64,
-        in("r9") f as i64,
-        lateout("rcx") _,
-        lateout("r11") _,
+    let result = <Arch as Syscalls>::syscall6(
+        num as i64, a as i64, b as i64, c as i64, d as i64, e as i64, f as i64,
     );
 
-    // ponytail: kernel returns -errno in low 4096 range; mirror musl __syscall_ret
     if (result as u64) > (-4096i64 as u64) {
         ERRNO = (-result) as c_int;
         return -1;
