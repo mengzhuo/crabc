@@ -94,6 +94,7 @@ trait Syscalls {
 struct X86_64;
 struct Aarch64;
 
+#[cfg(target_arch = "x86_64")]
 impl Syscalls for X86_64 {
     #[inline(always)]
     unsafe fn syscall0(n: i64) -> i64 {
@@ -206,14 +207,107 @@ impl Syscalls for X86_64 {
 
 #[cfg(target_arch = "aarch64")]
 impl Syscalls for Aarch64 {
-    unsafe fn syscall0(_n: i64) -> i64 { loop {} }
-    unsafe fn syscall1(_n: i64, _a1: i64) -> i64 { loop {} }
-    unsafe fn syscall2(_n: i64, _a1: i64, _a2: i64) -> i64 { loop {} }
-    unsafe fn syscall3(_n: i64, _a1: i64, _a2: i64, _a3: i64) -> i64 { loop {} }
-    unsafe fn syscall4(_n: i64, _a1: i64, _a2: i64, _a3: i64, _a4: i64) -> i64 { loop {} }
-    unsafe fn syscall5(_n: i64, _a1: i64, _a2: i64, _a3: i64, _a4: i64, _a5: i64) -> i64 { loop {} }
-    unsafe fn syscall6(_n: i64, _a1: i64, _a2: i64, _a3: i64, _a4: i64, _a5: i64, _a6: i64) -> i64 { loop {} }
-    unsafe fn syscall_noreturn1(_n: i64, _a1: i64) -> ! { loop {} }
+    #[inline(always)]
+    unsafe fn syscall0(n: i64) -> i64 {
+        let result: i64;
+        core::arch::asm!(
+            "svc #0",
+            inlateout("x8") n => _,
+            lateout("x0") result,
+            options(nostack),
+        );
+        result
+    }
+    #[inline(always)]
+    unsafe fn syscall1(n: i64, a1: i64) -> i64 {
+        let result: i64;
+        core::arch::asm!(
+            "svc #0",
+            inlateout("x8") n => _,
+            inlateout("x0") a1 => result,
+            options(nostack),
+        );
+        result
+    }
+    #[inline(always)]
+    unsafe fn syscall2(n: i64, a1: i64, a2: i64) -> i64 {
+        let result: i64;
+        core::arch::asm!(
+            "svc #0",
+            inlateout("x8") n => _,
+            inlateout("x0") a1 => result,
+            inlateout("x1") a2 => _,
+            options(nostack),
+        );
+        result
+    }
+    #[inline(always)]
+    unsafe fn syscall3(n: i64, a1: i64, a2: i64, a3: i64) -> i64 {
+        let result: i64;
+        core::arch::asm!(
+            "svc #0",
+            inlateout("x8") n => _,
+            inlateout("x0") a1 => result,
+            inlateout("x1") a2 => _,
+            inlateout("x2") a3 => _,
+            options(nostack),
+        );
+        result
+    }
+    #[inline(always)]
+    unsafe fn syscall4(n: i64, a1: i64, a2: i64, a3: i64, a4: i64) -> i64 {
+        let result: i64;
+        core::arch::asm!(
+            "svc #0",
+            inlateout("x8") n => _,
+            inlateout("x0") a1 => result,
+            inlateout("x1") a2 => _,
+            inlateout("x2") a3 => _,
+            inlateout("x3") a4 => _,
+            options(nostack),
+        );
+        result
+    }
+    #[inline(always)]
+    unsafe fn syscall5(n: i64, a1: i64, a2: i64, a3: i64, a4: i64, a5: i64) -> i64 {
+        let result: i64;
+        core::arch::asm!(
+            "svc #0",
+            inlateout("x8") n => _,
+            inlateout("x0") a1 => result,
+            inlateout("x1") a2 => _,
+            inlateout("x2") a3 => _,
+            inlateout("x3") a4 => _,
+            inlateout("x4") a5 => _,
+            options(nostack),
+        );
+        result
+    }
+    #[inline(always)]
+    unsafe fn syscall6(n: i64, a1: i64, a2: i64, a3: i64, a4: i64, a5: i64, a6: i64) -> i64 {
+        let result: i64;
+        core::arch::asm!(
+            "svc #0",
+            inlateout("x8") n => _,
+            inlateout("x0") a1 => result,
+            inlateout("x1") a2 => _,
+            inlateout("x2") a3 => _,
+            inlateout("x3") a4 => _,
+            inlateout("x4") a5 => _,
+            inlateout("x5") a6 => _,
+            options(nostack),
+        );
+        result
+    }
+    #[inline(always)]
+    unsafe fn syscall_noreturn1(n: i64, a1: i64) -> ! {
+        core::arch::asm!(
+            "svc #0",
+            in("x8") n,
+            in("x0") a1,
+            options(noreturn, nostack),
+        );
+    }
 }
 
 #[cfg(target_arch = "x86_64")]
@@ -1245,12 +1339,22 @@ pub struct sigaction {
 
 pub type SigSetT = c_ulong;
 
+#[cfg(target_arch = "x86_64")]
 core::arch::global_asm!(
     ".global sig_restorer",
     ".type sig_restorer, @function",
     "sig_restorer:",
     "mov eax, 15",
     "syscall",
+);
+
+#[cfg(target_arch = "aarch64")]
+core::arch::global_asm!(
+    ".global sig_restorer",
+    ".type sig_restorer, @function",
+    "sig_restorer:",
+    "mov x8, #139",
+    "svc #0",
 );
 
 extern "C" {
@@ -1558,6 +1662,7 @@ pub unsafe extern "C" fn sigaltstack(ss: *const stack_t, old_ss: *mut stack_t) -
 
 #[no_mangle]
 #[inline(never)]
+#[cfg(target_arch = "x86_64")]
 pub unsafe extern "C" fn setjmp(env: *mut c_ulong) -> c_int {
     core::arch::asm!(
         "mov rax, [rsp]",
@@ -1580,6 +1685,7 @@ pub unsafe extern "C" fn setjmp(env: *mut c_ulong) -> c_int {
 
 #[no_mangle]
 #[inline(never)]
+#[cfg(target_arch = "x86_64")]
 pub unsafe extern "C" fn longjmp(env: *const c_ulong, val: c_int) -> ! {
     let ret = if val == 0 { 1 } else { val } as u32;
     core::arch::asm!(
@@ -1607,16 +1713,19 @@ pub unsafe extern "C" fn longjmp(env: *const c_ulong, val: c_int) -> ! {
 
 #[no_mangle]
 #[unsafe(naked)]
+#[cfg(target_arch = "x86_64")]
 pub unsafe extern "C" fn sigsetjmp(_env: *mut c_ulong, _savemask: c_int) -> c_int {
     core::arch::naked_asm!("jmp sigsetjmp_real");
 }
 
 #[no_mangle]
 #[unsafe(naked)]
+#[cfg(target_arch = "x86_64")]
 pub unsafe extern "C" fn __sigsetjmp(_env: *mut c_ulong, _savemask: c_int) -> c_int {
     core::arch::naked_asm!("jmp sigsetjmp_real");
 }
 
+#[cfg(target_arch = "x86_64")]
 core::arch::global_asm!(
     ".type sigsetjmp_real, @function",
     "sigsetjmp_real:",
@@ -1658,6 +1767,7 @@ core::arch::global_asm!(
 
 #[no_mangle]
 #[inline(never)]
+#[cfg(target_arch = "x86_64")]
 pub unsafe extern "C" fn siglongjmp(env: *const c_ulong, val: c_int) -> ! {
     longjmp(env, val);
 }
@@ -2455,7 +2565,7 @@ struct robust_list_head {
 }
 
 // ponytail: adapted from musl x86_64 clone.s
-#[cfg(not(test))]
+#[cfg(all(target_arch = "x86_64", not(test)))]
 core::arch::global_asm!(
     ".global __rc_clone",
     ".type __rc_clone, @function",
@@ -2480,7 +2590,7 @@ core::arch::global_asm!(
     "ret",
 );
 
-#[cfg(test)]
+#[cfg(any(test, target_arch = "aarch64"))]
 #[inline(never)]
 unsafe fn __rc_clone(
     _fn_: usize,
@@ -2494,7 +2604,7 @@ unsafe fn __rc_clone(
     -1
 }
 
-#[cfg(not(test))]
+#[cfg(all(target_arch = "x86_64", not(test)))]
 extern "C" {
     fn __rc_clone(
         fn_: usize,
@@ -4088,20 +4198,20 @@ static mut LCONV: lconv = lconv {
     mon_grouping: core::ptr::null_mut(),
     positive_sign: core::ptr::null_mut(),
     negative_sign: core::ptr::null_mut(),
-    int_frac_digits: -1,
-    frac_digits: -1,
-    p_cs_precedes: -1,
-    p_sep_by_space: -1,
-    n_cs_precedes: -1,
-    n_sep_by_space: -1,
-    p_sign_posn: -1,
-    n_sign_posn: -1,
-    int_p_cs_precedes: -1,
-    int_p_sep_by_space: -1,
-    int_n_cs_precedes: -1,
-    int_n_sep_by_space: -1,
-    int_p_sign_posn: -1,
-    int_n_sign_posn: -1,
+    int_frac_digits: (-1i32) as c_char,
+    frac_digits: (-1i32) as c_char,
+    p_cs_precedes: (-1i32) as c_char,
+    p_sep_by_space: (-1i32) as c_char,
+    n_cs_precedes: (-1i32) as c_char,
+    n_sep_by_space: (-1i32) as c_char,
+    p_sign_posn: (-1i32) as c_char,
+    n_sign_posn: (-1i32) as c_char,
+    int_p_cs_precedes: (-1i32) as c_char,
+    int_p_sep_by_space: (-1i32) as c_char,
+    int_n_cs_precedes: (-1i32) as c_char,
+    int_n_sep_by_space: (-1i32) as c_char,
+    int_p_sign_posn: (-1i32) as c_char,
+    int_n_sign_posn: (-1i32) as c_char,
 };
 
 unsafe fn cstr_contains_ci(s: *const u8, needle: &[u8]) -> bool {
@@ -13935,6 +14045,7 @@ include!("lrand48.rs");
 include!("strverscmp.rs");
 include!("syscall.rs");
 include!("pthread_atfork.rs");
+#[cfg(target_arch = "x86_64")]
 include!("fenv.rs");
 include!("locale_ctype.rs");
 include!("regression_stubs.rs");

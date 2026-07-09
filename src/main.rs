@@ -96,6 +96,7 @@ fn transfer(entry: u64, argv: &[String], phdr_addr: u64, phnum: usize) -> ! {
 
     sp &= !15usize;
 
+    #[cfg(target_arch = "x86_64")]
     unsafe {
         core::arch::asm!(
             "mov rsp, {sp}",
@@ -104,6 +105,21 @@ fn transfer(entry: u64, argv: &[String], phdr_addr: u64, phnum: usize) -> ! {
             entry = in(reg) entry,
             in("rdi") argv.len(),
             in("rsi") sp + 8,
+            options(noreturn)
+        );
+    }
+
+    #[cfg(target_arch = "aarch64")]
+    unsafe {
+        core::arch::asm!(
+            "mov sp, {sp}",
+            "mov x0, {argc}",
+            "mov x1, {argv}",
+            "br {entry}",
+            sp = in(reg) sp,
+            argc = in(reg) argv.len(),
+            argv = in(reg) sp + 8,
+            entry = in(reg) entry,
             options(noreturn)
         );
     }

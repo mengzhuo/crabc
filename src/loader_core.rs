@@ -35,6 +35,7 @@ pub struct Phdr {
 pub const ET_DYN: u16 = 3;
 pub const ET_EXEC: u16 = 2;
 pub const EM_X86_64: u16 = 62;
+pub const EM_AARCH64: u16 = 183;
 
 pub const PT_LOAD: u32 = 1;
 pub const PT_DYNAMIC: u32 = 2;
@@ -52,6 +53,12 @@ pub const DT_JMPREL: u64 = 23;
 pub const DT_PLTRELSZ: u64 = 2;
 
 pub const R_X86_64_RELATIVE: u64 = 8;
+pub const R_AARCH64_RELATIVE: u64 = 1027;
+
+#[cfg(target_arch = "x86_64")]
+const R_RELATIVE: u64 = R_X86_64_RELATIVE;
+#[cfg(target_arch = "aarch64")]
+const R_RELATIVE: u64 = R_AARCH64_RELATIVE;
 
 pub const AT_NULL: u64 = 0;
 pub const AT_PHDR: u64 = 3;
@@ -86,6 +93,7 @@ pub trait Syscalls {
 
 pub struct X86_64;
 
+#[cfg(target_arch = "x86_64")]
 impl Syscalls for X86_64 {
     #[inline]
     unsafe fn syscall0(n: i64) -> i64 {
@@ -221,23 +229,109 @@ impl Syscalls for X86_64 {
 
 pub struct Aarch64;
 
+#[cfg(target_arch = "aarch64")]
 impl Syscalls for Aarch64 {
-    #[inline]
-    unsafe fn syscall0(_n: i64) -> i64 { loop {} }
-    #[inline]
-    unsafe fn syscall1(_n: i64, _a1: i64) -> i64 { loop {} }
-    #[inline]
-    unsafe fn syscall2(_n: i64, _a1: i64, _a2: i64) -> i64 { loop {} }
-    #[inline]
-    unsafe fn syscall3(_n: i64, _a1: i64, _a2: i64, _a3: i64) -> i64 { loop {} }
-    #[inline]
-    unsafe fn syscall4(_n: i64, _a1: i64, _a2: i64, _a3: i64, _a4: i64) -> i64 { loop {} }
-    #[inline]
-    unsafe fn syscall5(_n: i64, _a1: i64, _a2: i64, _a3: i64, _a4: i64, _a5: i64) -> i64 { loop {} }
-    #[inline]
-    unsafe fn syscall6(_n: i64, _a1: i64, _a2: i64, _a3: i64, _a4: i64, _a5: i64, _a6: i64) -> i64 { loop {} }
-    #[inline]
-    unsafe fn syscall_noreturn1(_n: i64, _a1: i64) -> ! { loop {} }
+    #[inline(always)]
+    unsafe fn syscall0(n: i64) -> i64 {
+        let result: i64;
+        core::arch::asm!(
+            "svc #0",
+            inlateout("x8") n => _,
+            lateout("x0") result,
+            options(nostack),
+        );
+        result
+    }
+    #[inline(always)]
+    unsafe fn syscall1(n: i64, a1: i64) -> i64 {
+        let result: i64;
+        core::arch::asm!(
+            "svc #0",
+            inlateout("x8") n => _,
+            inlateout("x0") a1 => result,
+            options(nostack),
+        );
+        result
+    }
+    #[inline(always)]
+    unsafe fn syscall2(n: i64, a1: i64, a2: i64) -> i64 {
+        let result: i64;
+        core::arch::asm!(
+            "svc #0",
+            inlateout("x8") n => _,
+            inlateout("x0") a1 => result,
+            inlateout("x1") a2 => _,
+            options(nostack),
+        );
+        result
+    }
+    #[inline(always)]
+    unsafe fn syscall3(n: i64, a1: i64, a2: i64, a3: i64) -> i64 {
+        let result: i64;
+        core::arch::asm!(
+            "svc #0",
+            inlateout("x8") n => _,
+            inlateout("x0") a1 => result,
+            inlateout("x1") a2 => _,
+            inlateout("x2") a3 => _,
+            options(nostack),
+        );
+        result
+    }
+    #[inline(always)]
+    unsafe fn syscall4(n: i64, a1: i64, a2: i64, a3: i64, a4: i64) -> i64 {
+        let result: i64;
+        core::arch::asm!(
+            "svc #0",
+            inlateout("x8") n => _,
+            inlateout("x0") a1 => result,
+            inlateout("x1") a2 => _,
+            inlateout("x2") a3 => _,
+            inlateout("x3") a4 => _,
+            options(nostack),
+        );
+        result
+    }
+    #[inline(always)]
+    unsafe fn syscall5(n: i64, a1: i64, a2: i64, a3: i64, a4: i64, a5: i64) -> i64 {
+        let result: i64;
+        core::arch::asm!(
+            "svc #0",
+            inlateout("x8") n => _,
+            inlateout("x0") a1 => result,
+            inlateout("x1") a2 => _,
+            inlateout("x2") a3 => _,
+            inlateout("x3") a4 => _,
+            inlateout("x4") a5 => _,
+            options(nostack),
+        );
+        result
+    }
+    #[inline(always)]
+    unsafe fn syscall6(n: i64, a1: i64, a2: i64, a3: i64, a4: i64, a5: i64, a6: i64) -> i64 {
+        let result: i64;
+        core::arch::asm!(
+            "svc #0",
+            inlateout("x8") n => _,
+            inlateout("x0") a1 => result,
+            inlateout("x1") a2 => _,
+            inlateout("x2") a3 => _,
+            inlateout("x3") a4 => _,
+            inlateout("x4") a5 => _,
+            inlateout("x5") a6 => _,
+            options(nostack),
+        );
+        result
+    }
+    #[inline(always)]
+    unsafe fn syscall_noreturn1(n: i64, a1: i64) -> ! {
+        core::arch::asm!(
+            "svc #0",
+            in("x8") n,
+            in("x0") a1,
+            options(noreturn, nostack),
+        );
+    }
 }
 
 #[cfg(target_arch = "x86_64")]
@@ -268,8 +362,8 @@ pub fn parse_ehdr(data: &[u8]) -> Result<Ehdr, &'static str> {
         return Err("not ELFCLASS64");
     }
     let ehdr = unsafe { &*(data.as_ptr() as *const Ehdr) };
-    if ehdr.e_machine != EM_X86_64 {
-        return Err("not EM_X86_64");
+    if ehdr.e_machine != EM_X86_64 && ehdr.e_machine != EM_AARCH64 {
+        return Err("not a supported EM machine");
     }
     Ok(*ehdr)
 }
@@ -413,7 +507,7 @@ pub fn apply_relocations_from_dynamic(
         let r_info = u64::from_le_bytes(data[off + 8..off + 16].try_into().unwrap());
         let r_addend = i64::from_le_bytes(data[off + 16..off + 24].try_into().unwrap());
 
-        if r_info & 0xffffffff == R_X86_64_RELATIVE {
+        if r_info & 0xffffffff == R_RELATIVE {
             let ptr = (base_addr + r_offset) as *mut u64;
             let val = (base_addr as i64 + r_addend) as u64;
             unsafe { *ptr = val };
@@ -459,7 +553,7 @@ pub unsafe fn self_relocate(base: usize, phdrs: &[Phdr]) {
             let r_info = u64::from_le_bytes(unsafe { *((entry.add(8)) as *const [u8; 8]) });
             let r_addend = i64::from_le_bytes(unsafe { *((entry.add(16)) as *const [u8; 8]) });
 
-            if r_info & 0xffffffff == R_X86_64_RELATIVE {
+            if r_info & 0xffffffff == R_RELATIVE {
                 let ptr = (base as u64 + r_offset) as *mut u64;
                 let val = (base as i64 + r_addend) as u64;
                 unsafe { *ptr = val };
