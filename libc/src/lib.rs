@@ -6467,6 +6467,154 @@ const FLAG_SPACE: u8 = 4;
 const FLAG_ZERO: u8 = 8;
 const FLAG_MINUS: u8 = 16;
 
+// === %f formatting helpers ===
+
+/// Convert (mant << shift) to decimal string. Returns byte count written to buf.
+/// mant is a 53-bit significand, shift is the left-shift amount (can be 0..~971).
+unsafe fn bigint_to_decimal(buf: *mut u8, mant: u64, shift: u32) -> usize {
+    // Store as little-endian u32 limbs. Max bits: 53 + 971 ≈ 1024 → 32 limbs.
+    let nlimbs = (2 + (shift + 31) / 32) as usize;
+    let mut limbs = [0u32; 36];
+    limbs[0] = mant as u32;
+    limbs[1] = (mant >> 32) as u32;
+
+    let ws = (shift / 32) as usize;
+    let bs = shift % 32;
+
+    // Word-level shift left
+    if ws > 0 {
+        let mut i = 1usize;
+        loop {
+            limbs[i + ws] = limbs[i];
+            if i == 0 { break; }
+            i -= 1;
+        }
+        for j in 0..ws { limbs[j] = 0; }
+    }
+    // Bit-level shift left
+    if bs > 0 {
+        let mut carry = 0u32;
+        let end = nlimbs.min(ws + 3);
+        for i in ws..end {
+            let new_val = (limbs[i] << bs) | carry;
+            carry = limbs[i] >> (32 - bs);
+            limbs[i] = new_val;
+        }
+    }
+
+    // Find highest non-zero limb
+    let mut used = nlimbs;
+    while used > 0 && limbs[used - 1] == 0 { used -= 1; }
+    if used == 0 { *buf = b'0'; return 1; }
+
+    // Repeated division by 10 to extract decimal digits
+    let mut digits = [0u8; 400];
+    let mut nd = 0usize;
+    loop {
+        let mut all_zero = true;
+        for i in 0..used { if limbs[i] != 0 { all_zero = false; break; } }
+        if all_zero { break; }
+        let mut rem = 0u64;
+        for i in (0..used).rev() {
+            let val = (rem << 32) | limbs[i] as u64;
+            limbs[i] = (val / 10) as u32;
+            rem = val % 10;
+        }
+        digits[nd] = rem as u8;
+        nd += 1;
+    }
+    // Write digits in big-endian order
+    for i in 0..nd { *buf.add(i) = b'0' + digits[nd - 1 - i]; }
+    nd
+}
+
+/// Compute `count` fractional digits of frac_bits / 2^shift using u128 arithmetic.
+/// shift must be <= 124. Returns true if any value remains after the last digit.
+unsafe fn frac_digits_u128(buf: *mut u8, frac_bits: u64, shift: u32, count: usize) -> bool {
+    let mask: u128 = (1u128 << shift) - 1;
+    let mut rem = frac_bits as u128;
+    for i in 0..count {
+        rem *= 10;
+        let digit = (rem >> shift) as u8;
+        rem &= mask;
+        *buf.add(i) = digit;
+    }
+    rem != 0
+}
+
+/// Compute `count` fractional digits of frac_bits / 2^shift using big-integer arithmetic.
+/// For shift > 124 (up to ~1074). Returns true if any value remains after the last digit.
+unsafe fn frac_digits_bigint(buf: *mut u8, frac_bits: u64, shift: u32, count: usize) -> bool {
+    let nlimbs = ((shift + 31) / 32) as usize;
+    let mut rem = [0u32; 36]; // enough for shift up to 1088
+    rem[0] = frac_bits as u32;
+    if nlimbs > 1 { rem[1] = (frac_bits >> 32) as u32; }
+    // Mask to exactly `shift` bits
+    let hi_word = (shift / 32) as usize;
+    let hi_bit = shift % 32;
+    if hi_bit > 0 && hi_word < nlimbs {
+        rem[hi_word] &= (1u32 << hi_bit) - 1;
+    }
+    // Zero upper limbs beyond shift
+    let clear_from = if hi_bit > 0 { hi_word + 1 } else { hi_word };
+    for j in clear_from..nlimbs { rem[j] = 0; }
+
+    for i in 0..count {
+        // Multiply remainder by 10
+        let mut carry = 0u64;
+        for j in 0..nlimbs {
+            let val = rem[j] as u64 * 10 + carry;
+            rem[j] = val as u32;
+            carry = val >> 32;
+        }
+        // Extract digit from bit position `shift`
+        let digit: u32;
+        if hi_bit == 0 {
+            digit = if hi_word < nlimbs { rem[hi_word] } else { carry as u32 };
+        } else {
+            let mut d = if hi_word < nlimbs { rem[hi_word] >> hi_bit } else { 0 };
+            if hi_word + 1 < nlimbs {
+                d |= rem[hi_word + 1] << (32 - hi_bit);
+            } else if carry > 0 {
+                d |= (carry as u32) << (32 - hi_bit);
+            }
+            digit = d;
+        }
+        *buf.add(i) = digit.min(9) as u8;
+        // Clear bits from position `shift` upward (keep remainder < 2^shift)
+        if hi_bit == 0 {
+            if hi_word < nlimbs { rem[hi_word] = 0; }
+        } else {
+            if hi_word < nlimbs {
+                rem[hi_word] &= (1u32 << hi_bit) - 1;
+            }
+            for j in (hi_word + 1)..nlimbs { rem[j] = 0; }
+        }
+    }
+    // Check if remainder is non-zero
+    for i in 0..nlimbs { if rem[i] != 0 { return true; } }
+    false
+}
+
+/// Increment a decimal string stored at buf[0..*len] in-place.
+unsafe fn increment_decimal(buf: *mut u8, len: &mut usize) {
+    let mut j = *len;
+    loop {
+        if j == 0 {
+            // Shift right and prepend '1'
+            let l = *len;
+            for i in (0..l).rev() { *buf.add(i + 1) = *buf.add(i); }
+            *buf = b'1';
+            *len = l + 1;
+            return;
+        }
+        j -= 1;
+        let d = *buf.add(j);
+        if d < b'9' { *buf.add(j) = d + 1; return; }
+        *buf.add(j) = b'0';
+    }
+}
+
 // Write float to dst. Returns bytes written. Does NOT handle width/flags padding.
 unsafe fn format_f64_full(
     dst: *mut u8, val: f64, fmt_type: u8, precision: i32, flags: u8, uppercase: bool,
@@ -6550,82 +6698,120 @@ unsafe fn format_f64_full(
         return pos;
     }
 
-    // Get mantissa
-    let mantissa = if use_f { v } else { v / libm::pow(10.0, exp as f64) };
+    // === %f format: exact bit-based arithmetic, returns early ===
+    if use_f {
+        let bits = v.to_bits();
+        let raw_mant = bits & 0x000FFFFFFFFFFFFF;
+        let raw_exp_bits = ((bits >> 52) & 0x7FF) as i32;
+        let (mant_b, bin_exp) = if raw_exp_bits == 0 {
+            (raw_mant, -1022i32)
+        } else {
+            (raw_mant | (1u64 << 52), raw_exp_bits - 1023)
+        };
+
+        // Integer part as decimal string
+        let mut ibuf = [0u8; 400];
+        let mut ilen: usize;
+        if bin_exp < 0 {
+            ibuf[0] = b'0'; ilen = 1;
+        } else if bin_exp <= 63 {
+            let int_val = if bin_exp <= 52 { mant_b >> (52 - bin_exp) }
+                          else { mant_b << (bin_exp - 52) };
+            let (buf2, len2) = format_u64(int_val);
+            ibuf[..len2].copy_from_slice(&buf2[..len2]);
+            ilen = len2;
+        } else {
+            ilen = bigint_to_decimal(ibuf.as_mut_ptr(), mant_b, (bin_exp - 52) as u32);
+        }
+
+        // Fractional digits
+        let mut fbuf = [0u8; 1100];
+        let mut has_rest = false;
+        if p > 0 && bin_exp < 52 {
+            let shift = (52 - bin_exp) as u32;
+            let frac_bits = if bin_exp >= 0 { mant_b & ((1u64 << shift) - 1) } else { mant_b };
+            if shift <= 124 {
+                has_rest = frac_digits_u128(fbuf.as_mut_ptr(), frac_bits, shift, p + 1);
+            } else {
+                has_rest = frac_digits_bigint(fbuf.as_mut_ptr(), frac_bits, shift, p + 1);
+            }
+        }
+
+        // Rounding
+        if p > 0 && bin_exp < 52 {
+            let next_d = fbuf[p];
+            let last_d = fbuf[p - 1];
+            if next_d > 5 || (next_d == 5 && (has_rest || last_d & 1 != 0)) {
+                let mut carry = true;
+                for j in (0..p).rev() {
+                    if !carry { break; }
+                    fbuf[j] += 1;
+                    if fbuf[j] < 10 { carry = false; break; }
+                    fbuf[j] = 0;
+                }
+                if carry { increment_decimal(ibuf.as_mut_ptr(), &mut ilen); }
+            }
+        } else if p == 0 {
+            // %.0f: round integer based on fractional part
+            if bin_exp >= 0 && bin_exp < 52 {
+                let shift = (52 - bin_exp) as u32;
+                let frac_bits = mant_b & ((1u64 << shift) - 1);
+                let half = 1u64 << (shift - 1);
+                let last_d = ibuf[ilen - 1] - b'0';
+                if frac_bits > half || (frac_bits == half && last_d & 1 != 0) {
+                    increment_decimal(ibuf.as_mut_ptr(), &mut ilen);
+                }
+            }
+        }
+
+        // Output
+        core::ptr::copy_nonoverlapping(ibuf.as_ptr(), dst.add(pos), ilen);
+        pos += ilen;
+        if p > 0 || flags & FLAG_HASH != 0 {
+            *dst.add(pos) = b'.'; pos += 1;
+            for i in 0..p { *dst.add(pos) = b'0' + fbuf[i]; pos += 1; }
+        }
+        if fmt_type == FMT_G && flags & FLAG_HASH == 0 {
+            while pos > 0 && *dst.add(pos - 1) == b'0' { pos -= 1; }
+            if pos > 0 && *dst.add(pos - 1) == b'.' { pos -= 1; }
+        }
+        return pos;
+    }
+
+    // === %e/%g format (unchanged) ===
+    let mantissa = v / libm::pow(10.0, exp as f64);
     let mut int_part = mantissa as u64;
     let frac_part = mantissa - int_part as f64;
 
-    // Extract fractional digits using scaling approach for reliability.
-    // 17 digits ensures correct rounding at the f64 boundary.
-    let extract = p.min(17);
-    let _remaining = p - extract;
-
     let mut fbuf = [0u8; 4120];
-    if extract > 0 {
-        let scale = libm::pow(10.0, extract as f64);
-        let scaled = if frac_part > 0.0 { frac_part * scale } else { 0.0 };
-        let truncated = libm::trunc(scaled) as u64;
-        let remainder = scaled - truncated as f64;
-
-        // Banker's rounding with ULP-based tolerance.
-        let tol = 0.5 * f64::EPSILON * if scaled > 1.0 { scaled } else { 1.0 };
-        let rounded;
-        if remainder > 0.5 + tol {
-            rounded = truncated + 1;
-        } else if remainder < 0.5 - tol {
-            rounded = truncated;
-        } else {
-            // Close to 0.5 — use banker's rounding (round to even)
-            if truncated & 1 != 0 { rounded = truncated + 1; }
-            else { rounded = truncated; }
-        }
-
-        // Check for carry
-        let max_val = libm::pow(10.0, extract as f64) as u64;
-        if rounded >= max_val {
-            // Carry propagated — all digits become 0
-            for idx in 0..extract { fbuf[idx] = 0; }
-            if use_f { int_part += 1; }
-            else {
-                exp += 1;
-
-                // Re-extract for new exponent
-                let new_mant = v / libm::pow(10.0, exp as f64);
-                let new_int = new_mant as u64;
-                let new_frac = new_mant - new_int as f64;
-                int_part = new_int;
-                if extract > 0 {
-                    let sc2 = libm::pow(10.0, extract as f64);
-                    let sc2d = if new_frac > 0.0 { new_frac * sc2 } else { 0.0 };
-                    let trunc2 = libm::trunc(sc2d) as u64;
-                    let rem2 = sc2d - trunc2 as f64;
-                    let tol2 = 0.5 * f64::EPSILON * if sc2d > 1.0 { sc2d } else { 1.0 };
-                    let r2 = if rem2 > 0.5 + tol2 { trunc2 + 1 }
-                        else if rem2 < 0.5 - tol2 { trunc2 }
-                        else if trunc2 & 1 != 0 { trunc2 + 1 } else { trunc2 };
-                    let mut tmp = r2;
-                    for idx in (0..extract).rev() {
-                        fbuf[idx] = (tmp % 10) as u8;
-                        tmp /= 10;
-                    }
-                    if r2 >= max_val as u64 {
-                        for idx in 0..extract { fbuf[idx] = 0; }
-                        if int_part >= 9 { int_part = 1; exp += 1; }
-                        else { int_part += 1; }
+    if p > 0 {
+        {
+            // %e/%g format: use repeated multiply-by-10 on the scaled mantissa.
+            let mut frac = if frac_part > 0.0 { frac_part } else { 0.0 };
+            for i in 0..p.min(18) {
+                frac *= 10.0;
+                let digit = frac as u64;
+                fbuf[i] = (digit % 10) as u8;
+                frac -= digit as f64;
+            }
+            for i in 18..p { fbuf[i] = 0; }
+            // Round based on remaining fractional value
+            if p > 0 {
+                let sig = p.min(18);
+                let round_up = frac > 0.5 || (frac == 0.5 && fbuf[sig - 1] & 1 != 0);
+                if round_up {
+                    let mut j = sig;
+                    loop {
+                        if j == 0 { int_part += 1; break; }
+                        j -= 1;
+                        fbuf[j] += 1;
+                        if fbuf[j] < 10 { break; }
+                        fbuf[j] = 0;
                     }
                 }
             }
-        } else {
-            // Normal case: extract digits from rounded value
-            let mut tmp = rounded;
-            for idx in (0..extract).rev() {
-                fbuf[idx] = (tmp % 10) as u8;
-                tmp /= 10;
-            }
         }
     }
-    // Remaining digits (beyond f64 precision) are 0
-    for idx in extract..p { fbuf[idx] = 0; }
 
     // For p=0 %e style: round int_part based on first fractional digit
     if p == 0 && !use_f {
