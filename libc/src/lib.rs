@@ -7280,27 +7280,34 @@ unsafe fn scan_float_val(
         }
         return (if neg{-val}else{val}, true);
     }
-    // decimal float
-    let mut val: f64 = 0.0; let mut found = false; let mut frac_scale = 1.0f64; let mut in_frac = false;
-    while *pos < max {
-        let c = *buf.add(*pos);
-        if c>=b'0' && c<=b'9' { let d=(c-b'0') as f64; if in_frac{frac_scale/=10.0; val+=d*frac_scale;} else{val=val*10.0+d;} *pos+=1; found=true; }
-        else if c==b'.' && !in_frac { in_frac=true; *pos+=1; } else { break; }
+    let token_start = start;
+    let mut i = start;
+    let mut saw_digit = false;
+    let mut saw_dot = false;
+    let mut saw_exp = false;
+    let mut first = true;
+    while i < max {
+        let c = *buf.add(i);
+        if (c == b'+' || c == b'-') && first {
+            i += 1; first = false; continue;
+        }
+        if c >= b'0' && c <= b'9' {
+            saw_digit = true; i += 1; first = false; continue;
+        }
+        if c == b'.' && !saw_dot && !saw_exp {
+            saw_dot = true; i += 1; first = false; continue;
+        }
+        if (c == b'e' || c == b'E') && !saw_exp && saw_digit {
+            saw_exp = true; i += 1; first = true; continue;
+        }
+        break;
     }
-    if !found { *pos = start; return (0.0, false); }
-    // e exponent
-    if *pos<max && (*buf.add(*pos)==b'e'||*buf.add(*pos)==b'E') {
-        *pos += 1;
-        let mut eneg = false;
-        if *pos<max && *buf.add(*pos)==b'-' { eneg=true; *pos+=1; }
-        else if *pos<max && *buf.add(*pos)==b'+' { *pos+=1; }
-        let mut ev: i32 = 0; let mut ef = false;
-        while *pos<max && *buf.add(*pos)>=b'0' && *buf.add(*pos)<=b'9' { ev = ev*10+(*buf.add(*pos)-b'0') as i32; *pos+=1; ef=true; }
-        if !ef { return (0.0, false); }
-        if eneg { ev = -ev; }
-        val *= libm::pow(10.0, ev as f64);
+    if !saw_digit { return (0.0, false); }
+    let s = core::str::from_utf8_unchecked(core::slice::from_raw_parts(buf.add(token_start), i - token_start));
+    match <f64 as core::str::FromStr>::from_str(s) {
+        Ok(v) => { *pos = i; return (v, true); }
+        Err(_) => { return (0.0, false); }
     }
-    (if neg{-val}else{val}, true)
 }
 
 // Comprehensive scanf parser with position tracking.
@@ -7355,6 +7362,7 @@ unsafe fn do_vsscanf(
             }
             b'd' | b'u' => {
                 while p < buf_len && is_ws_byte(*buf.add(p)) { p += 1; }
+                if p >= buf_len { input_eof = true; break; }
                 let dest = if !suppress { Some(args.next_arg::<*mut c_int>()) } else { None };
                 let (val, neg, ok) = scan_int_val(buf, &mut p, buf_len, 10, width);
                 if !ok { break; }
@@ -7365,6 +7373,7 @@ unsafe fn do_vsscanf(
             }
             b'i' => {
                 while p < buf_len && is_ws_byte(*buf.add(p)) { p += 1; }
+                if p >= buf_len { input_eof = true; break; }
                 let dest = if !suppress { Some(args.next_arg::<*mut c_int>()) } else { None };
                 let (val, neg, ok) = scan_int_val(buf, &mut p, buf_len, 0, width);
                 if !ok { break; }
@@ -7373,6 +7382,7 @@ unsafe fn do_vsscanf(
             }
             b'o' => {
                 while p < buf_len && is_ws_byte(*buf.add(p)) { p += 1; }
+                if p >= buf_len { input_eof = true; break; }
                 let dest = if !suppress { Some(args.next_arg::<*mut c_int>()) } else { None };
                 let (val, _, ok) = scan_int_val(buf, &mut p, buf_len, 8, width);
                 if !ok { break; }
@@ -7381,6 +7391,7 @@ unsafe fn do_vsscanf(
             }
             b'x' | b'X' => {
                 while p < buf_len && is_ws_byte(*buf.add(p)) { p += 1; }
+                if p >= buf_len { input_eof = true; break; }
                 let dest = if !suppress { Some(args.next_arg::<*mut c_int>()) } else { None };
                 let (val, _, ok) = scan_int_val(buf, &mut p, buf_len, 16, width);
                 if !ok { break; }
@@ -7389,6 +7400,7 @@ unsafe fn do_vsscanf(
             }
             b'p' => {
                 while p < buf_len && is_ws_byte(*buf.add(p)) { p += 1; }
+                if p >= buf_len { input_eof = true; break; }
                 let dest = if !suppress { Some(args.next_arg::<*mut *mut c_void>()) } else { None };
                 let (val, _, ok) = scan_int_val(buf, &mut p, buf_len, 16, width);
                 if !ok { break; }
@@ -7397,6 +7409,7 @@ unsafe fn do_vsscanf(
             }
             b'a' | b'e' | b'f' | b'g' | b'A' | b'E' | b'F' | b'G' => {
                 while p < buf_len && is_ws_byte(*buf.add(p)) { p += 1; }
+                if p >= buf_len { input_eof = true; break; }
                 let (val, ok) = scan_float_val(buf, &mut p, buf_len, width);
                 if !ok { break; }
                 if !suppress {
@@ -7411,18 +7424,20 @@ unsafe fn do_vsscanf(
             }
             b'c' => {
                 let w = if width > 0 { width } else { 1 };
+                if p >= buf_len { input_eof = true; break; }
                 let dest_ptr: *mut c_char = if !suppress { args.next_arg::<*mut c_char>() } else { core::ptr::null_mut() };
+                let start_p = p;
                 let mut j = 0usize;
                 while j < w && p < buf_len {
                     if !dest_ptr.is_null() { *dest_ptr.add(j) = *buf.add(p) as c_char; }
                     p += 1; j += 1;
                 }
-                if j == 0 { break; }
+                if j != w { p = start_p; input_eof = true; break; }
                 if !suppress { assigned += 1; }
             }
             b's' => {
                 while p < buf_len && is_ws_byte(*buf.add(p)) { p += 1; }
-                if p >= buf_len || *buf.add(p) == 0 { break; }
+                if p >= buf_len { input_eof = true; break; }
                 let dest_ptr: *mut c_char = if !suppress { args.next_arg::<*mut c_char>() } else { core::ptr::null_mut() };
                 let w = if width > 0 { width } else { usize::MAX };
                 let mut j = 0usize;
@@ -7442,6 +7457,7 @@ unsafe fn do_vsscanf(
                 loop { let c = *fmt.add(fi) as u8; if c == b']' || c == 0 { break; } charset[c as usize] = 1; fi += 1; }
                 if *fmt.add(fi) as u8 == b']' { fi += 1; }
                 fi -= 1; // common fi += 1 will advance past the closing ]
+                if p >= buf_len { input_eof = true; break; }
                 let dest_ptr: *mut c_char = if !suppress { args.next_arg::<*mut c_char>() } else { core::ptr::null_mut() };
                 let w = if width > 0 { width } else { usize::MAX };
                 let mut j = 0usize;
