@@ -6509,9 +6509,9 @@ unsafe fn format_f64_full(
 
     match fmt_type {
         FMT_G => {
-            let gp = if precision <= 0 { 1usize } else { precision as usize };
+            let gp = if precision < 0 { 6usize } else if precision == 0 { 1usize } else { precision as usize };
             exp = if v > 0.0 { compute_exp10(v) } else { 0 };
-            use_f = exp >= -4 && (exp as usize) < gp;
+            use_f = exp >= -4 && exp < gp as i32;
             if use_f {
                 p = if exp < 0 { gp + ((-exp) as usize - 1) }
                     else if (exp as usize) < gp { gp - exp as usize - 1 }
@@ -6534,9 +6534,11 @@ unsafe fn format_f64_full(
 
     if v == 0.0 {
         *dst.add(pos) = b'0'; pos += 1;
-        if p > 0 || flags & FLAG_HASH != 0 {
-            *dst.add(pos) = b'.'; pos += 1;
-            for _ in 0..p { *dst.add(pos) = b'0'; pos += 1; }
+        if !(fmt_type == FMT_G && flags & FLAG_HASH == 0) {
+            if p > 0 || flags & FLAG_HASH != 0 {
+                *dst.add(pos) = b'.'; pos += 1;
+                for _ in 0..p { *dst.add(pos) = b'0'; pos += 1; }
+            }
         }
         if !use_f {
             let ec = if uppercase { b'E' } else { b'e' };
@@ -6565,9 +6567,8 @@ unsafe fn format_f64_full(
         let truncated = libm::trunc(scaled) as u64;
         let remainder = scaled - truncated as f64;
 
-        // Banker's rounding with dynamic tolerance for FP error amplification.
-        // The error in `scaled` is approximately scale * f64::EPSILON (~2^-52).
-        let tol = scale * 1e-15; // ponytail: conservative tolerance for FP error amplification
+        // Banker's rounding with ULP-based tolerance.
+        let tol = 0.5 * f64::EPSILON * if scaled > 1.0 { scaled } else { 1.0 };
         let rounded;
         if remainder > 0.5 + tol {
             rounded = truncated + 1;
@@ -6598,8 +6599,9 @@ unsafe fn format_f64_full(
                     let sc2d = if new_frac > 0.0 { new_frac * sc2 } else { 0.0 };
                     let trunc2 = libm::trunc(sc2d) as u64;
                     let rem2 = sc2d - trunc2 as f64;
-                    let r2 = if rem2 > 0.5 + sc2 * 1e-15 { trunc2 + 1 }
-                        else if rem2 < 0.5 - sc2 * 1e-15 { trunc2 }
+                    let tol2 = 0.5 * f64::EPSILON * if sc2d > 1.0 { sc2d } else { 1.0 };
+                    let r2 = if rem2 > 0.5 + tol2 { trunc2 + 1 }
+                        else if rem2 < 0.5 - tol2 { trunc2 }
                         else if trunc2 & 1 != 0 { trunc2 + 1 } else { trunc2 };
                     let mut tmp = r2;
                     for idx in (0..extract).rev() {
@@ -6631,8 +6633,9 @@ unsafe fn format_f64_full(
             let scaled1 = frac_part * 10.0;
             let d = libm::trunc(scaled1) as u8;
             let rem1 = scaled1 - d as f64;
-            if rem1 > 0.5 + 1e-14 { d + 1 }
-            else if rem1 < 0.5 - 1e-14 { d }
+            let tol1 = 0.5 * f64::EPSILON * if scaled1 > 1.0 { scaled1 } else { 1.0 };
+            if rem1 > 0.5 + tol1 { d + 1 }
+            else if rem1 < 0.5 - tol1 { d }
             else if d & 1 != 0 { d + 1 }
             else { d }
         } else { 0 };
@@ -6697,6 +6700,24 @@ unsafe fn compute_exp10(v: f64) -> i32 {
 
 // Write hex float to dst. Returns bytes written.
 unsafe fn fmt_hex_float(dst: *mut u8, val: f64, precision: i32, _flags: u8, uppercase: bool) -> usize {
+    // Handle zero (and negative zero) specially
+    if val.to_bits() & 0x7FFFFFFFFFFFFFFF == 0 {
+        let lc = !uppercase;
+        let pfx: &[u8] = if lc { b"0x" } else { b"0X" };
+        let p = if precision < 0 { 0usize } else { precision as usize };
+        let mut pos = 0usize;
+        core::ptr::copy_nonoverlapping(pfx.as_ptr(), dst.add(pos), 2); pos += 2;
+        *dst.add(pos) = b'0'; pos += 1;
+        if p > 0 {
+            *dst.add(pos) = b'.'; pos += 1;
+            for _ in 0..p { *dst.add(pos) = b'0'; pos += 1; }
+        }
+        let pc = if lc { b'p' } else { b'P' };
+        *dst.add(pos) = pc; pos += 1;
+        *dst.add(pos) = b'+'; pos += 1;
+        *dst.add(pos) = b'0'; pos += 1;
+        return pos;
+    }
     let bits = val.to_bits();
     let exp_bits = ((bits >> 52) & 0x7FF) as i32;
     let mant_bits = bits & 0x000FFFFFFFFFFFFF;
@@ -11968,8 +11989,11 @@ pub extern "C" fn inet_netof(addr: u32) -> c_int {
 // stdlib: strtod / strtof / strtold
 // ============================================================
 
-// ponytail: simple float parser, handles decimal, hex, inf, nan, exponent
-unsafe fn parse_float(s: *const u8, endptr: *mut *mut u8, _is_long: bool) -> f64 {
+// ponytail: correctly-rounded float parser.
+// Decimal: collects digits into buffer, uses core::str::FromStr.
+// Hex: u128 integer arithmetic with round-to-nearest-even.
+// is_f32: true for strtof (f32::from_str), false for strtod/strtold (f64::from_str).
+unsafe fn parse_float(s: *const u8, endptr: *mut *mut u8, is_f32: bool) -> f64 {
     let mut p = s;
     // skip whitespace
     while *p == b' ' || *p == b'\t' || *p == b'\n' || *p == b'\r' { p = p.add(1); }
@@ -11977,125 +12001,216 @@ unsafe fn parse_float(s: *const u8, endptr: *mut *mut u8, _is_long: bool) -> f64
     if *p == b'-' { neg = true; p = p.add(1); }
     else if *p == b'+' { p = p.add(1); }
 
-    // inf/nan
-    if (*p == b'i' || *p == b'I') && (*p.add(1) == b'n' || *p.add(1) == b'N') {
-        let start = p;
-        p = p.add(1);
-        if (*p == b'n' || *p == b'N') && (*p.add(1) == b'f' || *p.add(1) == b'F') {
-            p = p.add(1);
-            if *p == b'f' || *p == b'F' { p = p.add(1); }
-            // check for "inity" etc
-            let r = if neg { f64::NEG_INFINITY } else { f64::INFINITY };
-            if !endptr.is_null() { *endptr = p as *mut u8; }
-            return r;
+    // inf
+    if (*p | 0x20) == b'i'
+        && (*p.add(1) | 0x20) == b'n'
+        && (*p.add(2) | 0x20) == b'f'
+    {
+        p = p.add(3);
+        // optionally consume "inity"
+        if (*p | 0x20) == b'i'
+            && (*p.add(1) | 0x20) == b't'
+            && (*p.add(2) | 0x20) == b'y'
+        {
+            p = p.add(3);
         }
-        p = start;
+        if !endptr.is_null() { *endptr = p as *mut u8; }
+        return if neg { f64::NEG_INFINITY } else { f64::INFINITY };
     }
-    if (*p == b'n' || *p == b'N') && (*p.add(1) == b'a' || *p.add(1) == b'A') {
-        let start = p;
-        p = p.add(1);
-        if (*p == b'a' || *p == b'A') && (*p.add(1) == b'n' || *p.add(1) == b'N') {
+    // nan
+    if (*p | 0x20) == b'n'
+        && (*p.add(1) | 0x20) == b'a'
+        && (*p.add(2) | 0x20) == b'n'
+    {
+        p = p.add(3);
+        // optionally consume (n-char-sequence)
+        if *p == b'(' {
             p = p.add(1);
-            if *p == b'n' || *p == b'N' { p = p.add(1); }
-            // optionally skip (...)
-            if *p == b'(' {
-                p = p.add(1);
-                while *p != 0 && *p != b')' { p = p.add(1); }
-                if *p == b')' { p = p.add(1); }
-            }
-            if !endptr.is_null() { *endptr = p as *mut u8; }
-            return if neg { -f64::NAN } else { f64::NAN };
+            while *p != 0 && *p != b')' { p = p.add(1); }
+            if *p == b')' { p = p.add(1); }
         }
-        p = start;
+        if !endptr.is_null() { *endptr = p as *mut u8; }
+        return if neg { -f64::NAN } else { f64::NAN };
     }
 
-    // hex float or hex integer
-    let is_hex = *p == b'0' && (*p.add(1) == b'x' || *p.add(1) == b'X');
-    if is_hex {
+    // hex float
+    if *p == b'0' && (*p.add(1) == b'x' || *p.add(1) == b'X') {
         p = p.add(2);
-        let mut val: f64 = 0.0;
+        let mut mant: u128 = 0;
+        let mut frac_hex: u32 = 0;
         let mut found = false;
-        while let Some(d) = hex_val(*p) {
-            val = val * 16.0 + d as f64;
-            p = p.add(1);
-            found = true;
-        }
-        let mut frac_scale = 1.0f64;
-        if *p == b'.' {
-            p = p.add(1);
-            while let Some(d) = hex_val(*p) {
-                frac_scale /= 16.0;
-                val += d as f64 * frac_scale;
+        let mut in_frac = false;
+
+        loop {
+            if let Some(d) = hex_val(*p) {
+                if mant <= u128::MAX / 16 {
+                    mant = mant * 16 + d as u128;
+                }
+                if in_frac { frac_hex += 1; }
                 p = p.add(1);
                 found = true;
+            } else if *p == b'.' && !in_frac {
+                in_frac = true;
+                p = p.add(1);
+            } else {
+                break;
             }
         }
+
         if !found {
             if !endptr.is_null() { *endptr = s as *mut u8; }
             return 0.0;
         }
-        // optional exponent p[+-]N
+
+        // binary exponent p[+-]N
+        let mut bin_exp: i32 = 0;
         if *p == b'p' || *p == b'P' {
             p = p.add(1);
             let mut exp_neg = false;
             if *p == b'-' { exp_neg = true; p = p.add(1); }
             else if *p == b'+' { p = p.add(1); }
-            let mut exp_val: i32 = 0;
             while *p >= b'0' && *p <= b'9' {
-                exp_val = exp_val * 10 + (*p - b'0') as i32;
+                if bin_exp < 100000 {
+                    bin_exp = bin_exp * 10 + (*p - b'0') as i32;
+                }
                 p = p.add(1);
             }
-            if exp_neg { exp_val = -exp_val; }
-            // ldexp
-            let factor = libm::pow(2.0, exp_val as f64);
-            val *= factor;
+            if exp_neg { bin_exp = -bin_exp; }
         }
-        let r = if neg { -val } else { val };
+
         if !endptr.is_null() { *endptr = p as *mut u8; }
-        return r;
+        if mant == 0 { return if neg { -0.0 } else { 0.0 }; }
+
+        let total_exp = bin_exp as i64 - 4 * frac_hex as i64;
+        return hex_mant_to_f64(mant, total_exp, neg);
     }
 
-    // decimal
-    let mut val: f64 = 0.0;
-    let mut found = false;
+    // decimal: collect into buffer, use from_str for correct rounding
+    let mut buf = [0u8; 65536];
+    let mut n = 0usize;
+    let mut found_digit = false;
+
     while *p >= b'0' && *p <= b'9' {
-        val = val * 10.0 + (*p - b'0') as f64;
+        if n < 65535 { buf[n] = *p; n += 1; }
         p = p.add(1);
-        found = true;
+        found_digit = true;
     }
     if *p == b'.' {
+        if n < 65535 { buf[n] = b'.'; n += 1; }
         p = p.add(1);
-        let mut frac = 1.0f64;
         while *p >= b'0' && *p <= b'9' {
-            frac /= 10.0;
-            val += (*p - b'0') as f64 * frac;
+            if n < 65535 { buf[n] = *p; n += 1; }
             p = p.add(1);
-            found = true;
+            found_digit = true;
         }
     }
-    if !found {
-        // check for inf/nan that didn't match above
+    if !found_digit {
         if !endptr.is_null() { *endptr = s as *mut u8; }
         return 0.0;
     }
-    // exponent e[+-]N
     if *p == b'e' || *p == b'E' {
+        if n < 65535 { buf[n] = b'e'; n += 1; }
         p = p.add(1);
-        let mut exp_neg = false;
-        if *p == b'-' { exp_neg = true; p = p.add(1); }
-        else if *p == b'+' { p = p.add(1); }
-        let mut exp_val: i32 = 0;
-        while *p >= b'0' && *p <= b'9' {
-            exp_val = exp_val * 10 + (*p - b'0') as i32;
+        if *p == b'-' || *p == b'+' {
+            if n < 65535 { buf[n] = *p; n += 1; }
             p = p.add(1);
         }
-        if exp_neg { exp_val = -exp_val; }
-        let factor = libm::pow(10.0, exp_val as f64);
-        val *= factor;
+        while *p >= b'0' && *p <= b'9' {
+            if n < 65535 { buf[n] = *p; n += 1; }
+            p = p.add(1);
+        }
     }
-    let r = if neg { -val } else { val };
+
     if !endptr.is_null() { *endptr = p as *mut u8; }
-    r
+    let s_str = core::str::from_utf8_unchecked(
+        core::slice::from_raw_parts(buf.as_ptr(), n),
+    );
+    if is_f32 {
+        match <f32 as core::str::FromStr>::from_str(s_str) {
+            Ok(v) => v as f64,
+            Err(_) => { if !endptr.is_null() { *endptr = s as *mut u8; } 0.0 }
+        }
+    } else {
+        match <f64 as core::str::FromStr>::from_str(s_str) {
+            Ok(v) => v,
+            Err(_) => { if !endptr.is_null() { *endptr = s as *mut u8; } 0.0 }
+        }
+    }
+}
+
+// Convert hex mantissa integer to f64 with correct rounding.
+// mant: integer from parsed hex digits. total_exp: bin_exp - 4 * frac_hex_digits.
+// Value = mant * 2^total_exp.
+fn hex_mant_to_f64(mant: u128, total_exp: i64, neg: bool) -> f64 {
+    if mant == 0 { return if neg { -0.0 } else { 0.0 }; }
+
+    let msb = (127 - mant.leading_zeros()) as i64;
+    let unbiased_exp = msb + total_exp;
+    let biased_exp = unbiased_exp + 1023;
+
+    // Overflow → infinity
+    if biased_exp >= 2047 {
+        return if neg { f64::NEG_INFINITY } else { f64::INFINITY };
+    }
+
+    // Subnormal or underflow
+    if biased_exp <= 0 {
+        // subnormal: biased_exp=0, effective exponent=-1022
+        // mantissa = round(mant * 2^(total_exp + 1074))
+        let shift = total_exp + 1074;
+        if shift < 0 {
+            return if neg { -0.0 } else { 0.0 };
+        }
+        if shift > 128 {
+            return if neg { f64::NEG_INFINITY } else { f64::INFINITY };
+        }
+        let shifted = mant << (shift as u32);
+        let mantissa52 = (shifted as u64) & 0x000FFFFFFFFFFFFF;
+        let guard = ((shifted >> 52) & 1) != 0;
+        let sticky = (shifted >> 53) != 0;
+        let mut result = mantissa52;
+        if guard && (sticky || (result & 1) != 0) {
+            result += 1;
+            if result > 0x000FFFFFFFFFFFFF {
+                // carry → smallest normal
+                return if neg { -f64::from_bits(1u64 << 52) } else { f64::from_bits(1u64 << 52) };
+            }
+        }
+        return if neg { -f64::from_bits(result) } else { f64::from_bits(result) };
+    }
+
+    // Normal: biased_exp in [1, 2046]
+    let shift = msb - 52;
+
+    if shift <= 0 {
+        // fewer than 53 bits, no rounding needed
+        let mantissa = ((mant as u64) & ((1u64 << msb as u32) - 1)) << ((-shift) as u32);
+        let bits = ((biased_exp as u64) << 52) | mantissa;
+        return if neg { -f64::from_bits(bits) } else { f64::from_bits(bits) };
+    }
+
+    // shift > 0: round to nearest even
+    let mantissa = ((mant >> shift as u32) as u64) & 0x000FFFFFFFFFFFFF;
+    let guard = ((mant >> (shift as u32 - 1)) & 1) != 0;
+    let sticky = if shift > 1 {
+        (mant & ((1u128 << (shift as u32 - 1)) - 1)) != 0
+    } else { false };
+
+    let mut result_mant = mantissa;
+    let mut result_exp = biased_exp;
+    if guard && (sticky || (result_mant & 1) != 0) {
+        result_mant += 1;
+        if result_mant > 0x000FFFFFFFFFFFFF {
+            result_mant = 0;
+            result_exp += 1;
+            if result_exp >= 2047 {
+                return if neg { f64::NEG_INFINITY } else { f64::INFINITY };
+            }
+        }
+    }
+
+    let bits = ((result_exp as u64) << 52) | result_mant;
+    if neg { -f64::from_bits(bits) } else { f64::from_bits(bits) }
 }
 
 unsafe fn hex_val(c: u8) -> Option<u8> {
@@ -12116,7 +12231,7 @@ pub unsafe extern "C" fn strtod(s: *const c_char, endptr: *mut *mut c_char) -> f
 #[no_mangle]
 pub unsafe extern "C" fn strtof(s: *const c_char, endptr: *mut *mut c_char) -> f32 {
     let mut end: *mut u8 = s as *mut u8;
-    let r = parse_float(s as *const u8, &mut end, false);
+    let r = parse_float(s as *const u8, &mut end, true);
     if !endptr.is_null() { *endptr = end as *mut c_char; }
     r as f32
 }
