@@ -397,6 +397,7 @@ trait Syscalls {
 struct X86_64;
 struct Aarch64;
 
+#[cfg(target_arch = "x86_64")]
 impl Syscalls for X86_64 {
     #[inline(always)]
     unsafe fn syscall0(n: i64) -> i64 {
@@ -509,14 +510,107 @@ impl Syscalls for X86_64 {
 
 #[cfg(target_arch = "aarch64")]
 impl Syscalls for Aarch64 {
-    unsafe fn syscall0(_n: i64) -> i64 { loop {} }
-    unsafe fn syscall1(_n: i64, _a1: i64) -> i64 { loop {} }
-    unsafe fn syscall2(_n: i64, _a1: i64, _a2: i64) -> i64 { loop {} }
-    unsafe fn syscall3(_n: i64, _a1: i64, _a2: i64, _a3: i64) -> i64 { loop {} }
-    unsafe fn syscall4(_n: i64, _a1: i64, _a2: i64, _a3: i64, _a4: i64) -> i64 { loop {} }
-    unsafe fn syscall5(_n: i64, _a1: i64, _a2: i64, _a3: i64, _a4: i64, _a5: i64) -> i64 { loop {} }
-    unsafe fn syscall6(_n: i64, _a1: i64, _a2: i64, _a3: i64, _a4: i64, _a5: i64, _a6: i64) -> i64 { loop {} }
-    unsafe fn syscall_noreturn1(_n: i64, _a1: i64) -> ! { loop {} }
+    #[inline(always)]
+    unsafe fn syscall0(n: i64) -> i64 {
+        let result: i64;
+        core::arch::asm!(
+            "svc #0",
+            inlateout("x8") n => _,
+            lateout("x0") result,
+            options(nostack),
+        );
+        result
+    }
+    #[inline(always)]
+    unsafe fn syscall1(n: i64, a1: i64) -> i64 {
+        let result: i64;
+        core::arch::asm!(
+            "svc #0",
+            inlateout("x8") n => _,
+            inlateout("x0") a1 => result,
+            options(nostack),
+        );
+        result
+    }
+    #[inline(always)]
+    unsafe fn syscall2(n: i64, a1: i64, a2: i64) -> i64 {
+        let result: i64;
+        core::arch::asm!(
+            "svc #0",
+            inlateout("x8") n => _,
+            inlateout("x0") a1 => result,
+            inlateout("x1") a2 => _,
+            options(nostack),
+        );
+        result
+    }
+    #[inline(always)]
+    unsafe fn syscall3(n: i64, a1: i64, a2: i64, a3: i64) -> i64 {
+        let result: i64;
+        core::arch::asm!(
+            "svc #0",
+            inlateout("x8") n => _,
+            inlateout("x0") a1 => result,
+            inlateout("x1") a2 => _,
+            inlateout("x2") a3 => _,
+            options(nostack),
+        );
+        result
+    }
+    #[inline(always)]
+    unsafe fn syscall4(n: i64, a1: i64, a2: i64, a3: i64, a4: i64) -> i64 {
+        let result: i64;
+        core::arch::asm!(
+            "svc #0",
+            inlateout("x8") n => _,
+            inlateout("x0") a1 => result,
+            inlateout("x1") a2 => _,
+            inlateout("x2") a3 => _,
+            inlateout("x3") a4 => _,
+            options(nostack),
+        );
+        result
+    }
+    #[inline(always)]
+    unsafe fn syscall5(n: i64, a1: i64, a2: i64, a3: i64, a4: i64, a5: i64) -> i64 {
+        let result: i64;
+        core::arch::asm!(
+            "svc #0",
+            inlateout("x8") n => _,
+            inlateout("x0") a1 => result,
+            inlateout("x1") a2 => _,
+            inlateout("x2") a3 => _,
+            inlateout("x3") a4 => _,
+            inlateout("x4") a5 => _,
+            options(nostack),
+        );
+        result
+    }
+    #[inline(always)]
+    unsafe fn syscall6(n: i64, a1: i64, a2: i64, a3: i64, a4: i64, a5: i64, a6: i64) -> i64 {
+        let result: i64;
+        core::arch::asm!(
+            "svc #0",
+            inlateout("x8") n => _,
+            inlateout("x0") a1 => result,
+            inlateout("x1") a2 => _,
+            inlateout("x2") a3 => _,
+            inlateout("x3") a4 => _,
+            inlateout("x4") a5 => _,
+            inlateout("x5") a6 => _,
+            options(nostack),
+        );
+        result
+    }
+    #[inline(always)]
+    unsafe fn syscall_noreturn1(n: i64, a1: i64) -> ! {
+        core::arch::asm!(
+            "svc #0",
+            in("x8") n,
+            in("x0") a1,
+            options(noreturn, nostack),
+        );
+    }
 }
 
 #[cfg(target_arch = "x86_64")]
