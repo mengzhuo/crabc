@@ -6556,8 +6556,8 @@ unsafe fn format_f64_full(
     let frac_part = mantissa - int_part as f64;
 
     // Extract fractional digits using scaling approach for reliability.
-    // f64 gives ~15.9 reliable decimal digits total.
-    let extract = p.min(16);
+    // 17 digits ensures correct rounding at the f64 boundary.
+    let extract = p.min(17);
     let _remaining = p - extract;
 
     let mut fbuf = [0u8; 4120];
@@ -12127,12 +12127,12 @@ unsafe fn parse_float(s: *const u8, endptr: *mut *mut u8, is_f32: bool) -> f64 {
     );
     if is_f32 {
         match <f32 as core::str::FromStr>::from_str(s_str) {
-            Ok(v) => v as f64,
+            Ok(v) => { let r = v as f64; if neg { -r } else { r } }
             Err(_) => { if !endptr.is_null() { *endptr = s as *mut u8; } 0.0 }
         }
     } else {
         match <f64 as core::str::FromStr>::from_str(s_str) {
-            Ok(v) => v,
+            Ok(v) => if neg { -v } else { v },
             Err(_) => { if !endptr.is_null() { *endptr = s as *mut u8; } 0.0 }
         }
     }
