@@ -125,6 +125,8 @@ for dir in $DIRS; do
         EXTRA_CFLAGS="-mlong-double-64"
         if [ "$dir" = "math" ]; then
             EXTRA_CFLAGS="$EXTRA_CFLAGS -I${CRABC_DIR}/include"
+        elif [ "$base" = "crypt" ]; then
+            EXTRA_CFLAGS="$EXTRA_CFLAGS -I${CRABC_DIR}/include"
         fi
         musl-gcc $CFLAGS $EXTRA_CFLAGS -c -o "$OBJ" "$cfile" 2>"$DIR_BUILD/${base}.o.err" || COMPILE_RC=$?
 
