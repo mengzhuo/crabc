@@ -1918,25 +1918,64 @@ unsafe fn compute_tls_layout() {
     total += total;
     TLS_TOTAL_SIZE = (total + 4095) & !4095;
 
-    let mut end = TLS_TOTAL_SIZE;
-    for i in 0..LOADED_COUNT {
-        let obj = &LOADED[i];
-        if obj.tls_memsz == 0 {
-            TLS_LAYOUT_OFFSET[i] = 0;
-            TLS_FILESZ[i] = 0;
-            TLS_MEMSZ[i] = 0;
-            TLS_IMAGE[i] = core::ptr::null();
-            continue;
+    #[cfg(target_arch = "aarch64")]
+    {
+        // AArch64 uses the TLS_ABOVE_TP layout: the variable area is at positive
+        // offsets from TP, with a fixed gap at the start. The linker expects
+        // module offsets to maintain the same alignment congruence as the image
+        // address in the file so that each TLS symbol is correctly aligned.
+        const GAP_ABOVE_TP: usize = 16;
+        let mut offset = GAP_ABOVE_TP;
+        for i in 0..LOADED_COUNT {
+            let obj = &LOADED[i];
+            if obj.tls_memsz == 0 {
+                TLS_LAYOUT_OFFSET[i] = 0;
+                TLS_FILESZ[i] = 0;
+                TLS_MEMSZ[i] = 0;
+                TLS_IMAGE[i] = core::ptr::null();
+                continue;
+            }
+            let align = if obj.tls_align > 0 { obj.tls_align as usize } else { 1 };
+            let image = obj.tls_image as usize;
+            // The variable area base is block + TCB_SIZE. Since the block is
+            // page-aligned, its residue modulo align is TCB_SIZE % align.
+            let var_base_mod = TCB_SIZE % align;
+            let desired = image.wrapping_sub(var_base_mod).wrapping_sub(offset) & (align - 1);
+            offset += desired;
+            TLS_LAYOUT_OFFSET[i] = offset;
+            TLS_FILESZ[i] = obj.tls_filesz;
+            TLS_MEMSZ[i] = obj.tls_memsz;
+            TLS_IMAGE[i] = obj.tls_image;
+            let block_size = ((obj.tls_memsz as usize + align - 1) / align) * align;
+            offset += block_size;
         }
-        let align = if obj.tls_align > 0 { obj.tls_align as usize } else { 1 };
-        let block_size = ((obj.tls_memsz as usize + align - 1) / align) * align;
-        end -= block_size;
-        end &= !(align - 1);
-        TLS_LAYOUT_OFFSET[i] = end;
-        TLS_FILESZ[i] = obj.tls_filesz;
-        TLS_MEMSZ[i] = obj.tls_memsz;
-        TLS_IMAGE[i] = obj.tls_image;
     }
+
+    #[cfg(target_arch = "x86_64")]
+    {
+        // x86_64 places the variable area below TP; modules are laid out from the
+        // end of the variable area (closest to TP) backwards.
+        let mut end = TLS_TOTAL_SIZE;
+        for i in 0..LOADED_COUNT {
+            let obj = &LOADED[i];
+            if obj.tls_memsz == 0 {
+                TLS_LAYOUT_OFFSET[i] = 0;
+                TLS_FILESZ[i] = 0;
+                TLS_MEMSZ[i] = 0;
+                TLS_IMAGE[i] = core::ptr::null();
+                continue;
+            }
+            let align = if obj.tls_align > 0 { obj.tls_align as usize } else { 1 };
+            let block_size = ((obj.tls_memsz as usize + align - 1) / align) * align;
+            end -= block_size;
+            end &= !(align - 1);
+            TLS_LAYOUT_OFFSET[i] = end;
+            TLS_FILESZ[i] = obj.tls_filesz;
+            TLS_MEMSZ[i] = obj.tls_memsz;
+            TLS_IMAGE[i] = obj.tls_image;
+        }
+    }
+
     TLS_MODULE_COUNT = LOADED_COUNT;
 }
 
