@@ -59,6 +59,9 @@ const R_AARCH64_RELATIVE: u64 = 1027;
 const R_AARCH64_TLS_DTPMOD64: u64 = 1029;
 const R_AARCH64_TLS_DTPREL64: u64 = 1030;
 const R_AARCH64_TLS_TPREL64: u64 = 1031;
+const R_AARCH64_TLSLE_ADD_TPREL_HI12: u64 = 549;
+const R_AARCH64_TLSLE_ADD_TPREL_LO12: u64 = 550;
+const R_AARCH64_TLSLE_ADD_TPREL_LO12_NC: u64 = 551;
 
 const RTLD_LAZY: i32 = 1;
 const RTLD_NOW: i32 = 2;
@@ -1441,6 +1444,16 @@ unsafe fn tls_sym_offset(obj_idx: usize, sym_idx: usize) -> u64 {
     u64::from_le_bytes(core::ptr::read_unaligned(sym_entry.add(8) as *const [u8; 8]))
 }
 
+unsafe fn tls_tprel_offset(obj_idx: usize, sym_idx: usize, addend: i64) -> i64 {
+    let module = if sym_idx == 0 {
+        obj_idx
+    } else {
+        resolve_symbol_module(obj_idx, sym_idx)
+    };
+    let off_in_mod = tls_sym_offset(obj_idx, sym_idx) as i64 + addend;
+    (TLS_LAYOUT_OFFSET[module] as i64) - (TLS_TOTAL_SIZE as i64) + off_in_mod
+}
+
 // ============================================================
 // Relocation processing
 // ============================================================
@@ -1556,14 +1569,22 @@ unsafe fn apply_rela_table(
                 *slot = off;
             }
             R_X86_64_TPOFF64 | R_AARCH64_TLS_TPREL64 => {
-                let module = if r_sym_idx == 0 {
-                    obj_idx
-                } else {
-                    resolve_symbol_module(obj_idx, r_sym_idx)
-                };
-                let off_in_mod = tls_sym_offset(obj_idx, r_sym_idx) as i64 + r_addend;
-                let fs_off = (TLS_LAYOUT_OFFSET[module] as i64) - (TLS_TOTAL_SIZE as i64) + off_in_mod;
+                let fs_off = tls_tprel_offset(obj_idx, r_sym_idx, r_addend);
                 *slot = fs_off as u64;
+            }
+            R_AARCH64_TLSLE_ADD_TPREL_HI12 => {
+                let fs_off = tls_tprel_offset(obj_idx, r_sym_idx, r_addend);
+                let insn = core::ptr::read_unaligned(slot as *const u32);
+                let imm = ((fs_off >> 12) & 0xFFF) as u32;
+                let new_insn = (insn & !(0xFFFu32 << 10)) | (imm << 10);
+                core::ptr::write_unaligned(slot as *mut u32, new_insn);
+            }
+            R_AARCH64_TLSLE_ADD_TPREL_LO12 | R_AARCH64_TLSLE_ADD_TPREL_LO12_NC => {
+                let fs_off = tls_tprel_offset(obj_idx, r_sym_idx, r_addend);
+                let insn = core::ptr::read_unaligned(slot as *const u32);
+                let imm = (fs_off & 0xFFF) as u32;
+                let new_insn = (insn & !(0xFFFu32 << 10)) | (imm << 10);
+                core::ptr::write_unaligned(slot as *mut u32, new_insn);
             }
             _ => {}
         }
