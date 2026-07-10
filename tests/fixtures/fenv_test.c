@@ -1,44 +1,52 @@
 #include <fenv.h>
 #include <stdio.h>
 
+#define CHECK(cond, code) \
+    do { \
+        if (!(cond)) { \
+            fprintf(stderr, "fenv_test failed at line %d with code %d\n", __LINE__, code); \
+            return code; \
+        } \
+    } while (0)
+
 int main(void) {
-    if (fesetround(FE_TONEAREST) != 0) return 1;
-    if (fegetround() != FE_TONEAREST) return 2;
+    CHECK(fesetround(FE_TONEAREST) == 0, 1);
+    CHECK(fegetround() == FE_TONEAREST, 2);
 
-    if (fesetround(FE_UPWARD) != 0) return 3;
-    if (fegetround() != FE_UPWARD) return 4;
+    CHECK(fesetround(FE_UPWARD) == 0, 3);
+    CHECK(fegetround() == FE_UPWARD, 4);
 
-    if (fesetround(FE_DOWNWARD) != 0) return 5;
-    if (fegetround() != FE_DOWNWARD) return 6;
+    CHECK(fesetround(FE_DOWNWARD) == 0, 5);
+    CHECK(fegetround() == FE_DOWNWARD, 6);
 
-    if (fesetround(FE_TOWARDZERO) != 0) return 7;
-    if (fegetround() != FE_TOWARDZERO) return 8;
+    CHECK(fesetround(FE_TOWARDZERO) == 0, 7);
+    CHECK(fegetround() == FE_TOWARDZERO, 8);
 
-    if (fesetround(0x123) == 0) return 9;
+    CHECK(fesetround(0x123) != 0, 9);
 
     feclearexcept(FE_ALL_EXCEPT);
-    if (fetestexcept(FE_ALL_EXCEPT) != 0) return 10;
+    CHECK(fetestexcept(FE_ALL_EXCEPT) == 0, 10);
 
     feraiseexcept(FE_INVALID);
-    if ((fetestexcept(FE_ALL_EXCEPT) & FE_INVALID) == 0) return 11;
+    CHECK((fetestexcept(FE_ALL_EXCEPT) & FE_INVALID) != 0, 11);
 
     fexcept_t flag;
-    if (fegetexceptflag(&flag, FE_ALL_EXCEPT) != 0) return 12;
+    CHECK(fegetexceptflag(&flag, FE_ALL_EXCEPT) == 0, 12);
 
     feclearexcept(FE_ALL_EXCEPT);
-    if (fetestexcept(FE_ALL_EXCEPT) != 0) return 13;
+    CHECK(fetestexcept(FE_ALL_EXCEPT) == 0, 13);
 
-    if (fesetexceptflag(&flag, FE_INVALID) != 0) return 14;
-    if ((fetestexcept(FE_ALL_EXCEPT) & FE_INVALID) == 0) return 15;
+    CHECK(fesetexceptflag(&flag, FE_INVALID) == 0, 14);
+    CHECK((fetestexcept(FE_ALL_EXCEPT) & FE_INVALID) != 0, 15);
 
     fenv_t env;
-    if (fegetenv(&env) != 0) return 16;
-    if (fesetenv(FE_DFL_ENV) != 0) return 17;
-    if (fegetround() != FE_TONEAREST) return 18;
-    if (fesetenv(&env) != 0) return 19;
-    if (fegetround() != FE_TOWARDZERO) return 20;
+    CHECK(fegetenv(&env) == 0, 16);
+    CHECK(fesetenv(FE_DFL_ENV) == 0, 17);
+    CHECK(fegetround() == FE_TONEAREST, 18);
+    CHECK(fesetenv(&env) == 0, 19);
+    CHECK(fegetround() == FE_TOWARDZERO, 20);
 
-    if (fesetenv(FE_DFL_ENV) != 0) return 21;
+    CHECK(fesetenv(FE_DFL_ENV) == 0, 21);
 
     puts("OK");
     return 0;
