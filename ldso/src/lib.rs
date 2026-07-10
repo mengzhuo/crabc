@@ -62,6 +62,7 @@ const R_AARCH64_TLS_TPREL64: u64 = 1031;
 const R_AARCH64_TLSLE_ADD_TPREL_HI12: u64 = 549;
 const R_AARCH64_TLSLE_ADD_TPREL_LO12: u64 = 550;
 const R_AARCH64_TLSLE_ADD_TPREL_LO12_NC: u64 = 551;
+const R_AARCH64_TLSDESC: u64 = 1031;
 
 const RTLD_LAZY: i32 = 1;
 const RTLD_NOW: i32 = 2;
@@ -1621,6 +1622,12 @@ unsafe fn apply_rela_table(
                 let new_insn = (insn & !(0xFFFu32 << 10)) | (imm << 10);
                 core::ptr::write_unaligned(slot as *mut u32, new_insn);
             }
+            R_AARCH64_TLSDESC => {
+                let fs_off = tls_tprel_offset(obj_idx, r_sym_idx, r_addend);
+                let desc = slot as *mut [u64; 2];
+                (*desc)[0] = __tlsdesc_static as u64;
+                (*desc)[1] = fs_off as u64;
+            }
             _ => {}
         }
     }
@@ -1649,6 +1656,14 @@ unsafe fn run_constructors_for(idx: usize) {
             }
         }
     }
+}
+
+/// AArch64 TLS descriptor resolver for statically-linked modules. The descriptor
+/// is a two-word structure: [0] = resolver, [1] = precomputed TP offset. This
+/// resolver simply returns the offset stored in the second word.
+#[no_mangle]
+unsafe extern "C" fn __tlsdesc_static(desc: *const u64) -> u64 {
+    core::ptr::read_unaligned(desc.add(1))
 }
 
 unsafe fn tls_lock() {
