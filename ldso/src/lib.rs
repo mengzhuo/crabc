@@ -5,6 +5,44 @@
 use core::ffi::{c_char, c_void};
 use core::sync::atomic::{AtomicBool, Ordering};
 
+unsafe fn is_ctype_test(sp: usize) -> bool {
+    if sp == 0 {
+        return false;
+    }
+    let argc = *(sp as *const u64) as usize;
+    if argc == 0 {
+        return false;
+    }
+    let argv0 = *((sp + 8) as *const u64) as *const u8;
+    if argv0.is_null() {
+        return false;
+    }
+    let mut len = 0usize;
+    while *argv0.add(len) != 0 {
+        len += 1;
+    }
+    if len < 10 {
+        return false;
+    }
+    let s = argv0.add(len - 10);
+    *s.add(0) == b'c'
+        && *s.add(1) == b't'
+        && *s.add(2) == b'y'
+        && *s.add(3) == b'p'
+        && *s.add(4) == b'e'
+        && *s.add(5) == b'_'
+        && *s.add(6) == b't'
+        && *s.add(7) == b'e'
+        && *s.add(8) == b's'
+        && *s.add(9) == b't'
+}
+
+unsafe fn ctype_trace(sp: usize, msg: &[u8]) {
+    if is_ctype_test(sp) {
+        let _ = sys_write(2, msg.as_ptr(), msg.len());
+    }
+}
+
 #[cfg(not(test))]
 #[panic_handler]
 fn panic(_: &core::panic::PanicInfo) -> ! {
@@ -373,6 +411,7 @@ core::arch::global_asm!(
 
 #[no_mangle]
 pub unsafe extern "C" fn run_main(sp: usize, ldso_base: u64) -> ! {
+    ctype_trace(sp, b"ldso: run_main\n");
     unsafe { load_and_jump(sp, ldso_base) }
 }
 
@@ -2063,6 +2102,7 @@ unsafe fn loaded_object_by_name(name: *const u8, name_len: usize) -> Option<usiz
 unsafe fn load_and_jump(sp: usize, ldso_base: u64) -> ! {
     // 1. Find LD_LIBRARY_PATH from kernel envp
     let ld_path = find_env(sp, b"LD_LIBRARY_PATH=");
+    ctype_trace(sp, b"ldso: ld_path\n");
     LD_LIBRARY_PATH = ld_path.unwrap_or(core::ptr::null());
 
     // 2. Open and read the executable (the PIE that invoked us as PT_INTERP)
@@ -2348,6 +2388,7 @@ unsafe fn load_and_jump(sp: usize, ldso_base: u64) -> ! {
         sys_close(lib_fd);
         set_loaded_name(LOADED_COUNT - 1, name_ptr, name_len);
     }
+    ctype_trace(sp, b"ldso: needed loaded\n");
 
     compute_tls_layout();
     TLS_OLD_TOTAL = TLS_TOTAL_SIZE;
@@ -2355,6 +2396,7 @@ unsafe fn load_and_jump(sp: usize, ldso_base: u64) -> ! {
 
     process_all_relocations();
     register_dlopen_callbacks();
+    ctype_trace(sp, b"ldso: relocations done\n");
 
     // Always allocate a TCB so that %fs-relative accesses (e.g. stack canary
     // at %fs:0x28) work even when there is no TLS data in the binary.
@@ -2374,10 +2416,12 @@ unsafe fn load_and_jump(sp: usize, ldso_base: u64) -> ! {
         let _tcb = init_tls_block(tls_block);
         write_tp(_tcb as usize);
     }
+    ctype_trace(sp, b"ldso: tp set\n");
 
     run_constructors();
 
     let phdr_addr = exec_base + e_phoff;
+    ctype_trace(sp, b"ldso: build_and_jump\n");
     build_and_jump(exec_base + e_entry, phdr_addr, e_phnum, sp)
 }
 
@@ -2432,6 +2476,7 @@ unsafe fn read_orig_auxv(orig_sp: usize, envc: usize) -> OrigAuxv {
 }
 
 unsafe fn build_and_jump(entry: u64, phdr_addr: u64, phnum: u16, orig_sp: usize) -> ! {
+    ctype_trace(orig_sp, b"ldso: build_and_jump start\n");
     let argc = *(orig_sp as *const u64) as usize;
     let argv_start = orig_sp + 8;
     let envp_start = argv_start + (argc + 1) * 8;
@@ -2546,6 +2591,8 @@ unsafe fn build_and_jump(entry: u64, phdr_addr: u64, phnum: u16, orig_sp: usize)
 
     sp -= 8;
     *(sp as *mut u64) = argc as u64;
+
+    ctype_trace(orig_sp, b"ldso: jumping\n");
 
     #[cfg(target_arch = "x86_64")]
     core::arch::asm!(
