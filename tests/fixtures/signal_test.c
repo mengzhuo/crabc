@@ -1,19 +1,10 @@
 #include "signal.h"
 #include "stdio.h"
+#include <sys/mman.h>
 
-static void *mmap_anon(unsigned long size) {
-    register long r10 __asm__("r10") = 0x22; /* MAP_PRIVATE|MAP_ANONYMOUS */
-    register long r8 __asm__("r8") = -1;
-    register long r9 __asm__("r9") = 0;
-    long ret;
-    __asm__ volatile(
-        "syscall"
-        : "=a"(ret)
-        : "a"(9), "D"(0), "S"(size), "d"(3),
-          "r"(r10), "r"(r8), "r"(r9)
-        : "rcx", "r11", "memory"
-    );
-    return (void *)ret;
+static void *mmap_anon(size_t size) {
+    return mmap(NULL, size, PROT_READ | PROT_WRITE,
+                MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
 }
 
 static volatile int got_signal = 0;
