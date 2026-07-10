@@ -8374,6 +8374,11 @@ pub unsafe extern "C" fn abort() -> ! {
     _exit(128 + 6);
 }
 
+// aarch64 GCC accesses the stack canary via the global __stack_chk_guard
+// symbol (GOT-based for PIE). Export it so the dynamic linker can resolve it.
+#[no_mangle]
+pub static mut __stack_chk_guard: usize = 0;
+
 #[no_mangle]
 pub unsafe extern "C" fn __stack_chk_fail() -> ! {
     const MSG: &[u8] = b"*** stack smashing detected ***: terminated\n";
