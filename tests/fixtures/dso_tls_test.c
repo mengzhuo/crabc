@@ -13,8 +13,8 @@ static void *worker(void *arg) {
 }
 
 int main(void) {
-    printf("mainvar addr=%p value=%d\n", &mainvar, mainvar);
-    fflush(stdout);
+    fprintf(stderr, "mainvar addr=%p value=%d\n", &mainvar, mainvar);
+    fflush(stderr);
     if (mainvar != 42) return 1;
     if (get_libvar() != 99) return 2;
 
