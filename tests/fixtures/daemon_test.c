@@ -1,30 +1,5 @@
-static int my_strlen(const char *s) {
-    int n = 0;
-    while (s[n]) n++;
-    return n;
-}
-
-static void my_write(int fd, const void *buf, unsigned long count) {
-    __asm__ volatile (
-        "syscall"
-        :
-        : "a"(1), "D"(fd), "S"(buf), "d"(count)
-        : "rcx", "r11", "memory"
-    );
-}
-
-static void my_puts(const char *s) {
-    my_write(1, s, my_strlen(s));
-}
-
-static void my_putn(long n) {
-    char buf[20];
-    int i = 0;
-    if (n == 0) { my_write(1, "0", 1); return; }
-    if (n < 0) { my_write(1, "-", 1); n = -n; }
-    while (n > 0) { buf[i++] = '0' + (n % 10); n /= 10; }
-    while (i > 0) { my_write(1, &buf[--i], 1); }
-}
+#include <unistd.h>
+#include <sys/wait.h>
 
 extern int daemon(int, int);
 extern int fork(void);
@@ -34,13 +9,12 @@ extern int getsid(int);
 extern void _exit(int);
 extern int setsid(void);
 
-#include <sys/wait.h>
-
 int main(void) {
     int status;
     int child = fork();
     if (child < 0) {
-        my_puts("FAIL: fork\n");
+        const char msg[] = "FAIL: fork\n";
+        write(1, msg, sizeof(msg) - 1);
         return 1;
     }
 
@@ -49,33 +23,35 @@ int main(void) {
         int old_sid = getsid(0);
         int r = daemon(1, 1);
         if (r != 0) {
-            my_puts("FAIL: daemon returned ");
-            my_putn(r);
-            my_puts("\n");
+            const char msg[] = "FAIL: daemon returned\n";
+            write(1, msg, sizeof(msg) - 1);
             _exit(1);
         }
         if (getpid() == old_pid) {
-            my_puts("FAIL: pid unchanged\n");
+            const char msg[] = "FAIL: pid unchanged\n";
+            write(1, msg, sizeof(msg) - 1);
             _exit(1);
         }
         int new_sid = getsid(0);
         if (new_sid == old_sid) {
-            my_puts("FAIL: sid unchanged\n");
+            const char msg[] = "FAIL: sid unchanged\n";
+            write(1, msg, sizeof(msg) - 1);
             _exit(1);
         }
-        my_puts("OK\n");
+        const char msg[] = "OK\n";
+        write(1, msg, sizeof(msg) - 1);
         _exit(0);
     }
 
     int r = waitpid(child, &status, 0);
     if (r < 0) {
-        my_puts("FAIL: waitpid\n");
+        const char msg[] = "FAIL: waitpid\n";
+        write(1, msg, sizeof(msg) - 1);
         return 1;
     }
     if (!WIFEXITED(status) || WEXITSTATUS(status) != 0) {
-        my_puts("FAIL: child exited ");
-        my_putn(status);
-        my_puts("\n");
+        const char msg[] = "FAIL: child exited\n";
+        write(1, msg, sizeof(msg) - 1);
         return 1;
     }
     return 0;
