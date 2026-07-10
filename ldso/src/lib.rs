@@ -1627,6 +1627,13 @@ unsafe fn apply_rela_table(
                 let desc = slot as *mut [u64; 2];
                 (*desc)[0] = __tlsdesc_static as u64;
                 (*desc)[1] = fs_off as u64;
+                write_stderr(b"ldso: TLSDESC slot=");
+                write_hex_stderr(slot as usize);
+                write_stderr(b" resolver=");
+                write_hex_stderr(__tlsdesc_static as usize);
+                write_stderr(b" offset=");
+                write_hex_stderr(fs_off as usize);
+                write_stderr(b"\n");
             }
             _ => {}
         }
@@ -1663,7 +1670,13 @@ unsafe fn run_constructors_for(idx: usize) {
 /// resolver simply returns the offset stored in the second word.
 #[no_mangle]
 unsafe extern "C" fn __tlsdesc_static(desc: *const u64) -> u64 {
-    core::ptr::read_unaligned(desc.add(1))
+    write_stderr(b"ldso: __tlsdesc_static desc=");
+    write_hex_stderr(desc as usize);
+    write_stderr(b" arg=");
+    let arg = core::ptr::read_unaligned(desc.add(1));
+    write_hex_stderr(arg as usize);
+    write_stderr(b"\n");
+    arg
 }
 
 unsafe fn tls_lock() {
