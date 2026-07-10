@@ -2975,6 +2975,13 @@ pub extern "C" fn __rc_tls_block_size() -> usize {
     0
 }
 
+#[inline(never)]
+#[linkage = "weak"]
+#[no_mangle]
+pub extern "C" fn __rc_tls_base_offset() -> usize {
+    0
+}
+
 #[inline]
 unsafe fn sys_gettid() -> i64 {
     <Arch as Syscalls>::syscall0(SYS_GETTID)
@@ -3243,7 +3250,7 @@ pub unsafe extern "C" fn pthread_create(
     if tid < 0 {
         (*slot).tid = -1;
         sys_munmap(stack, stack_size);
-        sys_munmap(fs_base.sub(__rc_tls_block_size()), __rc_tls_block_size());
+        sys_munmap(fs_base.sub(__rc_tls_base_offset()), __rc_tls_block_size());
         return EAGAIN;
     }
     if !attr.is_null() && (*attr).__i[6] == PTHREAD_CREATE_DETACHED {
@@ -3278,7 +3285,7 @@ pub unsafe extern "C" fn pthread_join(thread: PthreadT, retval: *mut *mut c_void
     (*slot).stack_size = 0;
     (*slot).fs_base = core::ptr::null_mut();
     if !stack.is_null() && stack_size > 0 { sys_munmap(stack, stack_size); }
-    if !fs_base.is_null() { let bs = __rc_tls_block_size(); if bs > 0 { sys_munmap(fs_base.sub(bs), bs); } }
+    if !fs_base.is_null() { let bs = __rc_tls_block_size(); let bo = __rc_tls_base_offset(); if bs > 0 { sys_munmap(fs_base.sub(bo), bs); } }
     0
 }
 
@@ -3296,7 +3303,7 @@ pub unsafe extern "C" fn pthread_detach(thread: PthreadT) -> c_int {
         (*slot).stack_size = 0;
         (*slot).fs_base = core::ptr::null_mut();
         if !stack.is_null() && stack_size > 0 { sys_munmap(stack, stack_size); }
-        if !fs_base.is_null() { let bs = __rc_tls_block_size(); sys_munmap(fs_base.sub(bs), bs); }
+        if !fs_base.is_null() { let bs = __rc_tls_block_size(); let bo = __rc_tls_base_offset(); sys_munmap(fs_base.sub(bo), bs); }
     }
     0
 }
