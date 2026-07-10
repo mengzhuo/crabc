@@ -3,7 +3,7 @@
 #![feature(linkage)]
 #![allow(dead_code, non_camel_case_types)]
 
-use core::ffi::{c_char, c_int, c_long, c_longlong, c_uint, c_ulong, c_ulonglong, c_void, VaList};
+use core::ffi::{c_char, c_int, c_long, c_longlong, c_uint, c_ulong, c_ulonglong, c_void, CStr, VaList};
 use core::ptr::null_mut;
 use core::sync::atomic::{AtomicI32, AtomicUsize, Ordering};
 
@@ -14308,6 +14308,22 @@ pub unsafe extern "C" fn shmctl(shmid: c_int, cmd: c_int, buf: *mut c_void) -> c
 type MainFn = unsafe extern "C" fn(c_int, *const *const c_char, *const *const c_char) -> c_int;
 type InitFn = unsafe extern "C" fn();
 
+unsafe fn is_ctype_test(argv: *const *const c_char) -> bool {
+    if argv.is_null() {
+        return false;
+    }
+    let prog = *argv;
+    if prog.is_null() {
+        return false;
+    }
+    let bytes = CStr::from_ptr(prog).to_bytes();
+    bytes.ends_with(b"ctype_test")
+}
+
+unsafe fn dbg_write(msg: &[u8]) {
+    let _ = sys_write(2, msg.as_ptr(), msg.len());
+}
+
 #[no_mangle]
 pub unsafe extern "C" fn __libc_start_main(
     main: MainFn,
@@ -14318,26 +14334,47 @@ pub unsafe extern "C" fn __libc_start_main(
     _rtld_fini: *const c_void,
     _stack_end: *const c_void,
 ) -> ! {
+    if is_ctype_test(argv) {
+        dbg_write(b"libc-start: enter\n");
+    }
     let envp = argv.add((argc + 1) as usize);
     __environ = envp as *mut *mut c_char;
     environ = __environ; // sync environ alias
     __stdio_init();
+    if is_ctype_test(argv) {
+        dbg_write(b"libc-start: stdio ok\n");
+    }
 
     let mut set: SigSetT = 0;
     sigemptyset(&mut set);
     sigaddset(&mut set, SIGCANCEL);
     sigprocmask(SIG_UNBLOCK, &set, core::ptr::null_mut());
+    if is_ctype_test(argv) {
+        dbg_write(b"libc-start: sigmask ok\n");
+    }
 
     if !_init.is_null() {
         let init_fn: InitFn = core::mem::transmute(_init);
         init_fn();
     }
+    if is_ctype_test(argv) {
+        dbg_write(b"libc-start: init ok\n");
+    }
 
+    if is_ctype_test(argv) {
+        dbg_write(b"libc-start: call main\n");
+    }
     let result = main(argc, argv, envp);
+    if is_ctype_test(argv) {
+        dbg_write(b"libc-start: main returned\n");
+    }
 
     if !_fini.is_null() {
         let fini_fn: InitFn = core::mem::transmute(_fini);
         fini_fn();
+    }
+    if is_ctype_test(argv) {
+        dbg_write(b"libc-start: fini ok\n");
     }
 
     exit(result);
