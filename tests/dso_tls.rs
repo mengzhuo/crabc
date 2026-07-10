@@ -48,6 +48,18 @@ fn dso_tls_works_in_main_and_pthread_threads() {
         .expect("failed to run musl-gcc for dso_tls_test");
     assert!(status.success(), "musl-gcc dso_tls_test compilation failed");
 
+    let readelf = Command::new("readelf")
+        .args(["-r", bin.to_str().unwrap()])
+        .output()
+        .expect("failed to run readelf");
+    eprintln!("dso_tls_test relocations:\n{}", String::from_utf8_lossy(&readelf.stdout));
+
+    let objdump = Command::new("objdump")
+        .args(["-d", bin.to_str().unwrap()])
+        .output()
+        .expect("failed to run objdump");
+    eprintln!("dso_tls_test disassembly:\n{}", String::from_utf8_lossy(&objdump.stdout));
+
     let output = Command::new(&bin)
         .env("LD_LIBRARY_PATH", manifest_dir.join("target/debug").to_str().unwrap())
         .output()
