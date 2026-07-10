@@ -51,6 +51,15 @@ const R_X86_64_DTPMOD64: u64 = 16;
 const R_X86_64_DTPOFF64: u64 = 17;
 const R_X86_64_TPOFF64: u64 = 18;
 
+const R_AARCH64_NONE: u64 = 0;
+const R_AARCH64_ABS64: u64 = 257;
+const R_AARCH64_GLOB_DAT: u64 = 1025;
+const R_AARCH64_JUMP_SLOT: u64 = 1026;
+const R_AARCH64_RELATIVE: u64 = 1027;
+const R_AARCH64_TLS_DTPMOD64: u64 = 1029;
+const R_AARCH64_TLS_DTPREL64: u64 = 1030;
+const R_AARCH64_TLS_TPREL64: u64 = 1031;
+
 const RTLD_LAZY: i32 = 1;
 const RTLD_NOW: i32 = 2;
 const RTLD_LOCAL: i32 = 0;
@@ -159,6 +168,7 @@ static mut ORIGIN_LEN: usize = 0;
 // ============================================================
 
 #[cfg(not(test))]
+#[cfg(target_arch = "x86_64")]
 core::arch::global_asm!(
     ".global _start",
     ".type _start, @function",
@@ -250,6 +260,104 @@ core::arch::global_asm!(
     ".hidden {run_main}",
     "call {run_main}",
     "ud2",
+    run_main = sym run_main,
+);
+
+// aarch64 _start: self-relocate ldso, then call run_main(sp, ldso_base)
+#[cfg(not(test))]
+#[cfg(target_arch = "aarch64")]
+core::arch::global_asm!(
+    ".global _start",
+    ".type _start, @function",
+    "_start:",
+    // Save sp into x29 (frame pointer, callee-saved)
+    "mov x29, sp",
+    // Walk stack: argc, argv[], NULL, envp[], NULL, auxv[]
+    "ldr x0, [sp]",              // argc
+    "add x1, sp, #8",            // &argv[0]
+    "add x2, x1, x0, lsl #3",   // skip argv[]
+    "add x2, x2, #8",            // skip NULL after argv -> &envp[0]
+    "2:",
+    "ldr x3, [x2]",
+    "cbz x3, 3f",
+    "add x2, x2, #8",
+    "b 2b",
+    "3:",
+    "add x2, x2, #8",            // &auxv[0]
+    "mov x20, #0",                // ldso_base = 0
+    "4:",
+    "ldr x3, [x2]",              // auxv tag
+    "cbz x3, 5f",                // AT_NULL -> done
+    "cmp x3, #7",                // AT_BASE
+    "bne 6f",
+    "ldr x20, [x2, #8]",         // ldso_base
+    "6:",
+    "add x2, x2, #16",
+    "b 4b",
+    "5:",
+    // x20 = ldso_base. Walk ldso's ELF phdrs to find PT_DYNAMIC.
+    "ldr x0, [x20, #32]",        // e_phoff
+    "ldrh w1, [x20, #56]",       // e_phnum
+    "add x2, x20, x0",           // phdr table
+    "mov x3, #0",                 // i
+    "7:",
+    "cmp x3, x1",
+    "bge 8f",
+    "ldr w4, [x2]",              // p_type
+    "cmp w4, #2",                // PT_DYNAMIC
+    "beq 9f",
+    "add x2, x2, #56",           // next phdr (PHDR_SIZE=56)
+    "add x3, x3, #1",
+    "b 7b",
+    "9:",
+    // Found PT_DYNAMIC. Read DT_RELA and DT_RELASZ from dynamic section.
+    "ldr x4, [x2, #16]",         // p_vaddr
+    "ldr x5, [x2, #40]",         // p_memsz
+    "add x4, x4, x20",           // dyn_addr = base + p_vaddr
+    "add x5, x4, x5",            // dyn_end
+    "mov x6, #0",                 // rela = 0
+    "mov x7, #0",                 // relasz = 0
+    "10:",
+    "cmp x4, x5",
+    "bge 11f",
+    "ldr x8, [x4]",              // d_tag
+    "ldr x9, [x4, #8]",          // d_val
+    "cbz x8, 11f",               // DT_NULL
+    "cmp x8, #7",                // DT_RELA
+    "bne 12f",
+    "add x6, x20, x9",           // rela = base + d_val
+    "12:",
+    "cmp x8, #8",                // DT_RELASZ
+    "bne 13f",
+    "mov x7, x9",                // relasz = d_val
+    "13:",
+    "add x4, x4, #16",
+    "b 10b",
+    "11:",
+    // Apply R_AARCH64_RELATIVE (type 1027) relocations.
+    "cbz x7, 8f",
+    "cbz x6, 8f",
+    "add x8, x6, x7",            // table_end
+    "14:",
+    "cmp x6, x8",
+    "bge 8f",
+    "ldr x9, [x6]",              // r_offset
+    "ldr x10, [x6, #8]",         // r_info
+    "ldr x11, [x6, #16]",        // r_addend
+    "cmp w10, #1027",             // R_AARCH64_RELATIVE
+    "bne 15f",
+    "add x9, x9, x20",           // slot = base + r_offset
+    "add x11, x11, x20",         // val = base + r_addend
+    "str x11, [x9]",
+    "15:",
+    "add x6, x6, #24",
+    "b 14b",
+    "8:",
+    ".hidden {run_main}",
+    "mov x0, x29",               // sp
+    "mov x1, x20",               // ldso_base
+    "bl {run_main}",
+    "brk #1",
     run_main = sym run_main,
 );
 
@@ -632,6 +740,7 @@ mod sysnr {
     pub const SYS_MUNMAP: i64 = 11;
     pub const SYS_READLINKAT: i64 = 267;
     pub const SYS_ARCH_PRCTL: i64 = 158;
+    pub const SYS_EXIT: i64 = 60;
 }
 #[cfg(target_arch = "aarch64")]
 mod sysnr {
@@ -643,6 +752,7 @@ mod sysnr {
     pub const SYS_MMAP: i64 = 222;
     pub const SYS_MUNMAP: i64 = 215;
     pub const SYS_READLINKAT: i64 = 78;
+    pub const SYS_EXIT: i64 = 93;
 }
 pub use sysnr::*;
 
@@ -688,7 +798,7 @@ fn sys_mmap(
 }
 
 fn sys_exit(code: i32) -> ! {
-    unsafe { <Arch as Syscalls>::syscall_noreturn1(60, code as i64) }
+    unsafe { <Arch as Syscalls>::syscall_noreturn1(SYS_EXIT, code as i64) }
 }
 
 fn sys_lseek(fd: i64, offset: i64) -> i64 {
@@ -698,6 +808,34 @@ fn sys_lseek(fd: i64, offset: i64) -> i64 {
 #[cfg(target_arch = "x86_64")]
 fn sys_arch_prctl(code: i64, addr: u64) -> i64 {
     unsafe { <Arch as Syscalls>::syscall2(SYS_ARCH_PRCTL, code, addr as i64) }
+}
+
+#[cfg(target_arch = "x86_64")]
+#[inline(always)]
+unsafe fn read_tp() -> usize {
+    let tp: usize;
+    core::arch::asm!("mov {}, fs:[0]", out(reg) tp);
+    tp
+}
+
+#[cfg(target_arch = "aarch64")]
+#[inline(always)]
+unsafe fn read_tp() -> usize {
+    let tp: usize;
+    core::arch::asm!("mrs {}, tpidr_el0", out(reg) tp);
+    tp
+}
+
+#[cfg(target_arch = "x86_64")]
+#[inline(always)]
+unsafe fn write_tp(addr: usize) {
+    sys_arch_prctl(0x1002, addr as u64);
+}
+
+#[cfg(target_arch = "aarch64")]
+#[inline(always)]
+unsafe fn write_tp(addr: usize) {
+    core::arch::asm!("msr tpidr_el0, {}", in(reg) addr);
 }
 
 unsafe fn write_stderr(msg: &[u8]) {
@@ -1387,18 +1525,19 @@ unsafe fn apply_rela_table(
         }
 
         match r_type {
-            R_X86_64_RELATIVE => {
+            R_X86_64_RELATIVE | R_AARCH64_RELATIVE => {
                 *slot = (base as i64 + r_addend) as u64;
             }
-            R_X86_64_64 => {
+            R_X86_64_64 | R_AARCH64_ABS64 => {
                 let sym_value = resolve_symbol_from_index(obj_idx, r_sym_idx);
                 *slot = (sym_value as i64 + r_addend) as u64;
             }
-            R_X86_64_GLOB_DAT | R_X86_64_JUMP_SLOT => {
+            R_X86_64_GLOB_DAT | R_X86_64_JUMP_SLOT
+            | R_AARCH64_GLOB_DAT | R_AARCH64_JUMP_SLOT => {
                 let sym_value = resolve_symbol_from_index(obj_idx, r_sym_idx);
                 *slot = sym_value;
             }
-            R_X86_64_DTPMOD64 => {
+            R_X86_64_DTPMOD64 | R_AARCH64_TLS_DTPMOD64 => {
                 let module = if r_sym_idx == 0 {
                     obj_idx
                 } else {
@@ -1406,11 +1545,11 @@ unsafe fn apply_rela_table(
                 };
                 *slot = module as u64;
             }
-            R_X86_64_DTPOFF64 => {
+            R_X86_64_DTPOFF64 | R_AARCH64_TLS_DTPREL64 => {
                 let off = (tls_sym_offset(obj_idx, r_sym_idx) as i64 + r_addend) as u64;
                 *slot = off;
             }
-            R_X86_64_TPOFF64 => {
+            R_X86_64_TPOFF64 | R_AARCH64_TLS_TPREL64 => {
                 let module = if r_sym_idx == 0 {
                     obj_idx
                 } else {
@@ -1471,8 +1610,7 @@ unsafe fn expand_thread_tls(old_total: usize, old_module_count: usize) {
     if block as usize == MAP_FAILED {
         return;
     }
-    let old_fs: usize;
-    core::arch::asm!("mov {}, fs:[0]", out(reg) old_fs);
+    let old_fs = read_tp();
     let old_base = old_fs - old_total;
     if old_total > 0 {
         core::ptr::copy_nonoverlapping(old_base as *const u8, block, old_total);
@@ -1495,8 +1633,7 @@ unsafe fn expand_thread_tls(old_total: usize, old_module_count: usize) {
     let tcb = block.add(TLS_TOTAL_SIZE);
     core::ptr::write_unaligned(tcb as *mut u64, tcb as u64);
     core::ptr::write_unaligned((tcb as *mut u64).add(1), TLS_GENERATION);
-    #[cfg(target_arch = "x86_64")]
-    sys_arch_prctl(0x1002, tcb as u64);
+    write_tp(tcb as usize);
 }
 
 unsafe fn update_tls_for_new_module(idx: usize) {
@@ -1773,8 +1910,7 @@ pub struct TlsIndex {
 pub unsafe extern "C" fn __tls_get_addr(ti: *const TlsIndex) -> *mut u8 {
     let module = (*ti).ti_module;
     let offset = (*ti).ti_offset;
-    let fs_base: usize;
-    core::arch::asm!("mov {}, fs:[0]", out(reg) fs_base);
+    let fs_base = read_tp();
     let tcb = fs_base;
     let thread_gen = core::ptr::read_unaligned((tcb as *const u64).add(1));
     if thread_gen != TLS_GENERATION {
@@ -1785,8 +1921,7 @@ pub unsafe extern "C" fn __tls_get_addr(ti: *const TlsIndex) -> *mut u8 {
         }
         tls_unlock();
     }
-    let fs_base2: usize;
-    core::arch::asm!("mov {}, fs:[0]", out(reg) fs_base2);
+    let fs_base2 = read_tp();
     let tls_base = fs_base2 - TLS_TOTAL_SIZE;
     (tls_base as *mut u8).add(TLS_LAYOUT_OFFSET[module]).add(offset) as *mut u8
 }
@@ -2231,8 +2366,7 @@ unsafe fn load_and_jump(sp: usize, ldso_base: u64) -> ! {
             die(93, b"tls_mmap", alloc_size);
         }
         let _tcb = init_tls_block(tls_block);
-        #[cfg(target_arch = "x86_64")]
-        sys_arch_prctl(0x1002, _tcb as u64);
+        write_tp(_tcb as usize);
     }
 
     run_constructors();
@@ -2333,9 +2467,19 @@ unsafe fn build_and_jump(entry: u64, phdr_addr: u64, phnum: u16, orig_sp: usize)
     sp -= 8;
     *(sp as *mut u64) = argc as u64;
 
+    #[cfg(target_arch = "x86_64")]
     core::arch::asm!(
         "mov rsp, {sp}",
         "jmp {entry}",
+        sp = in(reg) sp,
+        entry = in(reg) entry,
+        options(noreturn)
+    );
+
+    #[cfg(target_arch = "aarch64")]
+    core::arch::asm!(
+        "mov sp, {sp}",
+        "br {entry}",
         sp = in(reg) sp,
         entry = in(reg) entry,
         options(noreturn)
