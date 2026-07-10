@@ -8209,7 +8209,7 @@ unsafe fn fill_tmpname(out: *mut c_char, seed: c_uint) {
     let mut k = 0;
     while k < prefix.len() - 1 { *out.add(k) = prefix[k] as c_char; k += 1; }
     let (buf, len) = format_hex(seed as u64, false);
-    for j in 0..len.min(L_TMPNAM - k - 1) { *out.add(k + j) = buf[16 - len + j] as c_char; k += 1; }
+    for j in 0..len.min(L_TMPNAM - k - 1) { *out.add(k + j) = buf[j] as c_char; k += 1; }
     *out.add(k) = 0;
 }
 
