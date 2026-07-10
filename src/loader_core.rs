@@ -339,6 +339,19 @@ pub type Arch = X86_64;
 #[cfg(target_arch = "aarch64")]
 pub type Arch = Aarch64;
 
+
+
+// Architecture-specific syscall numbers
+#[cfg(target_arch = "x86_64")]
+mod sysnr {
+    pub const SYS_MMAP: i64 = 9;
+}
+#[cfg(target_arch = "aarch64")]
+mod sysnr {
+    pub const SYS_MMAP: i64 = 222;
+}
+pub use sysnr::*;
+
 #[inline]
 pub unsafe fn sys_mmap(
     addr: *mut u8,
@@ -348,7 +361,7 @@ pub unsafe fn sys_mmap(
     fd: i32,
     offset: i64,
 ) -> *mut u8 {
-    unsafe { <Arch as Syscalls>::syscall6(9, addr as i64, length as i64, prot as i64, flags as i64, fd as i64, offset) as *mut u8 }
+    unsafe { <Arch as Syscalls>::syscall6(SYS_MMAP, addr as i64, length as i64, prot as i64, flags as i64, fd as i64, offset) as *mut u8 }
 }
 
 pub fn parse_ehdr(data: &[u8]) -> Result<Ehdr, &'static str> {

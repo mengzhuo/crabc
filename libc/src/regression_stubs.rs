@@ -1,11 +1,6 @@
 // Stubs and minimal implementations for symbols required by libc-test
 // regression cases that currently fail to link.
 
-const SYS_MMAP: c_long = 9;
-const SYS_MUNMAP: c_long = 11;
-const SYS_PREAD64: c_long = 17;
-const SYS_EXECVE: c_long = 59;
-
 const _SC_PAGE_SIZE: c_int = 30;
 
 #[no_mangle]
