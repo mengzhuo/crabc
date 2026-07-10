@@ -618,28 +618,58 @@ type Arch = X86_64;
 #[cfg(target_arch = "aarch64")]
 type Arch = Aarch64;
 
+
+
+// Architecture-specific syscall numbers
+#[cfg(target_arch = "x86_64")]
+mod sysnr {
+    pub const SYS_READ: i64 = 0;
+    pub const SYS_WRITE: i64 = 1;
+    pub const SYS_OPENAT: i64 = 257;
+    pub const SYS_CLOSE: i64 = 3;
+    pub const SYS_LSEEK: i64 = 8;
+    pub const SYS_MMAP: i64 = 9;
+    pub const SYS_MUNMAP: i64 = 11;
+    pub const SYS_READLINKAT: i64 = 267;
+    pub const SYS_ARCH_PRCTL: i64 = 158;
+}
+#[cfg(target_arch = "aarch64")]
+mod sysnr {
+    pub const SYS_READ: i64 = 63;
+    pub const SYS_WRITE: i64 = 64;
+    pub const SYS_OPENAT: i64 = 56;
+    pub const SYS_CLOSE: i64 = 57;
+    pub const SYS_LSEEK: i64 = 62;
+    pub const SYS_MMAP: i64 = 222;
+    pub const SYS_MUNMAP: i64 = 215;
+    pub const SYS_READLINKAT: i64 = 78;
+}
+pub use sysnr::*;
+
+const AT_FDCWD: i64 = -100;
+
 // ============================================================
 // Syscall wrappers (raw, no_std)
 // ============================================================
 
 fn sys_open(path: *const u8) -> i64 {
-    unsafe { <Arch as Syscalls>::syscall2(2, path as i64, 0) }
+    unsafe { <Arch as Syscalls>::syscall3(SYS_OPENAT, AT_FDCWD, path as i64, 0) }
 }
 
 fn sys_readlink(path: *const u8, buf: *mut u8, bufsz: usize) -> i64 {
-    unsafe { <Arch as Syscalls>::syscall3(89, path as i64, buf as i64, bufsz as i64) }
+    unsafe { <Arch as Syscalls>::syscall4(SYS_READLINKAT, AT_FDCWD, path as i64, buf as i64, bufsz as i64) }
 }
 
 fn sys_read(fd: i64, buf: *mut u8, count: usize) -> i64 {
-    unsafe { <Arch as Syscalls>::syscall3(0, fd, buf as i64, count as i64) }
+    unsafe { <Arch as Syscalls>::syscall3(SYS_READ, fd, buf as i64, count as i64) }
 }
 
 fn sys_write(fd: i64, buf: *const u8, count: usize) -> i64 {
-    unsafe { <Arch as Syscalls>::syscall3(1, fd, buf as i64, count as i64) }
+    unsafe { <Arch as Syscalls>::syscall3(SYS_WRITE, fd, buf as i64, count as i64) }
 }
 
 fn sys_close(fd: i64) {
-    unsafe { <Arch as Syscalls>::syscall1(3, fd); }
+    unsafe { <Arch as Syscalls>::syscall1(SYS_CLOSE, fd); }
 }
 
 fn sys_mmap(
@@ -650,7 +680,7 @@ fn sys_mmap(
     fd: i32,
     offset: i64,
 ) -> *mut u8 {
-    let result = unsafe { <Arch as Syscalls>::syscall6(9, addr as i64, length as i64, prot as i64, flags as i64, fd as i64, offset) };
+    let result = unsafe { <Arch as Syscalls>::syscall6(SYS_MMAP, addr as i64, length as i64, prot as i64, flags as i64, fd as i64, offset) };
     if result < 0 && result > -4096 {
         return MAP_FAILED as *mut u8;
     }
@@ -662,11 +692,12 @@ fn sys_exit(code: i32) -> ! {
 }
 
 fn sys_lseek(fd: i64, offset: i64) -> i64 {
-    unsafe { <Arch as Syscalls>::syscall3(8, fd, offset, 0) }
+    unsafe { <Arch as Syscalls>::syscall3(SYS_LSEEK, fd, offset, 0) }
 }
 
+#[cfg(target_arch = "x86_64")]
 fn sys_arch_prctl(code: i64, addr: u64) -> i64 {
-    unsafe { <Arch as Syscalls>::syscall2(158, code, addr as i64) }
+    unsafe { <Arch as Syscalls>::syscall2(SYS_ARCH_PRCTL, code, addr as i64) }
 }
 
 unsafe fn write_stderr(msg: &[u8]) {
@@ -874,7 +905,7 @@ unsafe fn find_library_fd(
 /// Load a shared object from an already-open fd at the given base address.
 /// Registers it in the LOADED array. Returns true on success.
 fn sys_munmap(addr: *mut u8, length: usize) -> i64 {
-    unsafe { <Arch as Syscalls>::syscall2(11, addr as i64, length as i64) }
+    unsafe { <Arch as Syscalls>::syscall2(SYS_MUNMAP, addr as i64, length as i64) }
 }
 
 unsafe fn load_dso_from_fd(fd: i64, desired_base: u64) -> Option<u64> {
@@ -1464,6 +1495,7 @@ unsafe fn expand_thread_tls(old_total: usize, old_module_count: usize) {
     let tcb = block.add(TLS_TOTAL_SIZE);
     core::ptr::write_unaligned(tcb as *mut u64, tcb as u64);
     core::ptr::write_unaligned((tcb as *mut u64).add(1), TLS_GENERATION);
+    #[cfg(target_arch = "x86_64")]
     sys_arch_prctl(0x1002, tcb as u64);
 }
 
@@ -2198,8 +2230,9 @@ unsafe fn load_and_jump(sp: usize, ldso_base: u64) -> ! {
         if tls_block as usize == MAP_FAILED {
             die(93, b"tls_mmap", alloc_size);
         }
-        let tcb = init_tls_block(tls_block);
-        sys_arch_prctl(0x1002, tcb as u64);
+        let _tcb = init_tls_block(tls_block);
+        #[cfg(target_arch = "x86_64")]
+        sys_arch_prctl(0x1002, _tcb as u64);
     }
 
     run_constructors();
