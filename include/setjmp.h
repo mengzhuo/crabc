@@ -5,8 +5,13 @@
 extern "C" {
 #endif
 
+#ifdef __aarch64__
+typedef unsigned long jmp_buf[22];
+typedef unsigned long sigjmp_buf[40];
+#else
 typedef unsigned long jmp_buf[8];
 typedef unsigned long sigjmp_buf[10];
+#endif
 
 int setjmp(jmp_buf);
 void longjmp(jmp_buf, int);

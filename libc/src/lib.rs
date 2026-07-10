@@ -1923,6 +1923,53 @@ pub unsafe extern "C" fn longjmp(env: *const c_ulong, val: c_int) -> ! {
     );
 }
 
+#[cfg(all(target_arch = "aarch64", not(test)))]
+core::arch::global_asm!(
+    ".global setjmp",
+    ".type setjmp, @function",
+    "setjmp:",
+    "stp x19, x20, [x0, #0]",
+    "stp x21, x22, [x0, #16]",
+    "stp x23, x24, [x0, #32]",
+    "stp x25, x26, [x0, #48]",
+    "stp x27, x28, [x0, #64]",
+    "stp x29, x30, [x0, #80]",
+    "mov x2, sp",
+    "str x2, [x0, #104]",
+    "stp d8, d9, [x0, #112]",
+    "stp d10, d11, [x0, #128]",
+    "stp d12, d13, [x0, #144]",
+    "stp d14, d15, [x0, #160]",
+    "mov x0, #0",
+    "ret",
+);
+
+#[no_mangle]
+#[inline(never)]
+#[cfg(target_arch = "aarch64")]
+pub unsafe extern "C" fn longjmp(env: *const c_ulong, val: c_int) -> ! {
+    let ret = if val == 0 { 1 } else { val } as u64;
+    core::arch::asm!(
+        "ldp x19, x20, [x0]",
+        "ldp x21, x22, [x0, #16]",
+        "ldp x23, x24, [x0, #32]",
+        "ldp x25, x26, [x0, #48]",
+        "ldp x27, x28, [x0, #64]",
+        "ldp x29, x30, [x0, #80]",
+        "ldr x2, [x0, #104]",
+        "mov sp, x2",
+        "ldp d8, d9, [x0, #112]",
+        "ldp d10, d11, [x0, #128]",
+        "ldp d12, d13, [x0, #144]",
+        "ldp d14, d15, [x0, #160]",
+        "mov x0, x1",
+        "br x30",
+        in("x0") env,
+        in("x1") ret,
+        options(noreturn),
+    );
+}
+
 // ponytail: sigsetjmp is implemented in raw assembly because the Rust compiler
 // rewrites naked_asm that touches rbx into incorrect push/pop sequences,
 // corrupting the caller's rbx across the initial return. The exported wrappers
@@ -1987,6 +2034,44 @@ core::arch::global_asm!(
 #[no_mangle]
 #[inline(never)]
 #[cfg(target_arch = "x86_64")]
+pub unsafe extern "C" fn siglongjmp(env: *const c_ulong, val: c_int) -> ! {
+    longjmp(env, val);
+}
+
+#[no_mangle]
+#[cfg(target_arch = "aarch64")]
+pub unsafe extern "C" fn __sigsetjmp_tail(env: *mut c_ulong, ret: c_int) -> c_int {
+    const SIG_SETMASK: c_int = 2;
+    let ss = env.add(24) as *mut SigSetT;
+    let set = if ret != 0 { ss as *const SigSetT } else { core::ptr::null() };
+    let old = if ret != 0 { core::ptr::null_mut() } else { ss };
+    let _ = sys_rt_sigprocmask(SIG_SETMASK, set, old, core::mem::size_of::<SigSetT>());
+    ret
+}
+
+#[cfg(all(target_arch = "aarch64", not(test)))]
+core::arch::global_asm!(
+    ".global sigsetjmp",
+    ".global __sigsetjmp",
+    ".type sigsetjmp, @function",
+    ".type __sigsetjmp, @function",
+    "sigsetjmp:",
+    "__sigsetjmp:",
+    "cbz x1, setjmp",
+    "str x30, [x0, #176]",
+    "str x19, [x0, #184]",
+    "mov x19, x0",
+    "bl setjmp",
+    "mov w1, w0",
+    "mov x0, x19",
+    "ldr x30, [x0, #176]",
+    "ldr x19, [x0, #184]",
+    "b __sigsetjmp_tail",
+);
+
+#[no_mangle]
+#[inline(never)]
+#[cfg(target_arch = "aarch64")]
 pub unsafe extern "C" fn siglongjmp(env: *const c_ulong, val: c_int) -> ! {
     longjmp(env, val);
 }
@@ -2812,7 +2897,31 @@ core::arch::global_asm!(
     "ret",
 );
 
-#[cfg(any(test, target_arch = "aarch64"))]
+// ponytail: adapted from musl aarch64 clone.s
+#[cfg(all(target_arch = "aarch64", not(test)))]
+core::arch::global_asm!(
+    ".global __rc_clone",
+    ".type __rc_clone, @function",
+    "__rc_clone:",
+    "and x1, x1, #-16",
+    "stp x0, x3, [x1, #-16]!",
+    "uxtw x0, w2",
+    "mov x2, x4",
+    "mov x3, x5",
+    "mov x4, x6",
+    "mov x8, #220",
+    "svc #0",
+    "cbz x0, 1f",
+    "ret",
+    "1:",
+    "mov x29, #0",
+    "ldp x1, x0, [sp], #16",
+    "blr x1",
+    "mov x8, #93",
+    "svc #0",
+);
+
+#[cfg(test)]
 #[inline(never)]
 unsafe fn __rc_clone(
     _fn_: usize,
@@ -2827,6 +2936,19 @@ unsafe fn __rc_clone(
 }
 
 #[cfg(all(target_arch = "x86_64", not(test)))]
+extern "C" {
+    fn __rc_clone(
+        fn_: usize,
+        stack: *mut u8,
+        flags: c_ulong,
+        arg: *mut c_void,
+        ptid: *mut c_int,
+        tls: c_ulong,
+        ctid: *mut c_int,
+    ) -> i64;
+}
+
+#[cfg(all(target_arch = "aarch64", not(test)))]
 extern "C" {
     fn __rc_clone(
         fn_: usize,
