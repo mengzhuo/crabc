@@ -1451,7 +1451,42 @@ unsafe fn tls_tprel_offset(obj_idx: usize, sym_idx: usize, addend: i64) -> i64 {
         resolve_symbol_module(obj_idx, sym_idx)
     };
     let off_in_mod = tls_sym_offset(obj_idx, sym_idx) as i64 + addend;
-    (TLS_LAYOUT_OFFSET[module] as i64) - (TLS_TOTAL_SIZE as i64) + off_in_mod
+    (TLS_LAYOUT_OFFSET[module] as i64) + off_in_mod - (tls_var_area_offset_from_tp() as i64)
+}
+
+unsafe fn tls_var_area_offset_from_block() -> usize {
+    #[cfg(target_arch = "x86_64")]
+    { 0 }
+    #[cfg(target_arch = "aarch64")]
+    { TCB_SIZE }
+}
+
+unsafe fn tls_tcb_offset_from_block() -> usize {
+    #[cfg(target_arch = "x86_64")]
+    { TLS_TOTAL_SIZE }
+    #[cfg(target_arch = "aarch64")]
+    { 0 }
+}
+
+unsafe fn tls_tp_offset_from_block() -> usize {
+    #[cfg(target_arch = "x86_64")]
+    { TLS_TOTAL_SIZE }
+    #[cfg(target_arch = "aarch64")]
+    { TCB_SIZE }
+}
+
+unsafe fn tls_var_area_offset_from_tp() -> usize {
+    #[cfg(target_arch = "x86_64")]
+    { TLS_TOTAL_SIZE }
+    #[cfg(target_arch = "aarch64")]
+    { 0 }
+}
+
+unsafe fn tls_tcb_offset_from_tp() -> isize {
+    #[cfg(target_arch = "x86_64")]
+    { 0 }
+    #[cfg(target_arch = "aarch64")]
+    { -(TCB_SIZE as isize) }
 }
 
 // ============================================================
@@ -1638,15 +1673,15 @@ unsafe fn expand_thread_tls(old_total: usize, old_module_count: usize) {
         return;
     }
     let old_fs = read_tp();
-    let old_base = old_fs - old_total;
+    let old_var_base = (old_fs as isize - tls_var_area_offset_from_tp() as isize) as *mut u8;
     if old_total > 0 {
-        core::ptr::copy_nonoverlapping(old_base as *const u8, block, old_total);
+        core::ptr::copy_nonoverlapping(old_var_base, block.add(tls_var_area_offset_from_block()), old_total);
     }
     for i in old_module_count..TLS_MODULE_COUNT {
         if TLS_MEMSZ[i] == 0 {
             continue;
         }
-        let dst = block.add(TLS_LAYOUT_OFFSET[i]);
+        let dst = block.add(tls_var_area_offset_from_block()).add(TLS_LAYOUT_OFFSET[i]);
         let src = TLS_IMAGE[i];
         let filesz = TLS_FILESZ[i] as usize;
         let memsz = TLS_MEMSZ[i] as usize;
@@ -1657,10 +1692,10 @@ unsafe fn expand_thread_tls(old_total: usize, old_module_count: usize) {
             core::ptr::write_bytes(dst.add(filesz), 0, memsz - filesz);
         }
     }
-    let tcb = block.add(TLS_TOTAL_SIZE);
+    let tcb = block.add(tls_tcb_offset_from_block());
     core::ptr::write_unaligned(tcb as *mut u64, tcb as u64);
     core::ptr::write_unaligned((tcb as *mut u64).add(1), TLS_GENERATION);
-    write_tp(tcb as usize);
+    write_tp(block.add(tls_tp_offset_from_block()) as usize);
 }
 
 unsafe fn update_tls_for_new_module(idx: usize) {
@@ -1906,11 +1941,12 @@ unsafe fn compute_tls_layout() {
 }
 
 unsafe fn init_tls_block(block: *mut u8) -> *mut u8 {
+    let var_base = block.add(tls_var_area_offset_from_block());
     for i in 0..TLS_MODULE_COUNT {
         if TLS_MEMSZ[i] == 0 {
             continue;
         }
-        let dst = block.add(TLS_LAYOUT_OFFSET[i]);
+        let dst = var_base.add(TLS_LAYOUT_OFFSET[i]);
         let src = TLS_IMAGE[i];
         let filesz = TLS_FILESZ[i] as usize;
         let memsz = TLS_MEMSZ[i] as usize;
@@ -1921,10 +1957,10 @@ unsafe fn init_tls_block(block: *mut u8) -> *mut u8 {
             core::ptr::write_bytes(dst.add(filesz), 0, memsz - filesz);
         }
     }
-    let tcb = block.add(TLS_TOTAL_SIZE);
+    let tcb = block.add(tls_tcb_offset_from_block());
     core::ptr::write_unaligned(tcb as *mut u64, tcb as u64);
     core::ptr::write_unaligned((tcb as *mut u64).add(1), TLS_GENERATION);
-    tcb
+    block.add(tls_tp_offset_from_block())
 }
 
 #[repr(C)]
@@ -1938,7 +1974,7 @@ pub unsafe extern "C" fn __tls_get_addr(ti: *const TlsIndex) -> *mut u8 {
     let module = (*ti).ti_module;
     let offset = (*ti).ti_offset;
     let fs_base = read_tp();
-    let tcb = fs_base;
+    let tcb = (fs_base as isize + tls_tcb_offset_from_tp()) as *mut u8;
     let thread_gen = core::ptr::read_unaligned((tcb as *const u64).add(1));
     if thread_gen != TLS_GENERATION {
         tls_lock();
@@ -1949,7 +1985,7 @@ pub unsafe extern "C" fn __tls_get_addr(ti: *const TlsIndex) -> *mut u8 {
         tls_unlock();
     }
     let fs_base2 = read_tp();
-    let tls_base = fs_base2 - TLS_TOTAL_SIZE;
+    let tls_base = fs_base2 - tls_var_area_offset_from_tp();
     (tls_base as *mut u8).add(TLS_LAYOUT_OFFSET[module]).add(offset) as *mut u8
 }
 
@@ -1976,6 +2012,11 @@ pub unsafe extern "C" fn __rc_create_thread_tls() -> *mut u8 {
 #[no_mangle]
 pub unsafe extern "C" fn __rc_tls_block_size() -> usize {
     TLS_TOTAL_SIZE + TCB_SIZE
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn __rc_tls_base_offset() -> usize {
+    tls_var_area_offset_from_tp() + tls_var_area_offset_from_block()
 }
 
 unsafe fn register_self(ldso_base: u64) {
