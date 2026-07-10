@@ -72,6 +72,12 @@ const AT_PHNUM: u64 = 5;
 const AT_PAGESZ: u64 = 6;
 const AT_BASE: u64 = 7;
 const AT_ENTRY: u64 = 9;
+const AT_UID: u64 = 11;
+const AT_EUID: u64 = 12;
+const AT_GID: u64 = 13;
+const AT_EGID: u64 = 14;
+const AT_SECURE: u64 = 23;
+const AT_RANDOM: u64 = 25;
 
 const PROT_READ: i32 = 1;
 const PROT_WRITE: i32 = 2;
@@ -2379,6 +2385,52 @@ unsafe fn load_and_jump(sp: usize, ldso_base: u64) -> ! {
 // Build a fresh stack for the target program and jump
 // ============================================================
 
+struct OrigAuxv {
+    at_base: u64,
+    at_random: *const u8,
+    at_secure: u64,
+    at_uid: u64,
+    at_euid: u64,
+    at_gid: u64,
+    at_egid: u64,
+}
+
+unsafe fn read_orig_auxv(orig_sp: usize, envc: usize) -> OrigAuxv {
+    let mut out = OrigAuxv {
+        at_base: 0,
+        at_random: core::ptr::null(),
+        at_secure: 0,
+        at_uid: 0,
+        at_euid: 0,
+        at_gid: 0,
+        at_egid: 0,
+    };
+    let argc = *(orig_sp as *const u64) as usize;
+    let argv_start = orig_sp + 8;
+    let envp_start = argv_start + (argc + 1) * 8;
+    let auxv = (envp_start + (envc + 1) * 8) as *const u64;
+    let mut i = 0;
+    loop {
+        let tag = *auxv.add(i * 2);
+        let val = *auxv.add(i * 2 + 1);
+        if tag == AT_NULL {
+            break;
+        }
+        match tag {
+            AT_BASE => out.at_base = val,
+            AT_RANDOM => out.at_random = val as *const u8,
+            AT_SECURE => out.at_secure = val,
+            AT_UID => out.at_uid = val,
+            AT_EUID => out.at_euid = val,
+            AT_GID => out.at_gid = val,
+            AT_EGID => out.at_egid = val,
+            _ => {}
+        }
+        i += 1;
+    }
+    out
+}
+
 unsafe fn build_and_jump(entry: u64, phdr_addr: u64, phnum: u16, orig_sp: usize) -> ! {
     let argc = *(orig_sp as *const u64) as usize;
     let argv_start = orig_sp + 8;
@@ -2392,6 +2444,8 @@ unsafe fn build_and_jump(entry: u64, phdr_addr: u64, phnum: u16, orig_sp: usize)
     // ponytail: max 128 args, 512 env vars — covers any realistic binary
     let max_args = if argc > 128 { 128 } else { argc };
     let max_env = if envc > 512 { 512 } else { envc };
+
+    let orig_auxv = read_orig_auxv(orig_sp, envc);
 
     let stack_size = 256 * 1024usize;
     let stack_base = sys_mmap(
@@ -2425,6 +2479,20 @@ unsafe fn build_and_jump(entry: u64, phdr_addr: u64, phnum: u16, orig_sp: usize)
         new_envp[i] = sp;
     }
 
+    // musl's crt1 needs AT_RANDOM for the stack canary; preserve it on the new stack.
+    let mut random_bytes = [0u8; 16];
+    if !orig_auxv.at_random.is_null() {
+        core::ptr::copy_nonoverlapping(orig_auxv.at_random, random_bytes.as_mut_ptr(), 16);
+    } else {
+        for i in 0..16 {
+            random_bytes[i] = (i as u8).wrapping_add(1);
+        }
+    }
+    sp -= 16;
+    sp &= !15usize;
+    let random_ptr = sp;
+    core::ptr::copy_nonoverlapping(random_bytes.as_ptr(), random_ptr as *mut u8, 16);
+
     // 16-byte align before structured data so argc lands on a boundary
     sp &= !15usize;
 
@@ -2434,8 +2502,8 @@ unsafe fn build_and_jump(entry: u64, phdr_addr: u64, phnum: u16, orig_sp: usize)
         *(sp as *mut u64) = 0;
     }
 
-    // auxv: AT_PHDR, AT_PHENT, AT_PHNUM, AT_PAGESZ, AT_ENTRY, AT_BASE, AT_NULL
-    sp -= 7 * 16;
+    const AUXV_ENTRIES: usize = 13;
+    sp -= AUXV_ENTRIES * 16;
     let aux = sp as *mut u64;
     *aux.add(0) = AT_PHDR;
     *aux.add(1) = phdr_addr;
@@ -2448,9 +2516,21 @@ unsafe fn build_and_jump(entry: u64, phdr_addr: u64, phnum: u16, orig_sp: usize)
     *aux.add(8) = AT_ENTRY;
     *aux.add(9) = entry;
     *aux.add(10) = AT_BASE;
-    *aux.add(11) = 0;
-    *aux.add(12) = AT_NULL;
-    *aux.add(13) = 0;
+    *aux.add(11) = orig_auxv.at_base;
+    *aux.add(12) = AT_SECURE;
+    *aux.add(13) = orig_auxv.at_secure;
+    *aux.add(14) = AT_RANDOM;
+    *aux.add(15) = random_ptr as u64;
+    *aux.add(16) = AT_UID;
+    *aux.add(17) = orig_auxv.at_uid;
+    *aux.add(18) = AT_EUID;
+    *aux.add(19) = orig_auxv.at_euid;
+    *aux.add(20) = AT_GID;
+    *aux.add(21) = orig_auxv.at_gid;
+    *aux.add(22) = AT_EGID;
+    *aux.add(23) = orig_auxv.at_egid;
+    *aux.add(24) = AT_NULL;
+    *aux.add(25) = 0;
 
     sp -= (max_env + 1) * 8;
     for i in 0..max_env {
