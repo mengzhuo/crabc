@@ -14305,6 +14305,29 @@ pub unsafe extern "C" fn shmctl(shmid: c_int, cmd: c_int, buf: *mut c_void) -> c
 //   __libc_start_main(main, argc, argv, _init, _fini, rtld_fini, stack_end)
 // ============================================================
 
+// Auxiliary vector pointer, populated by the dynamic linker before
+// constructors run so getauxval() works during early startup.
+#[no_mangle]
+pub static mut __auxv: *const usize = core::ptr::null();
+
+#[no_mangle]
+pub unsafe extern "C" fn getauxval(type_: c_ulong) -> c_ulong {
+    let mut p = __auxv;
+    if p.is_null() {
+        return 0;
+    }
+    loop {
+        let tag = *p;
+        if tag == 0 {
+            return 0;
+        }
+        if tag == type_ as usize {
+            return *p.add(1) as c_ulong;
+        }
+        p = p.add(2);
+    }
+}
+
 type MainFn = unsafe extern "C" fn(c_int, *const *const c_char, *const *const c_char) -> c_int;
 type InitFn = unsafe extern "C" fn();
 

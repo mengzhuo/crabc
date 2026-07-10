@@ -2425,6 +2425,22 @@ unsafe fn load_and_jump(sp: usize, ldso_base: u64) -> ! {
     }
     ctype_trace(sp, b"ldso: tp set\n");
 
+    // Set libc.so's __auxv so constructors (e.g. compiler_builtins CPU feature
+    // detection) can call getauxval before __libc_start_main runs.
+    let argc = *(sp as *const u64) as usize;
+    let argv_start = sp + 8;
+    let envp_start = argv_start + (argc + 1) * 8;
+    let mut envc = 0usize;
+    while *((envp_start + envc * 8) as *const u64) != 0 {
+        envc += 1;
+    }
+    let auxv = (envp_start + (envc + 1) * 8) as *const usize;
+    let auxv_sym = resolve_symbol(b"__auxv\0".as_ptr());
+    if auxv_sym != 0 {
+        core::ptr::write(auxv_sym as *mut *const usize, auxv);
+    }
+    ctype_trace(sp, b"ldso: auxv set\n");
+
     run_constructors(sp);
 
     let phdr_addr = exec_base + e_phoff;
