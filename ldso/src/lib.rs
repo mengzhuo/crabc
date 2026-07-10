@@ -1609,24 +1609,31 @@ unsafe fn apply_rela_table(
     }
 }
 
-unsafe fn run_constructors() {
+unsafe fn run_constructors(sp: usize) {
+    ctype_trace(sp, b"ldso: constructors start\n");
     for i in 0..LOADED_COUNT {
-        run_constructors_for(i);
+        ctype_trace(sp, b"ldso: ctor obj start\n");
+        run_constructors_for(sp, i);
+        ctype_trace(sp, b"ldso: ctor obj done\n");
     }
+    ctype_trace(sp, b"ldso: constructors done\n");
 }
 
-unsafe fn run_constructors_for(idx: usize) {
+unsafe fn run_constructors_for(sp: usize, idx: usize) {
     let obj = &LOADED[idx];
     if obj.init_present && obj.init != 0 {
+        ctype_trace(sp, b"ldso: call init\n");
         let f: extern "C" fn() = core::mem::transmute(obj.init);
         f();
     }
     if obj.init_array_present && obj.init_array != 0 && obj.init_array_sz >= 8 {
+        ctype_trace(sp, b"ldso: call init_array\n");
         let count = (obj.init_array_sz / 8) as usize;
         for j in 0..count {
             let entry = (obj.init_array as *const u8).add(j * 8);
             let fp = u64::from_le_bytes(core::ptr::read_unaligned(entry as *const [u8; 8]));
             if fp != 0 {
+                ctype_trace(sp, b"ldso: init_array entry\n");
                 let f: extern "C" fn() = core::mem::transmute(fp);
                 f();
             }
@@ -1827,7 +1834,7 @@ pub unsafe extern "C" fn __ldso_dlopen(filename: *const u8, flags: i32) -> *mut 
     LOADED[idx].global = (flags & RTLD_GLOBAL) != 0;
     process_all_relocations();
     update_tls_for_new_module(idx);
-    run_constructors_for(idx);
+    run_constructors_for(0, idx);
     &mut LOADED[idx] as *mut LoadedObject as *mut u8
 }
 
@@ -2418,7 +2425,7 @@ unsafe fn load_and_jump(sp: usize, ldso_base: u64) -> ! {
     }
     ctype_trace(sp, b"ldso: tp set\n");
 
-    run_constructors();
+    run_constructors(sp);
 
     let phdr_addr = exec_base + e_phoff;
     ctype_trace(sp, b"ldso: build_and_jump\n");
