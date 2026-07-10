@@ -49,6 +49,18 @@ fn dso_tls_works_in_main_and_pthread_threads() {
     assert!(status.success(), "musl-gcc dso_tls_test compilation failed");
 
     let readelf = Command::new("readelf")
+        .args(["-r", libtls_so.to_str().unwrap()])
+        .output()
+        .expect("failed to run readelf on libtls.so");
+    eprintln!("libtls.so relocations:\n{}", String::from_utf8_lossy(&readelf.stdout));
+
+    let objdump = Command::new("objdump")
+        .args(["-d", libtls_so.to_str().unwrap()])
+        .output()
+        .expect("failed to run objdump on libtls.so");
+    eprintln!("libtls.so disassembly:\n{}", String::from_utf8_lossy(&objdump.stdout));
+
+    let readelf = Command::new("readelf")
         .args(["-r", bin.to_str().unwrap()])
         .output()
         .expect("failed to run readelf");
