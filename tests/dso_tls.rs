@@ -77,6 +77,8 @@ fn dso_tls_works_in_main_and_pthread_threads() {
         .output()
         .expect("failed to run dso_tls_test");
 
+    eprintln!("captured stderr:\n{}", String::from_utf8_lossy(&output.stderr));
+
     assert!(
         output.status.success(),
         "dso_tls_test exited with {:?}, stderr: {}",
