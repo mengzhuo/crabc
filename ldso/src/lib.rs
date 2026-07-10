@@ -5,44 +5,6 @@
 use core::ffi::{c_char, c_void};
 use core::sync::atomic::{AtomicBool, Ordering};
 
-unsafe fn is_ctype_test(sp: usize) -> bool {
-    if sp == 0 {
-        return false;
-    }
-    let argc = *(sp as *const u64) as usize;
-    if argc == 0 {
-        return false;
-    }
-    let argv0 = *((sp + 8) as *const u64) as *const u8;
-    if argv0.is_null() {
-        return false;
-    }
-    let mut len = 0usize;
-    while *argv0.add(len) != 0 {
-        len += 1;
-    }
-    if len < 10 {
-        return false;
-    }
-    let s = argv0.add(len - 10);
-    *s.add(0) == b'c'
-        && *s.add(1) == b't'
-        && *s.add(2) == b'y'
-        && *s.add(3) == b'p'
-        && *s.add(4) == b'e'
-        && *s.add(5) == b'_'
-        && *s.add(6) == b't'
-        && *s.add(7) == b'e'
-        && *s.add(8) == b's'
-        && *s.add(9) == b't'
-}
-
-unsafe fn ctype_trace(sp: usize, msg: &[u8]) {
-    if is_ctype_test(sp) {
-        let _ = sys_write(2, msg.as_ptr(), msg.len());
-    }
-}
-
 #[cfg(not(test))]
 #[panic_handler]
 fn panic(_: &core::panic::PanicInfo) -> ! {
@@ -411,7 +373,6 @@ core::arch::global_asm!(
 
 #[no_mangle]
 pub unsafe extern "C" fn run_main(sp: usize, ldso_base: u64) -> ! {
-    ctype_trace(sp, b"ldso: run_main\n");
     unsafe { load_and_jump(sp, ldso_base) }
 }
 
@@ -1609,31 +1570,24 @@ unsafe fn apply_rela_table(
     }
 }
 
-unsafe fn run_constructors(sp: usize) {
-    ctype_trace(sp, b"ldso: constructors start\n");
+unsafe fn run_constructors() {
     for i in 0..LOADED_COUNT {
-        ctype_trace(sp, b"ldso: ctor obj start\n");
-        run_constructors_for(sp, i);
-        ctype_trace(sp, b"ldso: ctor obj done\n");
+        run_constructors_for(i);
     }
-    ctype_trace(sp, b"ldso: constructors done\n");
 }
 
-unsafe fn run_constructors_for(sp: usize, idx: usize) {
+unsafe fn run_constructors_for(idx: usize) {
     let obj = &LOADED[idx];
     if obj.init_present && obj.init != 0 {
-        ctype_trace(sp, b"ldso: call init\n");
         let f: extern "C" fn() = core::mem::transmute(obj.init);
         f();
     }
     if obj.init_array_present && obj.init_array != 0 && obj.init_array_sz >= 8 {
-        ctype_trace(sp, b"ldso: call init_array\n");
         let count = (obj.init_array_sz / 8) as usize;
         for j in 0..count {
             let entry = (obj.init_array as *const u8).add(j * 8);
             let fp = u64::from_le_bytes(core::ptr::read_unaligned(entry as *const [u8; 8]));
             if fp != 0 {
-                ctype_trace(sp, b"ldso: init_array entry\n");
                 let f: extern "C" fn() = core::mem::transmute(fp);
                 f();
             }
@@ -1834,7 +1788,7 @@ pub unsafe extern "C" fn __ldso_dlopen(filename: *const u8, flags: i32) -> *mut 
     LOADED[idx].global = (flags & RTLD_GLOBAL) != 0;
     process_all_relocations();
     update_tls_for_new_module(idx);
-    run_constructors_for(0, idx);
+    run_constructors_for(idx);
     &mut LOADED[idx] as *mut LoadedObject as *mut u8
 }
 
@@ -2109,7 +2063,6 @@ unsafe fn loaded_object_by_name(name: *const u8, name_len: usize) -> Option<usiz
 unsafe fn load_and_jump(sp: usize, ldso_base: u64) -> ! {
     // 1. Find LD_LIBRARY_PATH from kernel envp
     let ld_path = find_env(sp, b"LD_LIBRARY_PATH=");
-    ctype_trace(sp, b"ldso: ld_path\n");
     LD_LIBRARY_PATH = ld_path.unwrap_or(core::ptr::null());
 
     // 2. Open and read the executable (the PIE that invoked us as PT_INTERP)
@@ -2395,7 +2348,6 @@ unsafe fn load_and_jump(sp: usize, ldso_base: u64) -> ! {
         sys_close(lib_fd);
         set_loaded_name(LOADED_COUNT - 1, name_ptr, name_len);
     }
-    ctype_trace(sp, b"ldso: needed loaded\n");
 
     compute_tls_layout();
     TLS_OLD_TOTAL = TLS_TOTAL_SIZE;
@@ -2403,7 +2355,6 @@ unsafe fn load_and_jump(sp: usize, ldso_base: u64) -> ! {
 
     process_all_relocations();
     register_dlopen_callbacks();
-    ctype_trace(sp, b"ldso: relocations done\n");
 
     // Always allocate a TCB so that %fs-relative accesses (e.g. stack canary
     // at %fs:0x28) work even when there is no TLS data in the binary.
@@ -2423,7 +2374,6 @@ unsafe fn load_and_jump(sp: usize, ldso_base: u64) -> ! {
         let _tcb = init_tls_block(tls_block);
         write_tp(_tcb as usize);
     }
-    ctype_trace(sp, b"ldso: tp set\n");
 
     // Set libc.so's __auxv so constructors (e.g. compiler_builtins CPU feature
     // detection) can call getauxval before __libc_start_main runs.
@@ -2439,12 +2389,10 @@ unsafe fn load_and_jump(sp: usize, ldso_base: u64) -> ! {
     if auxv_sym != 0 {
         core::ptr::write(auxv_sym as *mut *const usize, auxv);
     }
-    ctype_trace(sp, b"ldso: auxv set\n");
 
-    run_constructors(sp);
+    run_constructors();
 
     let phdr_addr = exec_base + e_phoff;
-    ctype_trace(sp, b"ldso: build_and_jump\n");
     build_and_jump(exec_base + e_entry, phdr_addr, e_phnum, sp)
 }
 
@@ -2499,7 +2447,6 @@ unsafe fn read_orig_auxv(orig_sp: usize, envc: usize) -> OrigAuxv {
 }
 
 unsafe fn build_and_jump(entry: u64, phdr_addr: u64, phnum: u16, orig_sp: usize) -> ! {
-    ctype_trace(orig_sp, b"ldso: build_and_jump start\n");
     let argc = *(orig_sp as *const u64) as usize;
     let argv_start = orig_sp + 8;
     let envp_start = argv_start + (argc + 1) * 8;
@@ -2614,8 +2561,6 @@ unsafe fn build_and_jump(entry: u64, phdr_addr: u64, phnum: u16, orig_sp: usize)
 
     sp -= 8;
     *(sp as *mut u64) = argc as u64;
-
-    ctype_trace(orig_sp, b"ldso: jumping\n");
 
     #[cfg(target_arch = "x86_64")]
     core::arch::asm!(
