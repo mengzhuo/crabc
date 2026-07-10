@@ -59,6 +59,7 @@ const R_AARCH64_RELATIVE: u64 = 1027;
 const R_AARCH64_TLS_DTPMOD64: u64 = 1029;
 const R_AARCH64_TLS_DTPREL64: u64 = 1030;
 const R_AARCH64_TLS_TPREL64: u64 = 1031;
+const R_AARCH64_TLS_TPREL64: u64 = 1030;
 const R_AARCH64_TLSLE_ADD_TPREL_HI12: u64 = 549;
 const R_AARCH64_TLSLE_ADD_TPREL_LO12: u64 = 550;
 const R_AARCH64_TLSLE_ADD_TPREL_LO12_NC: u64 = 551;
@@ -1625,12 +1626,12 @@ unsafe fn apply_rela_table(
             R_AARCH64_TLSDESC => {
                 let fs_off = tls_tprel_offset(obj_idx, r_sym_idx, r_addend);
                 let desc = slot as *mut [u64; 2];
-                (*desc)[0] = __tlsdesc_static as u64;
+                (*desc)[0] = __tlsdesc_static as *const () as u64;
                 (*desc)[1] = fs_off as u64;
                 write_stderr(b"ldso: TLSDESC slot=");
                 write_hex_stderr(slot as usize);
                 write_stderr(b" resolver=");
-                write_hex_stderr(__tlsdesc_static as usize);
+                write_hex_stderr(__tlsdesc_static as *const () as usize);
                 write_stderr(b" offset=");
                 write_hex_stderr(fs_off as usize);
                 write_stderr(b"\n");
@@ -1946,6 +1947,9 @@ unsafe fn compute_tls_layout() {
     total += total;
     TLS_TOTAL_SIZE = (total + 4095) & !4095;
 
+    write_stderr(b"ldso: compute_tls_layout total=");
+    write_hex_stderr(TLS_TOTAL_SIZE);
+    write_stderr(b"\n");
     #[cfg(target_arch = "aarch64")]
     {
         // AArch64 uses the TLS_ABOVE_TP layout: the variable area is at positive
@@ -1971,6 +1975,11 @@ unsafe fn compute_tls_layout() {
             let desired = image.wrapping_sub(var_base_mod).wrapping_sub(offset) & (align - 1);
             offset += desired;
             TLS_LAYOUT_OFFSET[i] = offset;
+            write_stderr(b"ldso: TLS module ");
+            write_hex_stderr(i);
+            write_stderr(b" offset=");
+            write_hex_stderr(offset);
+            write_stderr(b"\n");
             TLS_FILESZ[i] = obj.tls_filesz;
             TLS_MEMSZ[i] = obj.tls_memsz;
             TLS_IMAGE[i] = obj.tls_image;
