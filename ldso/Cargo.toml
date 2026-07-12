@@ -1,7 +1,10 @@
 [package]
-name = "ldso"
+name = "crabc-ldso"
 version = "0.1.0"
 edition = "2021"
+description = "A Rust dynamic linker for musl-linked ELF binaries"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/mengzhuo/crabc"
 
 [lib]
 crate-type = ["cdylib"]

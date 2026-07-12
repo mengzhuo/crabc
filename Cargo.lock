@@ -7,11 +7,11 @@ name = "crabc"
 version = "0.1.0"
 
 [[package]]
-name = "ldso"
+name = "crabc-ldso"
 version = "0.1.0"
 
 [[package]]
-name = "libc"
+name = "crabc-libc"
 version = "0.1.0"
 dependencies = [
  "libm",

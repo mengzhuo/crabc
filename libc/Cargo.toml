@@ -1,7 +1,10 @@
 [package]
-name = "libc"
+name = "crabc-libc"
 version = "0.1.0"
 edition = "2021"
+description = "A Rust no_std musl-compatible libc implementation"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/mengzhuo/crabc"
 
 [lib]
 name = "c"
