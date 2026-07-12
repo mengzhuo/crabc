@@ -122,7 +122,11 @@ for dir in $DIRS; do
 
         OBJ="$DIR_BUILD/${base}.o"
         COMPILE_RC=0
-        EXTRA_CFLAGS="-mlong-double-64"
+        EXTRA_CFLAGS=""
+        ARCH=$(uname -m)
+        if [ "$ARCH" = "x86_64" ]; then
+            EXTRA_CFLAGS="-mlong-double-64"
+        fi
         if [ "$dir" = "math" ]; then
             EXTRA_CFLAGS="$EXTRA_CFLAGS -I${CRABC_DIR}/include"
         elif [ "$base" = "crypt" ]; then
