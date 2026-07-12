@@ -1670,12 +1670,14 @@ unsafe fn run_constructors_for(idx: usize) {
 /// resolver simply returns the offset stored in the second word.
 #[no_mangle]
 unsafe extern "C" fn __tlsdesc_static(desc: *const u64) -> u64 {
-    write_stderr(b"ldso: __tlsdesc_static desc=");
-    write_hex_stderr(desc as usize);
-    write_stderr(b" arg=");
     let arg = core::ptr::read_unaligned(desc.add(1));
-    write_hex_stderr(arg as usize);
-    write_stderr(b"\n");
+    if cfg!(debug_assertions) {
+        write_stderr(b"ldso: __tlsdesc_static desc=");
+        write_hex_stderr(desc as usize);
+        write_stderr(b" arg=");
+        write_hex_stderr(arg as usize);
+        write_stderr(b"\n");
+    }
     arg
 }
 
@@ -1750,6 +1752,7 @@ unsafe fn update_tls_for_new_module(idx: usize) {
     TLS_FILESZ[idx] = obj.tls_filesz;
     TLS_MEMSZ[idx] = obj.tls_memsz;
     TLS_IMAGE[idx] = obj.tls_image;
+    TLS_TOTAL_SIZE = new_offset + obj.tls_memsz as usize;
     TLS_MODULE_COUNT = LOADED_COUNT;
     TLS_GENERATION = TLS_GENERATION.wrapping_add(1);
     if TLS_GENERATION == 0 {
@@ -1759,7 +1762,6 @@ unsafe fn update_tls_for_new_module(idx: usize) {
     expand_thread_tls(old_total, old_module_count);
 
     TLS_OLD_TOTAL = old_total;
-    TLS_OLD_MODULE_COUNT = old_module_count;
     TLS_OLD_MODULE_COUNT = old_module_count;
     tls_unlock();
 }
