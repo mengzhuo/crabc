@@ -14363,6 +14363,22 @@ pub unsafe extern "C" fn __libc_start_main(
         init_fn();
     }
 
+    // aarch64 GCC reads __stack_chk_guard as a global (GOT-based for PIE),
+    // so we must initialize it from AT_RANDOM before calling main.
+    // x86_64 uses %fs:0x28 which the kernel already set up.
+    #[cfg(target_arch = "aarch64")]
+    {
+        let random_ptr = getauxval(25) as *const u8; // AT_RANDOM = 25
+        if !random_ptr.is_null() {
+            let a = core::ptr::read_unaligned(random_ptr as *const u64);
+            let b = core::ptr::read_unaligned(random_ptr.add(8) as *const u64);
+            __stack_chk_guard = (a ^ b) as usize;
+        } else {
+            // ponytail: fallback entropy, not crypto-grade but nonzero
+            __stack_chk_guard = 0xdefaced_cafebeef;
+        }
+    }
+
     let result = main(argc, argv, envp);
 
     if !_fini.is_null() {
@@ -14447,7 +14463,6 @@ include!("lrand48.rs");
 include!("strverscmp.rs");
 include!("syscall.rs");
 include!("pthread_atfork.rs");
-#[cfg(target_arch = "x86_64")]
 include!("fenv.rs");
 include!("locale_ctype.rs");
 include!("regression_stubs.rs");
