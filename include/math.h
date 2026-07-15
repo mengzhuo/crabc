@@ -71,12 +71,24 @@ static __inline int __fpclassify(double __f)
 
 static __inline int __fpclassifyl(long double __f)
 {
+#ifdef __aarch64__
+    // IEEE quad: sign(1) exponent(15) mantissa(112)
+    unsigned long long __hi, __lo;
+    __builtin_memcpy(&__lo, &__f, 8);
+    __builtin_memcpy(&__hi, (const char *)&__f + 8, 8);
+    int __e = (__hi >> 48) & 0x7fff;
+    unsigned long long __m = (__hi & 0x0000ffffffffffffULL) | __lo;
+    if (!__e) return __m ? FP_SUBNORMAL : FP_ZERO;
+    if (__e == 0x7fff) return __m ? FP_NAN : FP_INFINITE;
+    return FP_NORMAL;
+#else
     union { long double __f; struct { unsigned long long __m; unsigned short __e; unsigned short __pad; } __i; } __u = { __f };
     int __e = __u.__i.__e & 0x7fff;
     unsigned long long __m = __u.__i.__m;
     if (!__e) return __m ? FP_SUBNORMAL : FP_ZERO;
     if (__e == 0x7fff) return (__m & 0x7fffffffffffffffULL) ? FP_NAN : FP_INFINITE;
     return FP_NORMAL;
+#endif
 }
 
 static __inline int __signbitf(float __f)
@@ -91,8 +103,14 @@ static __inline int __signbit(double __f)
 
 static __inline int __signbitl(long double __f)
 {
+#ifdef __aarch64__
+    unsigned long long __hi;
+    __builtin_memcpy(&__hi, (const char *)&__f + 8, 8);
+    return __hi >> 63;
+#else
     union { long double __f; struct { unsigned long long __m; unsigned short __e; unsigned short __pad; } __i; } __u = { __f };
     return __u.__i.__e >> 15;
+#endif
 }
 
 #define fpclassify(x) ( \

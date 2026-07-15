@@ -11,16 +11,24 @@ fn static_hello_links_against_libc_a() {
     let hello_src = fixtures.join("hello.c");
     let hello_bin = fixtures.join("hello_static");
 
+    // CRT paths differ by architecture
+    let arch = if cfg!(target_arch = "aarch64") {
+        "aarch64"
+    } else {
+        "x86_64"
+    };
+    let musl_lib = format!("/usr/lib/{}-linux-musl", arch);
+
     let status = Command::new("musl-gcc")
         .args([
             "-static",
             "-nostdlib",
             "-fno-stack-protector",
-            "/usr/lib/x86_64-linux-musl/crt1.o",
-            "/usr/lib/x86_64-linux-musl/crti.o",
+            &format!("{}/crt1.o", musl_lib),
+            &format!("{}/crti.o", musl_lib),
             hello_src.to_str().unwrap(),
             libc_a.to_str().unwrap(),
-            "/usr/lib/x86_64-linux-musl/crtn.o",
+            &format!("{}/crtn.o", musl_lib),
             "-o",
             hello_bin.to_str().unwrap(),
         ])

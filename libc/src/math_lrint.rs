@@ -87,14 +87,28 @@ pub extern "C" fn llrintf(x: f32) -> c_longlong {
     rintf(x) as c_longlong
 }
 
-// long double = f64 on this platform (LDBL_MANT_DIG == 53)
-// musl: lrintl(x) -> lrint(x), llrintl(x) -> llrint(x)
+// On x86_64 with -mlong-double-64: long double = f64, delegate to lrint/llrint.
+// On aarch64: long double = f128 (IEEE quad), cast to f64 then round.
+#[cfg(target_arch = "x86_64")]
 #[no_mangle]
 pub extern "C" fn lrintl(x: f64) -> c_long {
     lrint(x)
 }
 
+#[cfg(target_arch = "x86_64")]
 #[no_mangle]
 pub extern "C" fn llrintl(x: f64) -> c_longlong {
     llrint(x)
+}
+
+#[cfg(target_arch = "aarch64")]
+#[no_mangle]
+pub extern "C" fn lrintl(x: f128) -> c_long {
+    lrint(x as f64)
+}
+
+#[cfg(target_arch = "aarch64")]
+#[no_mangle]
+pub extern "C" fn llrintl(x: f128) -> c_longlong {
+    llrint(x as f64)
 }

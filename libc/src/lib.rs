@@ -1,6 +1,7 @@
 #![cfg_attr(not(test), no_std)]
 #![feature(c_variadic)]
 #![feature(linkage)]
+#![feature(f128)]
 #![allow(dead_code, non_camel_case_types)]
 
 use core::ffi::{c_char, c_int, c_long, c_longlong, c_uint, c_ulong, c_ulonglong, c_void, VaList};
@@ -6401,7 +6402,14 @@ macro_rules! impl_format {
                         }
                         (b'L', b'f') | (b'L', b'F') | (b'L', b'e') | (b'L', b'E')
                         | (b'L', b'g') | (b'L', b'G') | (b'L', b'a') | (b'L', b'A') => {
-                            // Long double = double for this implementation
+                            #[cfg(target_arch = "aarch64")]
+                            let val = {
+                                let lo: u64 = args.next_arg::<u64>();
+                                let hi: u64 = args.next_arg::<u64>();
+                                let combined: u128 = ((hi as u128) << 64) | (lo as u128);
+                                core::mem::transmute::<u128, f128>(combined) as f64
+                            };
+                            #[cfg(target_arch = "x86_64")]
                             let val = args.next_arg::<f64>();
                             let ucase = spec == b'F' || spec == b'E' || spec == b'G' || spec == b'A';
                             let ftype = match spec | 0x20 { b'f' => FMT_F, b'e' => FMT_E, b'g' => FMT_G, b'a' => FMT_A, _ => FMT_F };
@@ -7540,9 +7548,26 @@ unsafe fn format_to_buf(buf: *mut u8, cap: usize, fmt: *const c_char, args: &mut
                         ws_buf!(fbuf.as_ptr(), len);
                     }
                     (b'l', b'f') | (b'l', b'F') | (b'l', b'e') | (b'l', b'E')
-                    | (b'l', b'g') | (b'l', b'G') | (b'l', b'a') | (b'l', b'A')
-                    | (b'L', b'f') | (b'L', b'F') | (b'L', b'e') | (b'L', b'E')
+                    | (b'l', b'g') | (b'l', b'G') | (b'l', b'a') | (b'l', b'A') => {
+                        let val = args.next_arg::<f64>();
+                        let ucase = spec == b'F' || spec == b'E' || spec == b'G' || spec == b'A';
+                        let ftype = match spec | 0x20 { b'f' => FMT_F, b'e' => FMT_E, b'g' => FMT_G, b'a' => FMT_A, _ => FMT_F };
+                        let mut fbuf = [0u8; 4224];
+                        let flen = format_f64_full(fbuf.as_mut_ptr(), val, ftype, precision, flags, ucase);
+                        let mut wbuf = [0u8; 4224];
+                        let wlen = apply_width_flags(wbuf.as_mut_ptr(), fbuf.as_ptr(), flen, width, flags);
+                        ws_buf!(wbuf.as_ptr(), wlen);
+                    }
+                    (b'L', b'f') | (b'L', b'F') | (b'L', b'e') | (b'L', b'E')
                     | (b'L', b'g') | (b'L', b'G') | (b'L', b'a') | (b'L', b'A') => {
+                        #[cfg(target_arch = "aarch64")]
+                        let val = {
+                            let lo: u64 = args.next_arg::<u64>();
+                            let hi: u64 = args.next_arg::<u64>();
+                            let combined: u128 = ((hi as u128) << 64) | (lo as u128);
+                            core::mem::transmute::<u128, f128>(combined) as f64
+                        };
+                        #[cfg(target_arch = "x86_64")]
                         let val = args.next_arg::<f64>();
                         let ucase = spec == b'F' || spec == b'E' || spec == b'G' || spec == b'A';
                         let ftype = match spec | 0x20 { b'f' => FMT_F, b'e' => FMT_E, b'g' => FMT_G, b'a' => FMT_A, _ => FMT_F };
@@ -7927,9 +7952,13 @@ unsafe fn do_vsscanf(
                 let (val, ok) = scan_float_val(buf, &mut p, buf_len, width);
                 if !ok { break; }
                 if !suppress {
-                    // %f -> f32, %lf -> f64, %Lf -> f64
-                    if _real_len == 3 || _real_len == 5 {
+                    if _real_len == 3 {
                         let out = args.next_arg::<*mut f64>(); if !out.is_null() { *out = val; }
+                    } else if _real_len == 5 {
+                        #[cfg(target_arch = "aarch64")]
+                        { let out = args.next_arg::<*mut f128>(); if !out.is_null() { *out = val as f128; } }
+                        #[cfg(target_arch = "x86_64")]
+                        { let out = args.next_arg::<*mut f64>(); if !out.is_null() { *out = val; } }
                     } else {
                         let out = args.next_arg::<*mut f32>(); if !out.is_null() { *out = val as f32; }
                     }
@@ -9636,7 +9665,12 @@ pub unsafe extern "C" fn wcstod(s: *const wchar_t, endptr: *mut *mut wchar_t) ->
 pub unsafe extern "C" fn wcstof(s: *const wchar_t, endptr: *mut *mut wchar_t) -> f32 { wcstod(s, endptr) as f32 }
 
 #[no_mangle]
+#[cfg(target_arch = "x86_64")]
 pub unsafe extern "C" fn wcstold(s: *const wchar_t, endptr: *mut *mut wchar_t) -> f64 { wcstod(s, endptr) }
+
+#[no_mangle]
+#[cfg(target_arch = "aarch64")]
+pub unsafe extern "C" fn wcstold(s: *const wchar_t, endptr: *mut *mut wchar_t) -> f128 { wcstod(s, endptr) as f128 }
 
 #[no_mangle]
 pub unsafe extern "C" fn wcstoimax(s: *const wchar_t, endptr: *mut *mut wchar_t, base: c_int) -> c_longlong { wcstoll(s, endptr, base) }
@@ -10054,9 +10088,26 @@ pub unsafe extern "C" fn vswprintf(s: *mut wchar_t, n: usize, fmt: *const wchar_
                         }
                     }
                     (b'l', b'f') | (b'l', b'F') | (b'l', b'e') | (b'l', b'E')
-                    | (b'l', b'g') | (b'l', b'G') | (b'l', b'a') | (b'l', b'A')
-                    | (b'L', b'f') | (b'L', b'F') | (b'L', b'e') | (b'L', b'E')
+                    | (b'l', b'g') | (b'l', b'G') | (b'l', b'a') | (b'l', b'A') => {
+                        let val = args.next_arg::<f64>();
+                        let ucase = spec == b'F' || spec == b'E' || spec == b'G' || spec == b'A';
+                        let ftype = match spec | 0x20 { b'f' => FMT_F, b'e' => FMT_E, b'g' => FMT_G, b'a' => FMT_A, _ => FMT_F };
+                        let mut fbuf = [0u8; 4224];
+                        let flen = format_f64_full(fbuf.as_mut_ptr(), val, ftype, precision, flags, ucase);
+                        let mut wbuf = [0u8; 4224];
+                        let wlen = apply_width_flags(wbuf.as_mut_ptr(), fbuf.as_ptr(), flen, width, flags);
+                        for k in 0..wlen { wc!(wbuf[k]); }
+                    }
+                    (b'L', b'f') | (b'L', b'F') | (b'L', b'e') | (b'L', b'E')
                     | (b'L', b'g') | (b'L', b'G') | (b'L', b'a') | (b'L', b'A') => {
+                        #[cfg(target_arch = "aarch64")]
+                        let val = {
+                            let lo: u64 = args.next_arg::<u64>();
+                            let hi: u64 = args.next_arg::<u64>();
+                            let combined: u128 = ((hi as u128) << 64) | (lo as u128);
+                            core::mem::transmute::<u128, f128>(combined) as f64
+                        };
+                        #[cfg(target_arch = "x86_64")]
                         let val = args.next_arg::<f64>();
                         let ucase = spec == b'F' || spec == b'E' || spec == b'G' || spec == b'A';
                         let ftype = match spec | 0x20 { b'f' => FMT_F, b'e' => FMT_E, b'g' => FMT_G, b'a' => FMT_A, _ => FMT_F };
@@ -12795,9 +12846,15 @@ pub unsafe extern "C" fn strtof(s: *const c_char, endptr: *mut *mut c_char) -> f
 }
 
 #[no_mangle]
+#[cfg(target_arch = "x86_64")]
 pub unsafe extern "C" fn strtold(s: *const c_char, endptr: *mut *mut c_char) -> f64 {
-    // ponytail: on x86_64 long double == double in many implementations
     strtod(s, endptr)
+}
+
+#[no_mangle]
+#[cfg(target_arch = "aarch64")]
+pub unsafe extern "C" fn strtold(s: *const c_char, endptr: *mut *mut c_char) -> f128 {
+    strtod(s, endptr) as f128
 }
 
 #[no_mangle]

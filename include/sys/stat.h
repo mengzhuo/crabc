@@ -9,6 +9,22 @@ extern "C" {
 #endif
 
 struct stat {
+#ifdef __aarch64__
+    unsigned long long st_dev;
+    unsigned long long st_ino;
+    unsigned int st_mode;
+    unsigned int st_nlink;
+    unsigned int st_uid;
+    unsigned int st_gid;
+    unsigned long long st_rdev;
+    long st_size;
+    int st_blksize;
+    long st_blocks;
+    struct timespec st_atim;
+    struct timespec st_mtim;
+    struct timespec st_ctim;
+    long __unused[3];
+#else
     unsigned long st_dev;
     unsigned long st_ino;
     unsigned long st_nlink;
@@ -24,6 +40,7 @@ struct stat {
     struct timespec st_mtim;
     struct timespec st_ctim;
     long __unused[3];
+#endif
 };
 
 #define st_atime st_atim.tv_sec
