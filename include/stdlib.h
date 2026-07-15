@@ -83,12 +83,6 @@ void qsort_r(void *, size_t, size_t, int (*)(const void *, const void *, void *)
 int mblen(const char *, size_t);
 int mbtowc(int *__restrict, const char *__restrict, size_t);
 int wctomb(char *, int);
-size_t mbstowcs(int *__restrict, const char *__restrict, size_t);
-size_t wcstombs(char *__restrict, const int *__restrict, size_t);
-size_t mbsrtowcs(int *__restrict, const char **__restrict, size_t, unsigned int *__restrict);
-size_t wcsrtombs(char *__restrict, const int **__restrict, size_t, unsigned int *__restrict);
-size_t wcrtomb(char *, int, unsigned int *);
-size_t mbrtowc(int *__restrict, const char *__restrict, size_t, unsigned int *__restrict);
 
 #ifdef __cplusplus
 }
