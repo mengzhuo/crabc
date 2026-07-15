@@ -6407,7 +6407,7 @@ macro_rules! impl_format {
                                 let lo: u64 = args.next_arg::<u64>();
                                 let hi: u64 = args.next_arg::<u64>();
                                 let combined: u128 = ((hi as u128) << 64) | (lo as u128);
-                                core::mem::transmute::<u128, f128>(combined) as f64
+                                f128::from_bits(combined) as f64
                             };
                             #[cfg(target_arch = "x86_64")]
                             let val = args.next_arg::<f64>();
@@ -7565,7 +7565,7 @@ unsafe fn format_to_buf(buf: *mut u8, cap: usize, fmt: *const c_char, args: &mut
                             let lo: u64 = args.next_arg::<u64>();
                             let hi: u64 = args.next_arg::<u64>();
                             let combined: u128 = ((hi as u128) << 64) | (lo as u128);
-                            core::mem::transmute::<u128, f128>(combined) as f64
+                            f128::from_bits(combined) as f64
                         };
                         #[cfg(target_arch = "x86_64")]
                         let val = args.next_arg::<f64>();
@@ -10105,7 +10105,7 @@ pub unsafe extern "C" fn vswprintf(s: *mut wchar_t, n: usize, fmt: *const wchar_
                             let lo: u64 = args.next_arg::<u64>();
                             let hi: u64 = args.next_arg::<u64>();
                             let combined: u128 = ((hi as u128) << 64) | (lo as u128);
-                            core::mem::transmute::<u128, f128>(combined) as f64
+                            f128::from_bits(combined) as f64
                         };
                         #[cfg(target_arch = "x86_64")]
                         let val = args.next_arg::<f64>();
