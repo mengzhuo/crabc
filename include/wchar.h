@@ -18,7 +18,11 @@ extern "C" {
 #endif
 
 #ifndef __cplusplus
+#ifdef __aarch64__
+typedef unsigned int wchar_t;
+#else
 typedef int wchar_t;
+#endif
 #endif
 typedef unsigned int wint_t;
 typedef unsigned int mbstate_t;
