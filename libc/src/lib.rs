@@ -1924,7 +1924,7 @@ pub unsafe extern "C" fn longjmp(env: *const c_ulong, val: c_int) -> ! {
     );
 }
 
-#[cfg(all(target_arch = "aarch64", not(test)))]
+#[cfg(target_arch = "aarch64")]
 core::arch::global_asm!(
     ".global setjmp",
     ".type setjmp, @function",
@@ -2050,7 +2050,7 @@ pub unsafe extern "C" fn __sigsetjmp_tail(env: *mut c_ulong, ret: c_int) -> c_in
     ret
 }
 
-#[cfg(all(target_arch = "aarch64", not(test)))]
+#[cfg(target_arch = "aarch64")]
 core::arch::global_asm!(
     ".global sigsetjmp",
     ".global __sigsetjmp",
