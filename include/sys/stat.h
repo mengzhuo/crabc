@@ -17,13 +17,15 @@ struct stat {
     unsigned int st_uid;
     unsigned int st_gid;
     unsigned long long st_rdev;
+    unsigned long __pad;
     long st_size;
     int st_blksize;
+    int __pad2;
     long st_blocks;
     struct timespec st_atim;
     struct timespec st_mtim;
     struct timespec st_ctim;
-    long __unused[3];
+    unsigned int __unused[2];
 #else
     unsigned long st_dev;
     unsigned long st_ino;
