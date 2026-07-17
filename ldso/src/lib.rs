@@ -66,11 +66,11 @@ const R_AARCH64_TLSDESC: u64 = 1031;
 
 const R_RISCV_RELATIVE: u64 = 3;
 const R_RISCV_64: u64 = 2;
-const R_RISCV_GLOB_DAT: u64 = 5;
-const R_RISCV_JUMP_SLOT: u64 = 6;
-const R_RISCV_TLS_DTPMOD64: u64 = 769;
-const R_RISCV_TLS_DTPREL64: u64 = 770;
-const R_RISCV_TLS_TPREL64: u64 = 771;
+const R_RISCV_GLOB_DAT: u64 = 5;  // skipped, RISC-V uses R_RISCV_64=2 as GLOB_DAT
+const R_RISCV_JUMP_SLOT: u64 = 5;
+const R_RISCV_TLS_DTPMOD64: u64 = 7;
+const R_RISCV_TLS_DTPREL64: u64 = 9;
+const R_RISCV_TLS_TPREL64: u64 = 11;
 const R_RISCV_TLSDESC: u64 = 772;
 const R_RISCV_COPY: u64 = 4;
 
@@ -1819,7 +1819,7 @@ unsafe fn apply_rela_table(
         let r_sym_idx = (r_info >> 32) as usize;
         let slot = (base + r_offset) as *mut u64;
 
-        if r_type == R_X86_64_COPY || r_type == R_RISCV_COPY {
+        if r_type == R_RISCV_COPY || (r_type == R_X86_64_COPY && cfg!(not(target_arch = "riscv64"))) {
             if !copy_only {
                 continue;
             }
