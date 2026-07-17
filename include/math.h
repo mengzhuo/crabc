@@ -71,7 +71,7 @@ static __inline int __fpclassify(double __f)
 
 static __inline int __fpclassifyl(long double __f)
 {
-#ifdef __aarch64__
+#if defined(__aarch64__) || defined(__riscv)
     // IEEE quad: sign(1) exponent(15) mantissa(112)
     unsigned long long __hi, __lo;
     __builtin_memcpy(&__lo, &__f, 8);
@@ -103,7 +103,7 @@ static __inline int __signbit(double __f)
 
 static __inline int __signbitl(long double __f)
 {
-#ifdef __aarch64__
+#if defined(__aarch64__) || defined(__riscv)
     unsigned long long __hi;
     __builtin_memcpy(&__hi, (const char *)&__f + 8, 8);
     return __hi >> 63;

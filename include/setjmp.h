@@ -8,6 +8,9 @@ extern "C" {
 #ifdef __aarch64__
 typedef unsigned long jmp_buf[22];
 typedef unsigned long sigjmp_buf[40];
+#elif defined(__riscv)
+typedef unsigned long jmp_buf[26];
+typedef unsigned long sigjmp_buf[44];
 #else
 typedef unsigned long jmp_buf[8];
 typedef unsigned long sigjmp_buf[10];

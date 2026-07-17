@@ -112,3 +112,15 @@ pub extern "C" fn lrintl(x: f128) -> c_long {
 pub extern "C" fn llrintl(x: f128) -> c_longlong {
     llrint(x as f64)
 }
+
+#[cfg(target_arch = "riscv64")]
+#[no_mangle]
+pub extern "C" fn lrintl(x: f128) -> c_long {
+    lrint(x as f64)
+}
+
+#[cfg(target_arch = "riscv64")]
+#[no_mangle]
+pub extern "C" fn llrintl(x: f128) -> c_longlong {
+    llrint(x as f64)
+}

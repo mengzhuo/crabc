@@ -36,6 +36,7 @@ pub const ET_DYN: u16 = 3;
 pub const ET_EXEC: u16 = 2;
 pub const EM_X86_64: u16 = 62;
 pub const EM_AARCH64: u16 = 183;
+pub const EM_RISCV: u16 = 243;
 
 pub const PT_LOAD: u32 = 1;
 pub const PT_DYNAMIC: u32 = 2;
@@ -54,11 +55,14 @@ pub const DT_PLTRELSZ: u64 = 2;
 
 pub const R_X86_64_RELATIVE: u64 = 8;
 pub const R_AARCH64_RELATIVE: u64 = 1027;
+pub const R_RISCV_RELATIVE: u64 = 3;
 
 #[cfg(target_arch = "x86_64")]
 const R_RELATIVE: u64 = R_X86_64_RELATIVE;
 #[cfg(target_arch = "aarch64")]
 const R_RELATIVE: u64 = R_AARCH64_RELATIVE;
+#[cfg(target_arch = "riscv64")]
+const R_RELATIVE: u64 = R_RISCV_RELATIVE;
 
 pub const AT_NULL: u64 = 0;
 pub const AT_PHDR: u64 = 3;
@@ -334,10 +338,119 @@ impl Syscalls for Aarch64 {
     }
 }
 
+pub struct Riscv64;
+
+#[cfg(target_arch = "riscv64")]
+impl Syscalls for Riscv64 {
+    #[inline(always)]
+    unsafe fn syscall0(n: i64) -> i64 {
+        let result: i64;
+        core::arch::asm!(
+            "ecall",
+            inlateout("a7") n => _,
+            lateout("a0") result,
+            options(nostack),
+        );
+        result
+    }
+    #[inline(always)]
+    unsafe fn syscall1(n: i64, a1: i64) -> i64 {
+        let result: i64;
+        core::arch::asm!(
+            "ecall",
+            inlateout("a7") n => _,
+            inlateout("a0") a1 => result,
+            options(nostack),
+        );
+        result
+    }
+    #[inline(always)]
+    unsafe fn syscall2(n: i64, a1: i64, a2: i64) -> i64 {
+        let result: i64;
+        core::arch::asm!(
+            "ecall",
+            inlateout("a7") n => _,
+            inlateout("a0") a1 => result,
+            inlateout("a1") a2 => _,
+            options(nostack),
+        );
+        result
+    }
+    #[inline(always)]
+    unsafe fn syscall3(n: i64, a1: i64, a2: i64, a3: i64) -> i64 {
+        let result: i64;
+        core::arch::asm!(
+            "ecall",
+            inlateout("a7") n => _,
+            inlateout("a0") a1 => result,
+            inlateout("a1") a2 => _,
+            inlateout("a2") a3 => _,
+            options(nostack),
+        );
+        result
+    }
+    #[inline(always)]
+    unsafe fn syscall4(n: i64, a1: i64, a2: i64, a3: i64, a4: i64) -> i64 {
+        let result: i64;
+        core::arch::asm!(
+            "ecall",
+            inlateout("a7") n => _,
+            inlateout("a0") a1 => result,
+            inlateout("a1") a2 => _,
+            inlateout("a2") a3 => _,
+            inlateout("a3") a4 => _,
+            options(nostack),
+        );
+        result
+    }
+    #[inline(always)]
+    unsafe fn syscall5(n: i64, a1: i64, a2: i64, a3: i64, a4: i64, a5: i64) -> i64 {
+        let result: i64;
+        core::arch::asm!(
+            "ecall",
+            inlateout("a7") n => _,
+            inlateout("a0") a1 => result,
+            inlateout("a1") a2 => _,
+            inlateout("a2") a3 => _,
+            inlateout("a3") a4 => _,
+            inlateout("a4") a5 => _,
+            options(nostack),
+        );
+        result
+    }
+    #[inline(always)]
+    unsafe fn syscall6(n: i64, a1: i64, a2: i64, a3: i64, a4: i64, a5: i64, a6: i64) -> i64 {
+        let result: i64;
+        core::arch::asm!(
+            "ecall",
+            inlateout("a7") n => _,
+            inlateout("a0") a1 => result,
+            inlateout("a1") a2 => _,
+            inlateout("a2") a3 => _,
+            inlateout("a3") a4 => _,
+            inlateout("a4") a5 => _,
+            inlateout("a5") a6 => _,
+            options(nostack),
+        );
+        result
+    }
+    #[inline(always)]
+    unsafe fn syscall_noreturn1(n: i64, a1: i64) -> ! {
+        core::arch::asm!(
+            "ecall",
+            in("a7") n,
+            in("a0") a1,
+            options(noreturn, nostack),
+        );
+    }
+}
+
 #[cfg(target_arch = "x86_64")]
 pub type Arch = X86_64;
 #[cfg(target_arch = "aarch64")]
 pub type Arch = Aarch64;
+#[cfg(target_arch = "riscv64")]
+pub type Arch = Riscv64;
 
 
 
@@ -347,6 +460,10 @@ mod sysnr {
     pub const SYS_MMAP: i64 = 9;
 }
 #[cfg(target_arch = "aarch64")]
+mod sysnr {
+    pub const SYS_MMAP: i64 = 222;
+}
+#[cfg(target_arch = "riscv64")]
 mod sysnr {
     pub const SYS_MMAP: i64 = 222;
 }
@@ -375,7 +492,7 @@ pub fn parse_ehdr(data: &[u8]) -> Result<Ehdr, &'static str> {
         return Err("not ELFCLASS64");
     }
     let ehdr = unsafe { &*(data.as_ptr() as *const Ehdr) };
-    if ehdr.e_machine != EM_X86_64 && ehdr.e_machine != EM_AARCH64 {
+    if ehdr.e_machine != EM_X86_64 && ehdr.e_machine != EM_AARCH64 && ehdr.e_machine != EM_RISCV {
         return Err("not a supported EM machine");
     }
     Ok(*ehdr)

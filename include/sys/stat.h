@@ -9,7 +9,7 @@ extern "C" {
 #endif
 
 struct stat {
-#ifdef __aarch64__
+#if defined(__aarch64__) || defined(__riscv)
     unsigned long long st_dev;
     unsigned long long st_ino;
     unsigned int st_mode;
