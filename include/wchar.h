@@ -18,8 +18,10 @@ extern "C" {
 #endif
 
 #ifndef __cplusplus
-#ifdef __aarch64__
+#if defined(__aarch64__)
 typedef unsigned int wchar_t;
+#elif defined(__riscv)
+typedef int wchar_t;
 #else
 typedef int wchar_t;
 #endif

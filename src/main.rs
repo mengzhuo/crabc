@@ -123,4 +123,19 @@ fn transfer(entry: u64, argv: &[String], phdr_addr: u64, phnum: usize) -> ! {
             options(noreturn)
         );
     }
+
+    #[cfg(target_arch = "riscv64")]
+    unsafe {
+        core::arch::asm!(
+            "mv sp, {sp}",
+            "mv a0, {argc}",
+            "mv a1, {argv}",
+            "jr {entry}",
+            sp = in(reg) sp,
+            argc = in(reg) argv.len(),
+            argv = in(reg) sp + 8,
+            entry = in(reg) entry,
+            options(noreturn)
+        );
+    }
 }

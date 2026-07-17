@@ -4,6 +4,9 @@ pub type fexcept_t = u16;
 #[cfg(target_arch = "aarch64")]
 pub type fexcept_t = u32;
 
+#[cfg(target_arch = "riscv64")]
+pub type fexcept_t = u32;
+
 // x87 fnstenv/fldenv (28 bytes) + stmxcsr/ldmxcsr (4 bytes) = 32 bytes
 #[cfg(target_arch = "x86_64")]
 #[repr(C)]
@@ -19,9 +22,14 @@ pub struct fenv_t {
     __fpsr: u32,
 }
 
+#[cfg(target_arch = "riscv64")]
+pub type fenv_t = u32;
+
 #[cfg(target_arch = "x86_64")]
 const FE_DFL_ENV: *const fenv_t = -1isize as *const fenv_t;
 #[cfg(target_arch = "aarch64")]
+const FE_DFL_ENV: *const fenv_t = -1isize as *const fenv_t;
+#[cfg(target_arch = "riscv64")]
 const FE_DFL_ENV: *const fenv_t = -1isize as *const fenv_t;
 
 #[cfg(target_arch = "x86_64")]
@@ -54,6 +62,22 @@ mod feconst {
     pub const FE_DOWNWARD: c_int = 0x800000;
     pub const FE_UPWARD: c_int = 0x400000;
     pub const FE_TOWARDZERO: c_int = 0xc00000;
+}
+
+#[cfg(target_arch = "riscv64")]
+mod feconst {
+    use super::*;
+    pub const FE_INVALID: c_int = 16;
+    pub const FE_DIVBYZERO: c_int = 8;
+    pub const FE_OVERFLOW: c_int = 4;
+    pub const FE_UNDERFLOW: c_int = 2;
+    pub const FE_INEXACT: c_int = 1;
+    pub const FE_ALL_EXCEPT: c_int = 31;
+
+    pub const FE_TONEAREST: c_int = 0;
+    pub const FE_DOWNWARD: c_int = 2;
+    pub const FE_UPWARD: c_int = 3;
+    pub const FE_TOWARDZERO: c_int = 1;
 }
 
 use feconst::*;
@@ -248,6 +272,106 @@ mod aarch64_imp {
 
 #[cfg(target_arch = "aarch64")]
 use aarch64_imp::*;
+
+// riscv64 implementation using fflags/frm/fcsr CSRs
+#[cfg(target_arch = "riscv64")]
+mod riscv64_imp {
+    use super::*;
+
+    #[no_mangle]
+    pub unsafe extern "C" fn feclearexcept(excepts: c_int) -> c_int {
+        let mask = (excepts & 0x1f) as u64;
+        // csrc fflags, a0 — clear bits in fflags
+        core::arch::asm!(
+            "csrc fflags, {mask}",
+            mask = in(reg) mask,
+            options(nostack),
+        );
+        0
+    }
+
+    #[no_mangle]
+    pub unsafe extern "C" fn feraiseexcept(excepts: c_int) -> c_int {
+        let mask = (excepts & 0x1f) as u64;
+        // csrs fflags, a0 — set bits in fflags
+        core::arch::asm!(
+            "csrs fflags, {mask}",
+            mask = in(reg) mask,
+            options(nostack),
+        );
+        0
+    }
+
+    #[no_mangle]
+    pub unsafe extern "C" fn fetestexcept(excepts: c_int) -> c_int {
+        let fflags: u64;
+        // frflags t0 — read fflags
+        core::arch::asm!(
+            "frflags {fflags}",
+            fflags = out(reg) fflags,
+            options(nostack),
+        );
+        (fflags as c_int) & (excepts & 0x1f)
+    }
+
+    #[no_mangle]
+    pub unsafe extern "C" fn fegetround() -> c_int {
+        let frm: u64;
+        // frrm a0 — read rounding mode
+        core::arch::asm!(
+            "frrm {frm}",
+            frm = out(reg) frm,
+            options(nostack),
+        );
+        frm as c_int
+    }
+
+    #[no_mangle]
+    pub unsafe extern "C" fn fesetround(r: c_int) -> c_int {
+        if r != FE_TONEAREST && r != FE_DOWNWARD && r != FE_UPWARD && r != FE_TOWARDZERO {
+            return -1;
+        }
+        // fsrm t0, a0 — set rounding mode
+        core::arch::asm!(
+            "fsrm zero, {r}",
+            r = in(reg) r as u64,
+            options(nostack),
+        );
+        0
+    }
+
+    #[no_mangle]
+    pub unsafe extern "C" fn fegetenv(envp: *mut fenv_t) -> c_int {
+        let fcsr: u64;
+        // frcsr t0 — read full CSR
+        core::arch::asm!(
+            "frcsr {fcsr}",
+            fcsr = out(reg) fcsr,
+            options(nostack),
+        );
+        *envp = fcsr as u32;
+        0
+    }
+
+    #[no_mangle]
+    pub unsafe extern "C" fn fesetenv(envp: *const fenv_t) -> c_int {
+        let val = if envp == FE_DFL_ENV {
+            0u64
+        } else {
+            *envp as u64
+        };
+        // fscsr t1 — set full CSR
+        core::arch::asm!(
+            "fscsr zero, {val}",
+            val = in(reg) val,
+            options(nostack),
+        );
+        0
+    }
+}
+
+#[cfg(target_arch = "riscv64")]
+use riscv64_imp::*;
 
 #[no_mangle]
 pub unsafe extern "C" fn fegetexceptflag(fp: *mut fexcept_t, mask: c_int) -> c_int {

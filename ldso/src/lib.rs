@@ -64,6 +64,16 @@ const R_AARCH64_TLSLE_ADD_TPREL_LO12: u64 = 550;
 const R_AARCH64_TLSLE_ADD_TPREL_LO12_NC: u64 = 551;
 const R_AARCH64_TLSDESC: u64 = 1031;
 
+const R_RISCV_RELATIVE: u64 = 3;
+const R_RISCV_64: u64 = 2;
+const R_RISCV_GLOB_DAT: u64 = 5;
+const R_RISCV_JUMP_SLOT: u64 = 6;
+const R_RISCV_TLS_DTPMOD64: u64 = 769;
+const R_RISCV_TLS_DTPREL64: u64 = 770;
+const R_RISCV_TLS_TPREL64: u64 = 771;
+const R_RISCV_TLSDESC: u64 = 772;
+const R_RISCV_COPY: u64 = 4;
+
 const RTLD_LAZY: i32 = 1;
 const RTLD_NOW: i32 = 2;
 const RTLD_LOCAL: i32 = 0;
@@ -371,6 +381,103 @@ core::arch::global_asm!(
     run_main = sym run_main,
 );
 
+// riscv64 _start: self-relocate ldso, then call run_main(sp, ldso_base)
+#[cfg(not(test))]
+#[cfg(target_arch = "riscv64")]
+core::arch::global_asm!(
+    ".global _start",
+    ".type _start, @function",
+    "_start:",
+    // Save sp into s0 (frame pointer, callee-saved)
+    "mv s0, sp",
+    // Walk stack: argc, argv[], NULL, envp[], NULL, auxv[]
+    "ld a0, 0(sp)",              // argc
+    "add a1, sp, 8",            // &argv[0]
+    "slli a2, a0, 3",
+    "add a2, a1, a2",           // skip argv[]
+    "addi a2, a2, 8",           // skip NULL after argv -> &envp[0]
+    "2:",
+    "ld a3, 0(a2)",
+    "beqz a3, 3f",
+    "addi a2, a2, 8",
+    "j 2b",
+    "3:",
+    "addi a2, a2, 8",           // &auxv[0]
+    "li s1, 0",                 // ldso_base = 0
+    "4:",
+    "ld a3, 0(a2)",             // auxv tag
+    "beqz a3, 5f",              // AT_NULL -> done
+    "li a4, 7",                 // AT_BASE
+    "bne a3, a4, 6f",
+    "ld s1, 8(a2)",             // ldso_base
+    "6:",
+    "addi a2, a2, 16",
+    "j 4b",
+    "5:",
+    // s1 = ldso_base. Walk ldso's ELF phdrs to find PT_DYNAMIC.
+    "ld a0, 32(s1)",            // e_phoff
+    "lhu a1, 56(s1)",           // e_phnum
+    "add a2, s1, a0",           // phdr table
+    "li a3, 0",                 // i
+    "7:",
+    "bgeu a3, a1, 8f",
+    "lw a4, 0(a2)",             // p_type
+    "li a5, 2",                 // PT_DYNAMIC
+    "beq a4, a5, 9f",
+    "addi a2, a2, 56",          // next phdr (PHDR_SIZE=56)
+    "addi a3, a3, 1",
+    "j 7b",
+    "9:",
+    // Found PT_DYNAMIC. Read DT_RELA and DT_RELASZ from dynamic section.
+    "ld a4, 16(a2)",            // p_vaddr
+    "ld a5, 40(a2)",            // p_memsz
+    "add a4, a4, s1",           // dyn_addr = base + p_vaddr
+    "add a5, a4, a5",           // dyn_end
+    "li a6, 0",                 // rela = 0
+    "li a7, 0",                 // relasz = 0
+    "10:",
+    "bgeu a4, a5, 11f",
+    "ld t0, 0(a4)",             // d_tag
+    "ld t1, 8(a4)",             // d_val
+    "beqz t0, 11f",             // DT_NULL
+    "li t2, 7",                 // DT_RELA
+    "bne t0, t2, 12f",
+    "add a6, s1, t1",           // rela = base + d_val
+    "12:",
+    "li t2, 8",                 // DT_RELASZ
+    "bne t0, t2, 13f",
+    "mv a7, t1",                // relasz = d_val
+    "13:",
+    "addi a4, a4, 16",
+    "j 10b",
+    "11:",
+    // Apply R_RISCV_RELATIVE (type 3) relocations.
+    "beqz a7, 8f",
+    "beqz a6, 8f",
+    "add t3, a6, a7",           // table_end
+    "14:",
+    "bgeu a6, t3, 8f",
+    "ld t4, 0(a6)",             // r_offset
+    "ld t5, 8(a6)",             // r_info
+    "ld t6, 16(a6)",            // r_addend
+    "li t0, 3",                 // R_RISCV_RELATIVE
+    "and t1, t5, 0xffffffff",   // r_type = r_info & 0xffffffff
+    "bne t1, t0, 15f",
+    "add t4, t4, s1",           // slot = base + r_offset
+    "add t6, t6, s1",           // val = base + r_addend
+    "sd t6, 0(t4)",
+    "15:",
+    "addi a6, a6, 24",
+    "j 14b",
+    "8:",
+    ".hidden {run_main}",
+    "mv a0, s0",               // sp
+    "mv a1, s1",               // ldso_base
+    "call {run_main}",
+    "unimp",
+    run_main = sym run_main,
+);
+
 // ============================================================
 // Entry point
 // ============================================================
@@ -514,6 +621,7 @@ trait Syscalls {
 
 struct X86_64;
 struct Aarch64;
+struct Riscv64;
 
 #[cfg(target_arch = "x86_64")]
 impl Syscalls for X86_64 {
@@ -731,10 +839,117 @@ impl Syscalls for Aarch64 {
     }
 }
 
+#[cfg(target_arch = "riscv64")]
+impl Syscalls for Riscv64 {
+    #[inline(always)]
+    unsafe fn syscall0(n: i64) -> i64 {
+        let result: i64;
+        core::arch::asm!(
+            "ecall",
+            inlateout("a7") n => _,
+            lateout("a0") result,
+            options(nostack),
+        );
+        result
+    }
+    #[inline(always)]
+    unsafe fn syscall1(n: i64, a1: i64) -> i64 {
+        let result: i64;
+        core::arch::asm!(
+            "ecall",
+            inlateout("a7") n => _,
+            inlateout("a0") a1 => result,
+            options(nostack),
+        );
+        result
+    }
+    #[inline(always)]
+    unsafe fn syscall2(n: i64, a1: i64, a2: i64) -> i64 {
+        let result: i64;
+        core::arch::asm!(
+            "ecall",
+            inlateout("a7") n => _,
+            inlateout("a0") a1 => result,
+            inlateout("a1") a2 => _,
+            options(nostack),
+        );
+        result
+    }
+    #[inline(always)]
+    unsafe fn syscall3(n: i64, a1: i64, a2: i64, a3: i64) -> i64 {
+        let result: i64;
+        core::arch::asm!(
+            "ecall",
+            inlateout("a7") n => _,
+            inlateout("a0") a1 => result,
+            inlateout("a1") a2 => _,
+            inlateout("a2") a3 => _,
+            options(nostack),
+        );
+        result
+    }
+    #[inline(always)]
+    unsafe fn syscall4(n: i64, a1: i64, a2: i64, a3: i64, a4: i64) -> i64 {
+        let result: i64;
+        core::arch::asm!(
+            "ecall",
+            inlateout("a7") n => _,
+            inlateout("a0") a1 => result,
+            inlateout("a1") a2 => _,
+            inlateout("a2") a3 => _,
+            inlateout("a3") a4 => _,
+            options(nostack),
+        );
+        result
+    }
+    #[inline(always)]
+    unsafe fn syscall5(n: i64, a1: i64, a2: i64, a3: i64, a4: i64, a5: i64) -> i64 {
+        let result: i64;
+        core::arch::asm!(
+            "ecall",
+            inlateout("a7") n => _,
+            inlateout("a0") a1 => result,
+            inlateout("a1") a2 => _,
+            inlateout("a2") a3 => _,
+            inlateout("a3") a4 => _,
+            inlateout("a4") a5 => _,
+            options(nostack),
+        );
+        result
+    }
+    #[inline(always)]
+    unsafe fn syscall6(n: i64, a1: i64, a2: i64, a3: i64, a4: i64, a5: i64, a6: i64) -> i64 {
+        let result: i64;
+        core::arch::asm!(
+            "ecall",
+            inlateout("a7") n => _,
+            inlateout("a0") a1 => result,
+            inlateout("a1") a2 => _,
+            inlateout("a2") a3 => _,
+            inlateout("a3") a4 => _,
+            inlateout("a4") a5 => _,
+            inlateout("a5") a6 => _,
+            options(nostack),
+        );
+        result
+    }
+    #[inline(always)]
+    unsafe fn syscall_noreturn1(n: i64, a1: i64) -> ! {
+        core::arch::asm!(
+            "ecall",
+            in("a7") n,
+            in("a0") a1,
+            options(noreturn, nostack),
+        );
+    }
+}
+
 #[cfg(target_arch = "x86_64")]
 type Arch = X86_64;
 #[cfg(target_arch = "aarch64")]
 type Arch = Aarch64;
+#[cfg(target_arch = "riscv64")]
+type Arch = Riscv64;
 
 
 
@@ -753,6 +968,18 @@ mod sysnr {
     pub const SYS_EXIT: i64 = 60;
 }
 #[cfg(target_arch = "aarch64")]
+mod sysnr {
+    pub const SYS_READ: i64 = 63;
+    pub const SYS_WRITE: i64 = 64;
+    pub const SYS_OPENAT: i64 = 56;
+    pub const SYS_CLOSE: i64 = 57;
+    pub const SYS_LSEEK: i64 = 62;
+    pub const SYS_MMAP: i64 = 222;
+    pub const SYS_MUNMAP: i64 = 215;
+    pub const SYS_READLINKAT: i64 = 78;
+    pub const SYS_EXIT: i64 = 93;
+}
+#[cfg(target_arch = "riscv64")]
 mod sysnr {
     pub const SYS_READ: i64 = 63;
     pub const SYS_WRITE: i64 = 64;
@@ -836,6 +1063,14 @@ unsafe fn read_tp() -> usize {
     tp
 }
 
+#[cfg(target_arch = "riscv64")]
+#[inline(always)]
+unsafe fn read_tp() -> usize {
+    let tp: usize;
+    core::arch::asm!("mv {}, tp", out(reg) tp);
+    tp
+}
+
 #[cfg(target_arch = "x86_64")]
 #[inline(always)]
 unsafe fn write_tp(addr: usize) {
@@ -846,6 +1081,12 @@ unsafe fn write_tp(addr: usize) {
 #[inline(always)]
 unsafe fn write_tp(addr: usize) {
     core::arch::asm!("msr tpidr_el0, {}", in(reg) addr);
+}
+
+#[cfg(target_arch = "riscv64")]
+#[inline(always)]
+unsafe fn write_tp(addr: usize) {
+    core::arch::asm!("mv tp, {}", in(reg) addr);
 }
 
 unsafe fn write_stderr(msg: &[u8]) {
@@ -1460,12 +1701,16 @@ unsafe fn tls_var_area_offset_from_block() -> usize {
     { 0 }
     #[cfg(target_arch = "aarch64")]
     { TCB_SIZE }
+    #[cfg(target_arch = "riscv64")]
+    { TCB_SIZE }
 }
 
 unsafe fn tls_tcb_offset_from_block() -> usize {
     #[cfg(target_arch = "x86_64")]
     { TLS_TOTAL_SIZE }
     #[cfg(target_arch = "aarch64")]
+    { 0 }
+    #[cfg(target_arch = "riscv64")]
     { 0 }
 }
 
@@ -1474,6 +1719,8 @@ unsafe fn tls_tp_offset_from_block() -> usize {
     { TLS_TOTAL_SIZE }
     #[cfg(target_arch = "aarch64")]
     { TCB_SIZE }
+    #[cfg(target_arch = "riscv64")]
+    { TCB_SIZE }
 }
 
 unsafe fn tls_var_area_offset_from_tp() -> usize {
@@ -1481,12 +1728,16 @@ unsafe fn tls_var_area_offset_from_tp() -> usize {
     { TLS_TOTAL_SIZE }
     #[cfg(target_arch = "aarch64")]
     { 0 }
+    #[cfg(target_arch = "riscv64")]
+    { 0 }
 }
 
 unsafe fn tls_tcb_offset_from_tp() -> isize {
     #[cfg(target_arch = "x86_64")]
     { 0 }
     #[cfg(target_arch = "aarch64")]
+    { -(TCB_SIZE as isize) }
+    #[cfg(target_arch = "riscv64")]
     { -(TCB_SIZE as isize) }
 }
 
@@ -1564,7 +1815,7 @@ unsafe fn apply_rela_table(
         let r_sym_idx = (r_info >> 32) as usize;
         let slot = (base + r_offset) as *mut u64;
 
-        if r_type == R_X86_64_COPY {
+        if r_type == R_X86_64_COPY || r_type == R_RISCV_COPY {
             if !copy_only {
                 continue;
             }
@@ -1580,19 +1831,20 @@ unsafe fn apply_rela_table(
         }
 
         match r_type {
-            R_X86_64_RELATIVE | R_AARCH64_RELATIVE => {
+            R_X86_64_RELATIVE | R_AARCH64_RELATIVE | R_RISCV_RELATIVE => {
                 *slot = (base as i64 + r_addend) as u64;
             }
-            R_X86_64_64 | R_AARCH64_ABS64 => {
+            R_X86_64_64 | R_AARCH64_ABS64 | R_RISCV_64 => {
                 let sym_value = resolve_symbol_from_index(obj_idx, r_sym_idx);
                 *slot = (sym_value as i64 + r_addend) as u64;
             }
             R_X86_64_GLOB_DAT | R_X86_64_JUMP_SLOT
-            | R_AARCH64_GLOB_DAT | R_AARCH64_JUMP_SLOT => {
+            | R_AARCH64_GLOB_DAT | R_AARCH64_JUMP_SLOT
+            | R_RISCV_GLOB_DAT | R_RISCV_JUMP_SLOT => {
                 let sym_value = resolve_symbol_from_index(obj_idx, r_sym_idx);
                 *slot = sym_value;
             }
-            R_X86_64_DTPMOD64 | R_AARCH64_TLS_DTPMOD64 => {
+            R_X86_64_DTPMOD64 | R_AARCH64_TLS_DTPMOD64 | R_RISCV_TLS_DTPMOD64 => {
                 let module = if r_sym_idx == 0 {
                     obj_idx
                 } else {
@@ -1600,11 +1852,11 @@ unsafe fn apply_rela_table(
                 };
                 *slot = module as u64;
             }
-            R_X86_64_DTPOFF64 | R_AARCH64_TLS_DTPREL64 => {
+            R_X86_64_DTPOFF64 | R_AARCH64_TLS_DTPREL64 | R_RISCV_TLS_DTPREL64 => {
                 let off = (tls_sym_offset(obj_idx, r_sym_idx) as i64 + r_addend) as u64;
                 *slot = off;
             }
-            R_X86_64_TPOFF64 | R_AARCH64_TLS_TPREL64 => {
+            R_X86_64_TPOFF64 | R_AARCH64_TLS_TPREL64 | R_RISCV_TLS_TPREL64 => {
                 let fs_off = tls_tprel_offset(obj_idx, r_sym_idx, r_addend);
                 *slot = fs_off as u64;
             }
@@ -1622,7 +1874,7 @@ unsafe fn apply_rela_table(
                 let new_insn = (insn & !(0xFFFu32 << 10)) | (imm << 10);
                 core::ptr::write_unaligned(slot as *mut u32, new_insn);
             }
-            R_AARCH64_TLSDESC => {
+            R_AARCH64_TLSDESC | R_RISCV_TLSDESC => {
                 let fs_off = tls_tprel_offset(obj_idx, r_sym_idx, r_addend);
                 let desc = slot as *mut [u64; 2];
                 (*desc)[0] = __tlsdesc_static as *const () as u64;
@@ -2017,6 +2269,40 @@ unsafe fn compute_tls_layout() {
             TLS_FILESZ[i] = obj.tls_filesz;
             TLS_MEMSZ[i] = obj.tls_memsz;
             TLS_IMAGE[i] = obj.tls_image;
+        }
+    }
+
+    #[cfg(target_arch = "riscv64")]
+    {
+        // RISC-V uses TLS_ABOVE_TP like aarch64 but with GAP_ABOVE_TP=0.
+        let mut offset: usize = 0;
+        for i in 0..LOADED_COUNT {
+            let obj = &LOADED[i];
+            if obj.tls_memsz == 0 {
+                TLS_LAYOUT_OFFSET[i] = 0;
+                TLS_FILESZ[i] = 0;
+                TLS_MEMSZ[i] = 0;
+                TLS_IMAGE[i] = core::ptr::null();
+                continue;
+            }
+            let align = if obj.tls_align > 0 { obj.tls_align as usize } else { 1 };
+            let image = obj.tls_image as usize;
+            let var_base_mod = TCB_SIZE % align;
+            let desired = image.wrapping_sub(var_base_mod).wrapping_sub(offset) & (align - 1);
+            offset += desired;
+            TLS_LAYOUT_OFFSET[i] = offset;
+            if cfg!(debug_assertions) {
+                write_stderr(b"ldso: TLS module ");
+                write_hex_stderr(i);
+                write_stderr(b" offset=");
+                write_hex_stderr(offset);
+                write_stderr(b"\n");
+            }
+            TLS_FILESZ[i] = obj.tls_filesz;
+            TLS_MEMSZ[i] = obj.tls_memsz;
+            TLS_IMAGE[i] = obj.tls_image;
+            let block_size = ((obj.tls_memsz as usize + align - 1) / align) * align;
+            offset += block_size;
         }
     }
 
@@ -2720,6 +3006,15 @@ unsafe fn build_and_jump(entry: u64, phdr_addr: u64, phnum: u16, orig_sp: usize)
     core::arch::asm!(
         "mov sp, {sp}",
         "br {entry}",
+        sp = in(reg) sp,
+        entry = in(reg) entry,
+        options(noreturn)
+    );
+
+    #[cfg(target_arch = "riscv64")]
+    core::arch::asm!(
+        "mv sp, {sp}",
+        "jr {entry}",
         sp = in(reg) sp,
         entry = in(reg) entry,
         options(noreturn)

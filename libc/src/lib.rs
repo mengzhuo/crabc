@@ -94,6 +94,7 @@ trait Syscalls {
 
 struct X86_64;
 struct Aarch64;
+struct Riscv64;
 
 #[cfg(target_arch = "x86_64")]
 impl Syscalls for X86_64 {
@@ -311,10 +312,117 @@ impl Syscalls for Aarch64 {
     }
 }
 
+#[cfg(target_arch = "riscv64")]
+impl Syscalls for Riscv64 {
+    #[inline(always)]
+    unsafe fn syscall0(n: i64) -> i64 {
+        let result: i64;
+        core::arch::asm!(
+            "ecall",
+            inlateout("a7") n => _,
+            lateout("a0") result,
+            options(nostack),
+        );
+        result
+    }
+    #[inline(always)]
+    unsafe fn syscall1(n: i64, a1: i64) -> i64 {
+        let result: i64;
+        core::arch::asm!(
+            "ecall",
+            inlateout("a7") n => _,
+            inlateout("a0") a1 => result,
+            options(nostack),
+        );
+        result
+    }
+    #[inline(always)]
+    unsafe fn syscall2(n: i64, a1: i64, a2: i64) -> i64 {
+        let result: i64;
+        core::arch::asm!(
+            "ecall",
+            inlateout("a7") n => _,
+            inlateout("a0") a1 => result,
+            inlateout("a1") a2 => _,
+            options(nostack),
+        );
+        result
+    }
+    #[inline(always)]
+    unsafe fn syscall3(n: i64, a1: i64, a2: i64, a3: i64) -> i64 {
+        let result: i64;
+        core::arch::asm!(
+            "ecall",
+            inlateout("a7") n => _,
+            inlateout("a0") a1 => result,
+            inlateout("a1") a2 => _,
+            inlateout("a2") a3 => _,
+            options(nostack),
+        );
+        result
+    }
+    #[inline(always)]
+    unsafe fn syscall4(n: i64, a1: i64, a2: i64, a3: i64, a4: i64) -> i64 {
+        let result: i64;
+        core::arch::asm!(
+            "ecall",
+            inlateout("a7") n => _,
+            inlateout("a0") a1 => result,
+            inlateout("a1") a2 => _,
+            inlateout("a2") a3 => _,
+            inlateout("a3") a4 => _,
+            options(nostack),
+        );
+        result
+    }
+    #[inline(always)]
+    unsafe fn syscall5(n: i64, a1: i64, a2: i64, a3: i64, a4: i64, a5: i64) -> i64 {
+        let result: i64;
+        core::arch::asm!(
+            "ecall",
+            inlateout("a7") n => _,
+            inlateout("a0") a1 => result,
+            inlateout("a1") a2 => _,
+            inlateout("a2") a3 => _,
+            inlateout("a3") a4 => _,
+            inlateout("a4") a5 => _,
+            options(nostack),
+        );
+        result
+    }
+    #[inline(always)]
+    unsafe fn syscall6(n: i64, a1: i64, a2: i64, a3: i64, a4: i64, a5: i64, a6: i64) -> i64 {
+        let result: i64;
+        core::arch::asm!(
+            "ecall",
+            inlateout("a7") n => _,
+            inlateout("a0") a1 => result,
+            inlateout("a1") a2 => _,
+            inlateout("a2") a3 => _,
+            inlateout("a3") a4 => _,
+            inlateout("a4") a5 => _,
+            inlateout("a5") a6 => _,
+            options(nostack),
+        );
+        result
+    }
+    #[inline(always)]
+    unsafe fn syscall_noreturn1(n: i64, a1: i64) -> ! {
+        core::arch::asm!(
+            "ecall",
+            in("a7") n,
+            in("a0") a1,
+            options(noreturn, nostack),
+        );
+    }
+}
+
 #[cfg(target_arch = "x86_64")]
 type Arch = X86_64;
 #[cfg(target_arch = "aarch64")]
 type Arch = Aarch64;
+#[cfg(target_arch = "riscv64")]
+type Arch = Riscv64;
 
 
 
@@ -479,6 +587,108 @@ mod sysnr {
     pub const SYS_GETCWD: i64 = 17;
     pub const SYS_CHDIR: i64 = 49;
     // pub const SYS_SYMLINK: i64 = ???; // missing in aarch64 table
+    pub const SYS_FCHMOD: i64 = 52;
+    pub const SYS_UMASK: i64 = 166;
+    pub const SYS_GETRLIMIT: i64 = 163;
+    pub const SYS_SETUID: i64 = 146;
+    pub const SYS_SETGID: i64 = 144;
+    pub const SYS_SETPGID: i64 = 154;
+    pub const SYS_GETGROUPS: i64 = 158;
+    pub const SYS_GETPGID: i64 = 155;
+    pub const SYS_GETSID: i64 = 156;
+    pub const SYS_RT_SIGPENDING: i64 = 136;
+    pub const SYS_RT_SIGTIMEDWAIT: i64 = 137;
+    pub const SYS_RT_SIGSUSPEND: i64 = 133;
+    pub const SYS_SIGALTSTACK: i64 = 132;
+    pub const SYS_SETRLIMIT: i64 = 164;
+    pub const SYS_SETHOSTNAME: i64 = 161;
+    pub const SYS_FUTEX: i64 = 98;
+    pub const SYS_CLOCK_GETTIME: i64 = 113;
+    pub const SYS_CLOCK_GETRES: i64 = 114;
+    pub const SYS_CLOCK_NANOSLEEP: i64 = 115;
+    pub const SYS_EXIT_GROUP: i64 = 94;
+    pub const SYS_TGKILL: i64 = 131;
+    pub const SYS_MKDIRAT: i64 = 34;
+    pub const SYS_NEWFSTATAT: i64 = 79;
+    pub const SYS_UNLINKAT: i64 = 35;
+    pub const SYS_LINKAT: i64 = 37;
+    pub const SYS_SYMLINKAT: i64 = 36;
+    pub const SYS_READLINKAT: i64 = 78;
+    pub const SYS_FCHMODAT: i64 = 53;
+    pub const SYS_SET_ROBUST_LIST: i64 = 99;
+    pub const SYS_UTIMENSAT: i64 = 88;
+    pub const SYS_OPENAT: i64 = 56;
+    pub const SYS_FACCESSAT: i64 = 48;
+    pub const SYS_DUP3: i64 = 24;
+    pub const SYS_PIPE2: i64 = 59;
+    pub const SYS_SYNCFS: i64 = 267;
+    pub const SYS_RENAMEAT2: i64 = 276;
+    pub const SYS_STATFS: i64 = 43;
+    pub const SYS_FSTATFS: i64 = 44;
+    pub const SYS_FDATASYNC: i64 = 83;
+    pub const SYS_GETPID: i64 = 172;
+    pub const SYS_EXIT: i64 = 93;
+    pub const SYS_GETPPID: i64 = 173;
+    pub const SYS_SETSID: i64 = 157;
+    pub const SYS_SYNC: i64 = 81;
+    pub const SYS_GETUID: i64 = 174;
+    pub const SYS_GETGID: i64 = 176;
+    pub const SYS_GETEUID: i64 = 175;
+    pub const SYS_GETEGID: i64 = 177;
+    pub const SYS_GETTID: i64 = 178;
+    pub const SYS_CLOCK_SETTIME: i64 = 112;
+    pub const SYS_CLONE: i64 = 220;
+    pub const SYS_PPOLL: i64 = 73;
+    pub const SYS_PREAD64: i64 = 67;
+}
+// riscv64 uses the same new-style syscall table as aarch64
+#[cfg(target_arch = "riscv64")]
+mod sysnr {
+    pub const SYS_READ: i64 = 63;
+    pub const SYS_WRITE: i64 = 64;
+    pub const SYS_CLOSE: i64 = 57;
+    pub const SYS_FSTAT: i64 = 80;
+    pub const SYS_LSEEK: i64 = 62;
+    pub const SYS_MMAP: i64 = 222;
+    pub const SYS_MUNMAP: i64 = 215;
+    pub const SYS_RT_SIGACTION: i64 = 134;
+    pub const SYS_RT_SIGPROCMASK: i64 = 135;
+    pub const SYS_IOCTL: i64 = 29;
+    pub const SYS_SHMGET: i64 = 194;
+    pub const SYS_SHMAT: i64 = 196;
+    pub const SYS_SHMCTL: i64 = 195;
+    pub const SYS_DUP: i64 = 23;
+    pub const SYS_NANOSLEEP: i64 = 101;
+    pub const SYS_SETITIMER: i64 = 103;
+    pub const SYS_SOCKET: i64 = 198;
+    pub const SYS_CONNECT: i64 = 203;
+    pub const SYS_ACCEPT: i64 = 202;
+    pub const SYS_SENDTO: i64 = 206;
+    pub const SYS_RECVFROM: i64 = 207;
+    pub const SYS_SHUTDOWN: i64 = 210;
+    pub const SYS_BIND: i64 = 200;
+    pub const SYS_LISTEN: i64 = 201;
+    pub const SYS_GETSOCKNAME: i64 = 204;
+    pub const SYS_SOCKETPAIR: i64 = 199;
+    pub const SYS_SETSOCKOPT: i64 = 208;
+    pub const SYS_EXECVE: i64 = 221;
+    pub const SYS_WAIT4: i64 = 260;
+    pub const SYS_KILL: i64 = 129;
+    pub const SYS_UNAME: i64 = 160;
+    pub const SYS_SEMGET: i64 = 190;
+    pub const SYS_SEMOP: i64 = 193;
+    pub const SYS_SEMCTL: i64 = 191;
+    pub const SYS_SHMDT: i64 = 197;
+    pub const SYS_MSGGET: i64 = 186;
+    pub const SYS_MSGSND: i64 = 189;
+    pub const SYS_MSGRCV: i64 = 188;
+    pub const SYS_MSGCTL: i64 = 187;
+    pub const SYS_FCNTL: i64 = 25;
+    pub const SYS_FSYNC: i64 = 82;
+    pub const SYS_TRUNCATE: i64 = 45;
+    pub const SYS_FTRUNCATE: i64 = 46;
+    pub const SYS_GETCWD: i64 = 17;
+    pub const SYS_CHDIR: i64 = 49;
     pub const SYS_FCHMOD: i64 = 52;
     pub const SYS_UMASK: i64 = 166;
     pub const SYS_GETRLIMIT: i64 = 163;
@@ -1577,6 +1787,15 @@ core::arch::global_asm!(
     "svc #0",
 );
 
+#[cfg(target_arch = "riscv64")]
+core::arch::global_asm!(
+    ".global sig_restorer",
+    ".type sig_restorer, @function",
+    "sig_restorer:",
+    "li a7, 139",
+    "ecall",
+);
+
 extern "C" {
     fn sig_restorer();
 }
@@ -1972,6 +2191,58 @@ pub unsafe extern "C" fn longjmp(env: *const c_ulong, val: c_int) -> ! {
     );
 }
 
+#[no_mangle]
+#[unsafe(naked)]
+#[cfg(target_arch = "riscv64")]
+pub unsafe extern "C" fn setjmp(env: *mut c_ulong) -> c_int {
+    core::arch::naked_asm!(
+        "sd s0, 0(a0)",
+        "sd s1, 8(a0)",
+        "sd s2, 16(a0)",
+        "sd s3, 24(a0)",
+        "sd s4, 32(a0)",
+        "sd s5, 40(a0)",
+        "sd s6, 48(a0)",
+        "sd s7, 56(a0)",
+        "sd s8, 64(a0)",
+        "sd s9, 72(a0)",
+        "sd s10, 80(a0)",
+        "sd s11, 88(a0)",
+        "sd sp, 96(a0)",
+        "sd ra, 104(a0)",
+        "li a0, 0",
+        "ret",
+    );
+}
+
+#[no_mangle]
+#[inline(never)]
+#[cfg(target_arch = "riscv64")]
+pub unsafe extern "C" fn longjmp(env: *const c_ulong, val: c_int) -> ! {
+    let ret = if val == 0 { 1 } else { val } as u64;
+    core::arch::asm!(
+        "ld s0, 0(a0)",
+        "ld s1, 8(a0)",
+        "ld s2, 16(a0)",
+        "ld s3, 24(a0)",
+        "ld s4, 32(a0)",
+        "ld s5, 40(a0)",
+        "ld s6, 48(a0)",
+        "ld s7, 56(a0)",
+        "ld s8, 64(a0)",
+        "ld s9, 72(a0)",
+        "ld s10, 80(a0)",
+        "ld s11, 88(a0)",
+        "ld sp, 96(a0)",
+        "ld ra, 104(a0)",
+        "mv a0, a1",
+        "ret",
+        in("a0") env,
+        in("a1") ret,
+        options(noreturn),
+    );
+}
+
 // ponytail: sigsetjmp is implemented in raw assembly because the Rust compiler
 // rewrites naked_asm that touches rbx into incorrect push/pop sequences,
 // corrupting the caller's rbx across the initial return. The exported wrappers
@@ -2094,6 +2365,64 @@ pub unsafe extern "C" fn siglongjmp(env: *const c_ulong, val: c_int) -> ! {
     longjmp(env, val);
 }
 
+#[no_mangle]
+#[cfg(target_arch = "riscv64")]
+pub unsafe extern "C" fn __sigsetjmp_tail(env: *mut c_ulong, ret: c_int) -> c_int {
+    const SIG_SETMASK: c_int = 2;
+    let ss = env.add(27) as *mut SigSetT;
+    let set = if ret != 0 { ss as *const SigSetT } else { core::ptr::null() };
+    let old = if ret != 0 { core::ptr::null_mut() } else { ss };
+    let _ = sys_rt_sigprocmask(SIG_SETMASK, set, old, core::mem::size_of::<SigSetT>());
+    ret
+}
+
+#[no_mangle]
+#[unsafe(naked)]
+#[cfg(target_arch = "riscv64")]
+pub unsafe extern "C" fn sigsetjmp(env: *mut c_ulong, savemask: c_int) -> c_int {
+    core::arch::naked_asm!(
+        "bnez a1, 1f",
+        "tail setjmp",
+        "1:",
+        "sd ra, 208(a0)",
+        "sd s0, 224(a0)",
+        "mv s0, a0",
+        "call setjmp",
+        "mv a1, a0",
+        "mv a0, s0",
+        "ld s0, 224(a0)",
+        "ld ra, 208(a0)",
+        "tail __sigsetjmp_tail",
+    );
+}
+
+#[no_mangle]
+#[unsafe(naked)]
+#[cfg(target_arch = "riscv64")]
+pub unsafe extern "C" fn __sigsetjmp(env: *mut c_ulong, savemask: c_int) -> c_int {
+    core::arch::naked_asm!(
+        "bnez a1, 1f",
+        "tail setjmp",
+        "1:",
+        "sd ra, 208(a0)",
+        "sd s0, 224(a0)",
+        "mv s0, a0",
+        "call setjmp",
+        "mv a1, a0",
+        "mv a0, s0",
+        "ld s0, 224(a0)",
+        "ld ra, 208(a0)",
+        "tail __sigsetjmp_tail",
+    );
+}
+
+#[no_mangle]
+#[inline(never)]
+#[cfg(target_arch = "riscv64")]
+pub unsafe extern "C" fn siglongjmp(env: *const c_ulong, val: c_int) -> ! {
+    longjmp(env, val);
+}
+
 // ============================================================
 // syscall wrappers: fstat/newfstatat/getrlimit/setrlimit/utimensat
 // ============================================================
@@ -2132,6 +2461,8 @@ unsafe fn sys_fork() -> i64 {
     #[cfg(target_arch = "x86_64")]
     { <Arch as Syscalls>::syscall0(SYS_FORK) }
     #[cfg(target_arch = "aarch64")]
+    { <Arch as Syscalls>::syscall2(SYS_CLONE, 17, 0) }
+    #[cfg(target_arch = "riscv64")]
     { <Arch as Syscalls>::syscall2(SYS_CLONE, 17, 0) }
 }
 
@@ -2945,6 +3276,40 @@ pub unsafe extern "C" fn __rc_clone(
         "blr x1",
         "mov x8, #93",
         "svc #0",
+    );
+}
+
+#[no_mangle]
+#[unsafe(naked)]
+#[cfg(target_arch = "riscv64")]
+pub unsafe extern "C" fn __rc_clone(
+    fn_: usize,
+    stack: *mut u8,
+    flags: c_ulong,
+    arg: *mut c_void,
+    ptid: *mut c_int,
+    tls: c_ulong,
+    ctid: *mut c_int,
+) -> i64 {
+    core::arch::naked_asm!(
+        "andi a1, a1, -16",
+        "addi a1, a1, -16",
+        "sd a0, 0(a1)",
+        "sd a3, 8(a1)",
+        "mv a0, a2",
+        "mv a2, a4",
+        "mv a3, a5",
+        "mv a4, a6",
+        "li a7, 220",
+        "ecall",
+        "beqz a0, 1f",
+        "ret",
+        "1:",
+        "ld a1, 0(sp)",
+        "ld a0, 8(sp)",
+        "jalr a1",
+        "li a7, 93",
+        "ecall",
     );
 }
 
@@ -6415,7 +6780,7 @@ macro_rules! impl_format {
                         }
                         (b'L', b'f') | (b'L', b'F') | (b'L', b'e') | (b'L', b'E')
                         | (b'L', b'g') | (b'L', b'G') | (b'L', b'a') | (b'L', b'A') => {
-                            #[cfg(target_arch = "aarch64")]
+                            #[cfg(any(target_arch = "aarch64", target_arch = "riscv64"))]
                             let val = {
                                 let lo: u64 = args.next_arg::<u64>();
                                 let hi: u64 = args.next_arg::<u64>();
@@ -7573,7 +7938,7 @@ unsafe fn format_to_buf(buf: *mut u8, cap: usize, fmt: *const c_char, args: &mut
                     }
                     (b'L', b'f') | (b'L', b'F') | (b'L', b'e') | (b'L', b'E')
                     | (b'L', b'g') | (b'L', b'G') | (b'L', b'a') | (b'L', b'A') => {
-                        #[cfg(target_arch = "aarch64")]
+                        #[cfg(any(target_arch = "aarch64", target_arch = "riscv64"))]
                         let val = {
                             let lo: u64 = args.next_arg::<u64>();
                             let hi: u64 = args.next_arg::<u64>();
@@ -7968,7 +8333,7 @@ unsafe fn do_vsscanf(
                     if _real_len == 3 {
                         let out = args.next_arg::<*mut f64>(); if !out.is_null() { *out = val; }
                     } else if _real_len == 5 {
-                        #[cfg(target_arch = "aarch64")]
+                        #[cfg(any(target_arch = "aarch64", target_arch = "riscv64"))]
                         { let out = args.next_arg::<*mut f128>(); if !out.is_null() { *out = val as f128; } }
                         #[cfg(target_arch = "x86_64")]
                         { let out = args.next_arg::<*mut f64>(); if !out.is_null() { *out = val; } }
@@ -9686,6 +10051,10 @@ pub unsafe extern "C" fn wcstold(s: *const wchar_t, endptr: *mut *mut wchar_t) -
 pub unsafe extern "C" fn wcstold(s: *const wchar_t, endptr: *mut *mut wchar_t) -> f128 { wcstod(s, endptr) as f128 }
 
 #[no_mangle]
+#[cfg(target_arch = "riscv64")]
+pub unsafe extern "C" fn wcstold(s: *const wchar_t, endptr: *mut *mut wchar_t) -> f128 { wcstod(s, endptr) as f128 }
+
+#[no_mangle]
 pub unsafe extern "C" fn wcstoimax(s: *const wchar_t, endptr: *mut *mut wchar_t, base: c_int) -> c_longlong { wcstoll(s, endptr, base) }
 
 #[no_mangle]
@@ -10113,7 +10482,7 @@ pub unsafe extern "C" fn vswprintf(s: *mut wchar_t, n: usize, fmt: *const wchar_
                     }
                     (b'L', b'f') | (b'L', b'F') | (b'L', b'e') | (b'L', b'E')
                     | (b'L', b'g') | (b'L', b'G') | (b'L', b'a') | (b'L', b'A') => {
-                        #[cfg(target_arch = "aarch64")]
+                        #[cfg(any(target_arch = "aarch64", target_arch = "riscv64"))]
                         let val = {
                             let lo: u64 = args.next_arg::<u64>();
                             let hi: u64 = args.next_arg::<u64>();
@@ -11771,6 +12140,8 @@ unsafe fn sys_pause() -> i64 {
     { <Arch as Syscalls>::syscall0(SYS_PAUSE) }
     #[cfg(target_arch = "aarch64")]
     { <Arch as Syscalls>::syscall4(SYS_PPOLL, 0, 0, 0, 0) }
+    #[cfg(target_arch = "riscv64")]
+    { <Arch as Syscalls>::syscall4(SYS_PPOLL, 0, 0, 0, 0) }
 }
 
 unsafe fn sys_fsync(fd: i32) -> i64 {
@@ -12866,6 +13237,12 @@ pub unsafe extern "C" fn strtold(s: *const c_char, endptr: *mut *mut c_char) -> 
 
 #[no_mangle]
 #[cfg(target_arch = "aarch64")]
+pub unsafe extern "C" fn strtold(s: *const c_char, endptr: *mut *mut c_char) -> f128 {
+    strtod(s, endptr) as f128
+}
+
+#[no_mangle]
+#[cfg(target_arch = "riscv64")]
 pub unsafe extern "C" fn strtold(s: *const c_char, endptr: *mut *mut c_char) -> f128 {
     strtod(s, endptr) as f128
 }
@@ -14433,10 +14810,10 @@ pub unsafe extern "C" fn __libc_start_main(
         init_fn();
     }
 
-    // aarch64 GCC reads __stack_chk_guard as a global (GOT-based for PIE),
+    // aarch64/riscv64 GCC reads __stack_chk_guard as a global (GOT-based for PIE),
     // so we must initialize it from AT_RANDOM before calling main.
     // x86_64 uses %fs:0x28 which the kernel already set up.
-    #[cfg(target_arch = "aarch64")]
+    #[cfg(any(target_arch = "aarch64", target_arch = "riscv64"))]
     {
         let random_ptr = getauxval(25) as *const u8; // AT_RANDOM = 25
         if !random_ptr.is_null() {
