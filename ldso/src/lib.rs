@@ -2786,6 +2786,7 @@ unsafe fn load_and_jump(sp: usize, ldso_base: u64) -> ! {
     TLS_OLD_MODULE_COUNT = TLS_MODULE_COUNT;
 
     process_all_relocations();
+    write_stderr(b"ldso: relocs done\n");
     register_dlopen_callbacks();
 
     // Always allocate a TCB so that %fs-relative accesses (e.g. stack canary
@@ -2805,6 +2806,7 @@ unsafe fn load_and_jump(sp: usize, ldso_base: u64) -> ! {
         }
         let _tcb = init_tls_block(tls_block);
         write_tp(_tcb as usize);
+        write_stderr(b"ldso: tls_init done\n");
     }
 
     // Set libc.so's __auxv so constructors (e.g. compiler_builtins CPU feature
@@ -2822,9 +2824,14 @@ unsafe fn load_and_jump(sp: usize, ldso_base: u64) -> ! {
         core::ptr::write(auxv_sym as *mut *const usize, auxv);
     }
 
+    write_stderr(b"ldso: run_constructors\n");
     run_constructors();
+    write_stderr(b"ldso: constructors done\n");
 
     let phdr_addr = exec_base + e_phoff;
+    write_stderr(b"ldso: jump to ");
+    write_hex_stderr((exec_base + e_entry) as usize);
+    write_stderr(b"\n");
     build_and_jump(exec_base + e_entry, phdr_addr, e_phnum, sp)
 }
 
