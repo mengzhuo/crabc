@@ -1560,6 +1560,9 @@ unsafe fn resolve_symbol(name: *const u8) -> u64 {
 /// `exclude` is an object index to skip (use usize::MAX to skip nothing).
 unsafe fn resolve_symbol_with_size(name: *const u8, exclude: usize) -> (u64, usize) {
     let name_len = str_len(name);
+    write_stderr(b"ldso: resolve ");
+    write_stderr(core::slice::from_raw_parts(name, name_len));
+    write_stderr(b"\n");
     if name_len == 0 {
         return (0, 0);
     }
