@@ -461,7 +461,8 @@ core::arch::global_asm!(
     "ld t5, 8(a6)",             // r_info
     "ld t6, 16(a6)",            // r_addend
     "li t0, 3",                 // R_RISCV_RELATIVE
-    "and t1, t5, 0xffffffff",   // r_type = r_info & 0xffffffff
+    "slli t1, t5, 32",
+    "srli t1, t1, 32", // r_type = r_info & 0xffffffff
     "bne t1, t0, 15f",
     "add t4, t4, s1",           // slot = base + r_offset
     "add t6, t6, s1",           // val = base + r_addend
