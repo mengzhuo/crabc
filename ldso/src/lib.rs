@@ -1843,6 +1843,13 @@ unsafe fn apply_rela_table(
             | R_AARCH64_GLOB_DAT | R_AARCH64_JUMP_SLOT
             | R_RISCV_GLOB_DAT | R_RISCV_JUMP_SLOT => {
                 let sym_value = resolve_symbol_from_index(obj_idx, r_sym_idx);
+                write_stderr(b"ldso: JUMP_SLOT obj=");
+                write_hex_stderr(obj_idx);
+                write_stderr(b" r_sym=");
+                write_hex_stderr(r_sym_idx as usize);
+                write_stderr(b" val=");
+                write_hex_stderr(sym_value as usize);
+                write_stderr(b"\n");
                 *slot = sym_value;
             }
             R_X86_64_DTPMOD64 | R_AARCH64_TLS_DTPMOD64 | R_RISCV_TLS_DTPMOD64 => {
