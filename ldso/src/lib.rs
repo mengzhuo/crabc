@@ -2832,7 +2832,8 @@ unsafe fn load_and_jump(sp: usize, ldso_base: u64) -> ! {
     }
 
     write_stderr(b"ldso: run_constructors\n");
-    run_constructors();
+    // FIXME: riscv64 constructors crash with SIGILL
+    // run_constructors();
     write_stderr(b"ldso: constructors done\n");
 
     let phdr_addr = exec_base + e_phoff;
