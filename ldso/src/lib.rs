@@ -1560,9 +1560,6 @@ unsafe fn resolve_symbol(name: *const u8) -> u64 {
 /// `exclude` is an object index to skip (use usize::MAX to skip nothing).
 unsafe fn resolve_symbol_with_size(name: *const u8, exclude: usize) -> (u64, usize) {
     let name_len = str_len(name);
-    write_stderr(b"ldso: resolve ");
-    write_stderr(core::slice::from_raw_parts(name, name_len));
-    write_stderr(b"\n");
     if name_len == 0 {
         return (0, 0);
     }
@@ -1846,13 +1843,6 @@ unsafe fn apply_rela_table(
             | R_AARCH64_GLOB_DAT | R_AARCH64_JUMP_SLOT
             | R_RISCV_GLOB_DAT | R_RISCV_JUMP_SLOT => {
                 let sym_value = resolve_symbol_from_index(obj_idx, r_sym_idx);
-                write_stderr(b"ldso: JUMP_SLOT obj=");
-                write_hex_stderr(obj_idx);
-                write_stderr(b" r_sym=");
-                write_hex_stderr(r_sym_idx as usize);
-                write_stderr(b" val=");
-                write_hex_stderr(sym_value as usize);
-                write_stderr(b"\n");
                 *slot = sym_value;
             }
             R_X86_64_DTPMOD64 | R_AARCH64_TLS_DTPMOD64 | R_RISCV_TLS_DTPMOD64 => {
@@ -2796,7 +2786,6 @@ unsafe fn load_and_jump(sp: usize, ldso_base: u64) -> ! {
     TLS_OLD_MODULE_COUNT = TLS_MODULE_COUNT;
 
     process_all_relocations();
-    write_stderr(b"ldso: relocs done\n");
     register_dlopen_callbacks();
 
     // Always allocate a TCB so that %fs-relative accesses (e.g. stack canary
@@ -2816,7 +2805,6 @@ unsafe fn load_and_jump(sp: usize, ldso_base: u64) -> ! {
         }
         let _tcb = init_tls_block(tls_block);
         write_tp(_tcb as usize);
-        write_stderr(b"ldso: tls_init done\n");
     }
 
     // Set libc.so's __auxv so constructors (e.g. compiler_builtins CPU feature
@@ -2834,15 +2822,9 @@ unsafe fn load_and_jump(sp: usize, ldso_base: u64) -> ! {
         core::ptr::write(auxv_sym as *mut *const usize, auxv);
     }
 
-    write_stderr(b"ldso: run_constructors\n");
-    // FIXME: riscv64 constructors crash with SIGILL
-    // run_constructors();
-    write_stderr(b"ldso: constructors done\n");
+    run_constructors();
 
     let phdr_addr = exec_base + e_phoff;
-    write_stderr(b"ldso: jump to ");
-    write_hex_stderr((exec_base + e_entry) as usize);
-    write_stderr(b"\n");
     build_and_jump(exec_base + e_entry, phdr_addr, e_phnum, sp)
 }
 
