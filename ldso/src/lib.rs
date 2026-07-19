@@ -1839,13 +1839,13 @@ unsafe fn apply_rela_table(
                 let sym_value = resolve_symbol_from_index(obj_idx, r_sym_idx);
                 *slot = (sym_value as i64 + r_addend) as u64;
             }
-            R_X86_64_GLOB_DAT | R_X86_64_JUMP_SLOT
-            | R_AARCH64_GLOB_DAT | R_AARCH64_JUMP_SLOT
-            | R_RISCV_GLOB_DAT | R_RISCV_JUMP_SLOT => {
+            #[cfg(target_arch = "riscv64")]
+            R_RISCV_JUMP_SLOT => {
                 let sym_value = resolve_symbol_from_index(obj_idx, r_sym_idx);
                 *slot = sym_value;
             }
-            R_X86_64_DTPMOD64 | R_AARCH64_TLS_DTPMOD64 | R_RISCV_TLS_DTPMOD64 => {
+            #[cfg(target_arch = "riscv64")]
+            R_RISCV_TLS_DTPMOD64 => {
                 let module = if r_sym_idx == 0 {
                     obj_idx
                 } else {
@@ -1853,11 +1853,39 @@ unsafe fn apply_rela_table(
                 };
                 *slot = module as u64;
             }
-            R_X86_64_DTPOFF64 | R_AARCH64_TLS_DTPREL64 | R_RISCV_TLS_DTPREL64 => {
+            #[cfg(target_arch = "riscv64")]
+            R_RISCV_TLS_DTPREL64 => {
                 let off = (tls_sym_offset(obj_idx, r_sym_idx) as i64 + r_addend) as u64;
                 *slot = off;
             }
-            R_X86_64_TPOFF64 | R_AARCH64_TLS_TPREL64 | R_RISCV_TLS_TPREL64 => {
+            #[cfg(target_arch = "riscv64")]
+            R_RISCV_TLS_TPREL64 => {
+                let fs_off = tls_tprel_offset(obj_idx, r_sym_idx, r_addend);
+                *slot = fs_off as u64;
+            }
+            #[cfg(not(target_arch = "riscv64"))]
+            R_X86_64_GLOB_DAT | R_X86_64_JUMP_SLOT => {
+                let sym_value = resolve_symbol_from_index(obj_idx, r_sym_idx);
+                *slot = sym_value;
+            }
+            #[cfg(not(target_arch = "riscv64"))]
+            R_AARCH64_GLOB_DAT | R_AARCH64_JUMP_SLOT => {
+                let sym_value = resolve_symbol_from_index(obj_idx, r_sym_idx);
+                *slot = sym_value;
+            }
+            R_X86_64_DTPMOD64 | R_AARCH64_TLS_DTPMOD64 => {
+                let module = if r_sym_idx == 0 {
+                    obj_idx
+                } else {
+                    resolve_symbol_module(obj_idx, r_sym_idx)
+                };
+                *slot = module as u64;
+            }
+            R_X86_64_DTPOFF64 | R_AARCH64_TLS_DTPREL64 => {
+                let off = (tls_sym_offset(obj_idx, r_sym_idx) as i64 + r_addend) as u64;
+                *slot = off;
+            }
+            R_X86_64_TPOFF64 | R_AARCH64_TLS_TPREL64 => {
                 let fs_off = tls_tprel_offset(obj_idx, r_sym_idx, r_addend);
                 *slot = fs_off as u64;
             }
