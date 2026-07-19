@@ -3053,13 +3053,19 @@ unsafe fn build_and_jump(entry: u64, phdr_addr: u64, phnum: u16, orig_sp: usize)
     );
 
     #[cfg(target_arch = "riscv64")]
-    core::arch::asm!(
-        "mv sp, {sp}",
-        "jr {entry}",
-        sp = in(reg) sp,
-        entry = in(reg) entry,
-        options(noreturn)
-    );
+    {
+        // Workaround: riscv64 compiler reuses entry register for other
+        // calculations. Force a volatile reload right before the asm block.
+        let entry_ref = &entry as *const u64;
+        let entry_val = unsafe { core::ptr::read_volatile(entry_ref) };
+        core::arch::asm!(
+            "mv sp, {sp}",
+            "jr {entry}",
+            sp = in(reg) sp,
+            entry = in(reg) entry_val,
+            options(noreturn)
+        );
+    }
 }
 
 // ============================================================
