@@ -1816,7 +1816,20 @@ unsafe fn apply_rela_table(
         let r_sym_idx = (r_info >> 32) as usize;
         let slot = (base + r_offset) as *mut u64;
 
-        if r_type == R_RISCV_COPY || (r_type == R_X86_64_COPY && cfg!(not(target_arch = "riscv64"))) {
+        #[cfg(target_arch = "riscv64")]
+        if r_type == R_RISCV_COPY {
+            if !copy_only {
+                continue;
+            }
+            let (src, sym_size) = resolve_copy_source(obj_idx, r_sym_idx);
+            if src != 0 && sym_size != 0 {
+                let dst = (base + r_offset) as *mut u8;
+                core::ptr::copy_nonoverlapping(src as *const u8, dst, sym_size);
+            }
+            continue;
+        }
+        #[cfg(not(target_arch = "riscv64"))]
+        if r_type == R_X86_64_COPY {
             if !copy_only {
                 continue;
             }
