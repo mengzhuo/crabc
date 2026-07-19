@@ -1942,7 +1942,7 @@ unsafe fn run_constructors() {
 
 unsafe fn run_constructors_for(idx: usize) {
     let obj = &LOADED[idx];
-    if obj.init_present && obj.init != 0 {
+    if obj.init_present && obj.init != 0 && obj.init != obj.base {
         let f: extern "C" fn() = core::mem::transmute(obj.init);
         f();
     }
