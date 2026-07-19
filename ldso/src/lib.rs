@@ -1847,6 +1847,13 @@ unsafe fn apply_rela_table(
         #[cfg(target_arch = "riscv64")]
         {
             match r_type {
+                R_RISCV_RELATIVE => {
+                    *slot = (base as i64 + r_addend) as u64;
+                }
+                R_RISCV_64 => {
+                    let sym_value = resolve_symbol_from_index(obj_idx, r_sym_idx);
+                    *slot = (sym_value as i64 + r_addend) as u64;
+                }
                 R_RISCV_JUMP_SLOT => {
                     let sym_value = resolve_symbol_from_index(obj_idx, r_sym_idx);
                     *slot = sym_value;
@@ -1873,6 +1880,13 @@ unsafe fn apply_rela_table(
         #[cfg(not(target_arch = "riscv64"))]
         {
             match r_type {
+                R_X86_64_RELATIVE | R_AARCH64_RELATIVE => {
+                    *slot = (base as i64 + r_addend) as u64;
+                }
+                R_X86_64_64 | R_AARCH64_ABS64 => {
+                    let sym_value = resolve_symbol_from_index(obj_idx, r_sym_idx);
+                    *slot = (sym_value as i64 + r_addend) as u64;
+                }
                 R_X86_64_GLOB_DAT | R_X86_64_JUMP_SLOT => {
                     let sym_value = resolve_symbol_from_index(obj_idx, r_sym_idx);
                     *slot = sym_value;
