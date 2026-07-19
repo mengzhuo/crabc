@@ -1844,94 +1844,84 @@ unsafe fn apply_rela_table(
             continue;
         }
 
-        match r_type {
-            R_X86_64_RELATIVE | R_AARCH64_RELATIVE | R_RISCV_RELATIVE => {
-                *slot = (base as i64 + r_addend) as u64;
-            }
-            R_X86_64_64 | R_AARCH64_ABS64 | R_RISCV_64 => {
-                let sym_value = resolve_symbol_from_index(obj_idx, r_sym_idx);
-                *slot = (sym_value as i64 + r_addend) as u64;
-            }
-            #[cfg(target_arch = "riscv64")]
-            R_RISCV_JUMP_SLOT => {
-                let sym_value = resolve_symbol_from_index(obj_idx, r_sym_idx);
-                *slot = sym_value;
-            }
-            #[cfg(target_arch = "riscv64")]
-            R_RISCV_TLS_DTPMOD64 => {
-                let module = if r_sym_idx == 0 {
-                    obj_idx
-                } else {
-                    resolve_symbol_module(obj_idx, r_sym_idx)
-                };
-                *slot = module as u64;
-            }
-            #[cfg(target_arch = "riscv64")]
-            R_RISCV_TLS_DTPREL64 => {
-                let off = (tls_sym_offset(obj_idx, r_sym_idx) as i64 + r_addend) as u64;
-                *slot = off;
-            }
-            #[cfg(target_arch = "riscv64")]
-            R_RISCV_TLS_TPREL64 => {
-                let fs_off = tls_tprel_offset(obj_idx, r_sym_idx, r_addend);
-                *slot = fs_off as u64;
-            }
-            #[cfg(not(target_arch = "riscv64"))]
-            R_X86_64_GLOB_DAT | R_X86_64_JUMP_SLOT => {
-                let sym_value = resolve_symbol_from_index(obj_idx, r_sym_idx);
-                *slot = sym_value;
-            }
-            #[cfg(not(target_arch = "riscv64"))]
-            R_AARCH64_GLOB_DAT | R_AARCH64_JUMP_SLOT => {
-                let sym_value = resolve_symbol_from_index(obj_idx, r_sym_idx);
-                *slot = sym_value;
-            }
-            R_X86_64_DTPMOD64 | R_AARCH64_TLS_DTPMOD64 => {
-                let module = if r_sym_idx == 0 {
-                    obj_idx
-                } else {
-                    resolve_symbol_module(obj_idx, r_sym_idx)
-                };
-                *slot = module as u64;
-            }
-            R_X86_64_DTPOFF64 | R_AARCH64_TLS_DTPREL64 => {
-                let off = (tls_sym_offset(obj_idx, r_sym_idx) as i64 + r_addend) as u64;
-                *slot = off;
-            }
-            R_X86_64_TPOFF64 | R_AARCH64_TLS_TPREL64 => {
-                let fs_off = tls_tprel_offset(obj_idx, r_sym_idx, r_addend);
-                *slot = fs_off as u64;
-            }
-            R_AARCH64_TLSLE_ADD_TPREL_HI12 => {
-                let fs_off = tls_tprel_offset(obj_idx, r_sym_idx, r_addend);
-                let insn = core::ptr::read_unaligned(slot as *const u32);
-                let imm = ((fs_off >> 12) & 0xFFF) as u32;
-                let new_insn = (insn & !(0xFFFu32 << 10)) | (imm << 10);
-                core::ptr::write_unaligned(slot as *mut u32, new_insn);
-            }
-            R_AARCH64_TLSLE_ADD_TPREL_LO12 | R_AARCH64_TLSLE_ADD_TPREL_LO12_NC => {
-                let fs_off = tls_tprel_offset(obj_idx, r_sym_idx, r_addend);
-                let insn = core::ptr::read_unaligned(slot as *const u32);
-                let imm = (fs_off & 0xFFF) as u32;
-                let new_insn = (insn & !(0xFFFu32 << 10)) | (imm << 10);
-                core::ptr::write_unaligned(slot as *mut u32, new_insn);
-            }
-            R_AARCH64_TLSDESC | R_RISCV_TLSDESC => {
-                let fs_off = tls_tprel_offset(obj_idx, r_sym_idx, r_addend);
-                let desc = slot as *mut [u64; 2];
-                (*desc)[0] = __tlsdesc_static as *const () as u64;
-                (*desc)[1] = fs_off as u64;
-                if cfg!(debug_assertions) {
-                    write_stderr(b"ldso: TLSDESC slot=");
-                    write_hex_stderr(slot as usize);
-                    write_stderr(b" resolver=");
-                    write_hex_stderr(__tlsdesc_static as *const () as usize);
-                    write_stderr(b" offset=");
-                    write_hex_stderr(fs_off as usize);
-                    write_stderr(b"\n");
+        #[cfg(target_arch = "riscv64")]
+        {
+            match r_type {
+                R_RISCV_JUMP_SLOT => {
+                    let sym_value = resolve_symbol_from_index(obj_idx, r_sym_idx);
+                    *slot = sym_value;
                 }
+                R_RISCV_TLS_DTPMOD64 => {
+                    let module = if r_sym_idx == 0 {
+                        obj_idx
+                    } else {
+                        resolve_symbol_module(obj_idx, r_sym_idx)
+                    };
+                    *slot = module as u64;
+                }
+                R_RISCV_TLS_DTPREL64 => {
+                    let off = (tls_sym_offset(obj_idx, r_sym_idx) as i64 + r_addend) as u64;
+                    *slot = off;
+                }
+                R_RISCV_TLS_TPREL64 => {
+                    let fs_off = tls_tprel_offset(obj_idx, r_sym_idx, r_addend);
+                    *slot = fs_off as u64;
+                }
+                _ => {}
             }
-            _ => {}
+        }
+        #[cfg(not(target_arch = "riscv64"))]
+        {
+            match r_type {
+                R_X86_64_GLOB_DAT | R_X86_64_JUMP_SLOT => {
+                    let sym_value = resolve_symbol_from_index(obj_idx, r_sym_idx);
+                    *slot = sym_value;
+                }
+                R_X86_64_DTPMOD64 | R_AARCH64_TLS_DTPMOD64 => {
+                    let module = if r_sym_idx == 0 {
+                        obj_idx
+                    } else {
+                        resolve_symbol_module(obj_idx, r_sym_idx)
+                    };
+                    *slot = module as u64;
+                }
+                R_X86_64_DTPOFF64 | R_AARCH64_TLS_DTPREL64 => {
+                    let off = (tls_sym_offset(obj_idx, r_sym_idx) as i64 + r_addend) as u64;
+                    *slot = off;
+                }
+                R_X86_64_TPOFF64 | R_AARCH64_TLS_TPREL64 => {
+                    let fs_off = tls_tprel_offset(obj_idx, r_sym_idx, r_addend);
+                    *slot = fs_off as u64;
+                }
+                _ => {}
+            }
+        }
+        if r_type == R_AARCH64_TLSLE_ADD_TPREL_HI12 {
+            let fs_off = tls_tprel_offset(obj_idx, r_sym_idx, r_addend);
+            let insn = core::ptr::read_unaligned(slot as *const u32);
+            let imm = ((fs_off >> 12) & 0xFFF) as u32;
+            let new_insn = (insn & !(0xFFFu32 << 10)) | (imm << 10);
+            core::ptr::write_unaligned(slot as *mut u32, new_insn);
+        } else if r_type == R_AARCH64_TLSLE_ADD_TPREL_LO12 || r_type == R_AARCH64_TLSLE_ADD_TPREL_LO12_NC {
+            let fs_off = tls_tprel_offset(obj_idx, r_sym_idx, r_addend);
+            let insn = core::ptr::read_unaligned(slot as *const u32);
+            let imm = (fs_off & 0xFFF) as u32;
+            let new_insn = (insn & !(0xFFFu32 << 10)) | (imm << 10);
+            core::ptr::write_unaligned(slot as *mut u32, new_insn);
+        } else if r_type == R_AARCH64_TLSDESC || r_type == R_RISCV_TLSDESC {
+            let fs_off = tls_tprel_offset(obj_idx, r_sym_idx, r_addend);
+            let desc = slot as *mut [u64; 2];
+            (*desc)[0] = __tlsdesc_static as *const () as u64;
+            (*desc)[1] = fs_off as u64;
+            if cfg!(debug_assertions) {
+                write_stderr(b"ldso: TLSDESC slot=");
+                write_hex_stderr(slot as usize);
+                write_stderr(b" resolver=");
+                write_hex_stderr(__tlsdesc_static as *const () as usize);
+                write_stderr(b" offset=");
+                write_hex_stderr(fs_off as usize);
+                write_stderr(b"\n");
+            }
         }
     }
 }
