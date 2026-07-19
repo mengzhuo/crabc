@@ -14,6 +14,8 @@ fn static_hello_links_against_libc_a() {
     // CRT paths differ by architecture
     let arch = if cfg!(target_arch = "aarch64") {
         "aarch64"
+    } else if cfg!(target_arch = "riscv64") {
+        "riscv64"
     } else {
         "x86_64"
     };
