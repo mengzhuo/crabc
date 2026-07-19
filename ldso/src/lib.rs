@@ -2855,6 +2855,7 @@ unsafe fn load_and_jump(sp: usize, ldso_base: u64) -> ! {
 
     run_constructors();
 
+        write_stderr(b"JUMP base="); write_hex_stderr(exec_base as usize); write_stderr(b" e_entry="); write_hex_stderr(e_entry as usize); write_stderr(b" target="); write_hex_stderr((exec_base + e_entry) as usize); write_stderr(b"\n");
     let phdr_addr = exec_base + e_phoff;
     build_and_jump(exec_base + e_entry, phdr_addr, e_phnum, sp)
 }
