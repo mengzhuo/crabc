@@ -48,6 +48,33 @@ static void my_exit(int code) {
     __builtin_unreachable();
 }
 
+#elif defined(__riscv)
+
+static void my_write(int fd, const void *buf, unsigned long count) {
+    register long a7 __asm__("a7") = 64;
+    register long a0 __asm__("a0") = fd;
+    register long a1 __asm__("a1") = (long)buf;
+    register long a2 __asm__("a2") = count;
+    __asm__ volatile (
+        "ecall"
+        :
+        : "r"(a7), "r"(a0), "r"(a1), "r"(a2)
+        : "memory"
+    );
+}
+
+static void my_exit(int code) {
+    register long a7 __asm__("a7") = 93;
+    register long a0 __asm__("a0") = code;
+    __asm__ volatile (
+        "ecall"
+        :
+        : "r"(a7), "r"(a0)
+        : "memory"
+    );
+    __builtin_unreachable();
+}
+
 #else
 #error "unsupported architecture"
 #endif
