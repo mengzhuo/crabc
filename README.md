@@ -74,10 +74,7 @@ cd libc-test-harness
 
 ## Notes
 
-- `long double` ABI is currently 64-bit; math fixtures are compiled with
-  `-mlong-double-64`.
-- `tests/new_functions.rs` may fail in containers where `/dev/null` is a
-  regular file instead of a character device.
+- `long double` ABI: x86_64 uses 64-bit (`-mlong-double-64`); aarch64 and riscv64 use 128-bit IEEE quad.
 - `libc-test` reports many `BUILDERROR`s until the full musl symbol set is
   exported; this is expected.
 
