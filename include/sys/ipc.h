@@ -5,23 +5,18 @@
 extern "C" {
 #endif
 
-#include <stddef.h>
-
-typedef int key_t;
-typedef unsigned int uid_t;
-typedef unsigned int gid_t;
-typedef unsigned int mode_t;
+#include <sys/types.h>
 
 struct ipc_perm {
-	key_t key;
-	uid_t uid;
-	gid_t gid;
-	uid_t cuid;
-	gid_t cgid;
-	mode_t mode;
-	int seq;
-	long __pad1;
-	long __pad2;
+    key_t key;
+    uid_t uid;
+    gid_t gid;
+    uid_t cuid;
+    gid_t cgid;
+    mode_t mode;
+    int seq;
+    long __pad1;
+    long __pad2;
 };
 
 #define IPC_CREAT  01000

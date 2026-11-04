@@ -4,7 +4,7 @@ Builds and runs the [libc-test](https://git.musl-libc.org/cgit/libc-test) suite 
 
 ## How It Works
 
-1. Builds `crabc/libc` into `target/debug/libc.so` (via `cargo build`).
+1. Builds `crabc/libc` into `target/debug/libc.so` (via `cargo build --workspace`).
 2. Creates a `fake-libs/` directory with symlinks so the linker resolves `-lc`, `-lpthread`, `-lm`, etc. against our libc.so instead of musl's.
 3. Builds libc-test's `runtest.exe` and `libtest.a` as host tools (linked against musl).
 4. Compiles and links each test binary with `musl-gcc -L fake-libs/`, then runs it via `LD_LIBRARY_PATH=fake-libs/`.
@@ -30,10 +30,13 @@ Reports are saved to `reports/`. Symlinks `reports/latest-summary.txt` and `repo
 
 ## Known Limitations
 
-- **dlopen tests are skipped** — our libc.so doesn't export `dlopen`/`dlsym`.
-- **Most tests will BUILDERROR** — our libc.so exports ~351 symbols vs musl's ~1420. Missing symbols cause link failures.
+- **Run subsets sequentially** — `build/`, `fake-libs/`, and `reports/` are shared, so concurrent runs race.
+- **Long-double math tests:** `acoshl`, `asinhl`, `lgammal`, and `tgammal` are skipped because upstream uses 80-bit vectors while crabc's x86_64 `long double` ABI is 64-bit.
+- **dlopen is only partially implemented** — tests that require a full `dlopen`/`dlsym` implementation may not exercise it.
 - **Static linking is not tested** — only dynamic-linked binaries are built.
-- **Only functional subset is tested by default** — use `./run.sh all` for everything.
+- **Only the functional subset runs by default** — use `./run.sh all` for everything.
+
+Current baseline: `functional` 73/73, `regression` 68/68, `api` 79/79, `math` 195 PASS + 4 SKIP.
 
 ## Initial Report
 

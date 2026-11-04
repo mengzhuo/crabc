@@ -30,6 +30,10 @@
 #define FP_SUBNORMAL 3
 #define FP_NORMAL    4
 
+#define MATH_ERRNO     1
+#define MATH_ERREXCEPT 2
+#define math_errhandling 2
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -235,6 +239,8 @@ long double lgammal(long double);
 double      lgamma_r(double, int *);
 float       lgammaf_r(float, int *);
 long double lgammal_r(long double, int *);
+extern int signgam;
+extern int __signgam;
 long long   llrint(double);
 long long   llrintf(float);
 long long   llrintl(long double);
@@ -268,6 +274,9 @@ long double modfl(long double, long double *);
 double      nearbyint(double);
 float       nearbyintf(float);
 long double nearbyintl(long double);
+double      nan(const char *);
+float       nanf(const char *);
+long double nanl(const char *);
 double      nextafter(double, double);
 float       nextafterf(float, float);
 long double nextafterl(long double, long double);
@@ -295,6 +304,31 @@ long double scalblnl(long double, long);
 double      scalbn(double, int);
 float       scalbnf(float, int);
 long double scalbnl(long double, int);
+double      scalb(double, double);
+float       scalbf(float, float);
+double      drem(double, double);
+float       dremf(float, float);
+double      exp10(double);
+float       exp10f(float);
+long double exp10l(long double);
+double      pow10(double);
+float       pow10f(float);
+long double pow10l(long double);
+double      sincos(double, double *, double *);
+float       sincosf(float, float *, float *);
+long double sincosl(long double, long double *, long double *);
+int          isless(double, double);
+int          islessf(float, float);
+int          islessequal(double, double);
+int          islessequalf(float, float);
+int          islessgreater(double, double);
+int          islessgreaterf(float, float);
+int          isgreater(double, double);
+int          isgreaterf(float, float);
+int          isgreaterequal(double, double);
+int          isgreaterequalf(float, float);
+double      scalb(double, double);
+float       scalbf(float, float);
 double      sin(double);
 float       sinf(float);
 long double sinl(long double);

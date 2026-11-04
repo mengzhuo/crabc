@@ -1,6 +1,13 @@
 #ifndef _LANGINFO_H
 #define _LANGINFO_H
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+#include <nl_types.h>
+#include <locale.h>
+
 #define ABDAY_1 0x20000
 #define ABDAY_2 0x20001
 #define ABDAY_3 0x20002
@@ -58,12 +65,18 @@
 #define ERA_T_FMT 0x20031
 
 #define CODESET 14
+#define CRNCYSTR 0x4000F
 
 #define RADIXCHAR 0x10000
 #define THOUSEP 0x10001
 #define YESEXPR 0x50000
 #define NOEXPR 0x50001
 
-char *nl_langinfo(int item);
+char *nl_langinfo(nl_item);
+char *nl_langinfo_l(nl_item, locale_t);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif

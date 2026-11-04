@@ -125,22 +125,28 @@ fn predict_false(x: bool) -> bool {
 
 #[inline]
 pub fn __math_invalid(x: f64) -> f64 {
+    if x.is_nan() { return x; }
+    unsafe { feraiseexcept(FE_INVALID); }
     (x - x) / (x - x)
 }
 
 #[inline]
 pub fn __math_invalidf(x: f32) -> f32 {
+    if x.is_nan() { return x; }
+    unsafe { feraiseexcept(FE_INVALID); }
     (x - x) / (x - x)
 }
 
 #[inline]
 pub fn __math_divzero(sign: u32) -> f64 {
+    unsafe { feraiseexcept(FE_DIVBYZERO); }
     let x = if sign != 0 { -1.0f64 } else { 1.0f64 };
     x / 0.0
 }
 
 #[inline]
 pub fn __math_divzerof(sign: u32) -> f32 {
+    unsafe { feraiseexcept(FE_DIVBYZERO); }
     let x = if sign != 0 { -1.0f32 } else { 1.0f32 };
     x / 0.0
 }
@@ -166,21 +172,25 @@ pub fn __math_xflowf(sign: u32, y: f32) -> f32 {
 
 #[inline]
 pub fn __math_oflow(sign: u32) -> f64 {
+    unsafe { feraiseexcept(FE_OVERFLOW | FE_INEXACT); }
     __math_xflow(sign, 1e231f64)
 }
 
 #[inline]
 pub fn __math_oflowf(sign: u32) -> f32 {
+    unsafe { feraiseexcept(FE_OVERFLOW | FE_INEXACT); }
     __math_xflowf(sign, 1.7e38f32)
 }
 
 #[inline]
 pub fn __math_uflow(sign: u32) -> f64 {
+    unsafe { feraiseexcept(FE_UNDERFLOW | FE_INEXACT); }
     __math_xflow(sign, 1e-231f64)
 }
 
 #[inline]
 pub fn __math_uflowf(sign: u32) -> f32 {
+    unsafe { feraiseexcept(FE_UNDERFLOW | FE_INEXACT); }
     __math_xflowf(sign, 1.2e-38f32)
 }
 
@@ -226,11 +236,13 @@ pub unsafe extern "C" fn __fpclassifyf(x: f32) -> c_int {
 }
 
 #[inline]
+#[no_mangle]
 pub fn __signbit(x: f64) -> c_int {
     ((asuint64(x) >> 63) & 1) as c_int
 }
 
 #[inline]
+#[no_mangle]
 pub fn __signbitf(x: f32) -> c_int {
     ((asuint(x) >> 31) & 1) as c_int
 }

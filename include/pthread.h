@@ -1,32 +1,31 @@
-#ifndef PTHREAD_H
-#define PTHREAD_H
+#ifndef _PTHREAD_H
+#define _PTHREAD_H
+
+#ifdef __cplusplus
+extern "C" {
+#endif
 
 #include <stddef.h>
+#include <sys/types.h>
 #include <time.h>
 
-typedef unsigned long sigset_t;
-
-typedef unsigned long pthread_t;
-
+#ifndef __crabc_sched_param_defined
+#define __crabc_sched_param_defined
 struct sched_param {
     int sched_priority;
 };
+#endif
 
-typedef struct { unsigned __attr; } pthread_mutexattr_t;
-typedef struct { unsigned __attr; } pthread_condattr_t;
-typedef struct { unsigned __attr[2]; } pthread_rwlockattr_t;
-typedef struct { unsigned __attr; } pthread_barrierattr_t;
-
-typedef struct { int __i[10]; } pthread_mutex_t;
-typedef struct { int __i[12]; } pthread_cond_t;
-typedef struct { int __i[14]; } pthread_rwlock_t;
-typedef struct { int __i[8]; } pthread_barrier_t;
-
-typedef int pthread_spinlock_t;
-typedef int pthread_once_t;
-typedef unsigned pthread_key_t;
-
-typedef struct { int __i[14]; } pthread_attr_t;
+#ifndef __crabc_sigset_t_defined
+#define __crabc_sigset_t_defined
+#ifndef __DEFINED_sigset_t
+#define __DEFINED_sigset_t
+#ifndef _SIGSET_T_DEFINED
+#define _SIGSET_T_DEFINED
+#endif
+typedef unsigned long sigset_t;
+#endif
+#endif
 
 #define PTHREAD_CREATE_JOINABLE 0
 #define PTHREAD_CREATE_DETACHED 1
@@ -35,6 +34,9 @@ typedef struct { int __i[14]; } pthread_attr_t;
 #define PTHREAD_MUTEX_DEFAULT 0
 #define PTHREAD_MUTEX_RECURSIVE 1
 #define PTHREAD_MUTEX_ERRORCHECK 2
+
+#define PTHREAD_MUTEX_STALLED 0
+#define PTHREAD_MUTEX_ROBUST 1
 
 #define PTHREAD_PROCESS_PRIVATE 0
 #define PTHREAD_PROCESS_SHARED 1
@@ -47,12 +49,12 @@ typedef struct { int __i[14]; } pthread_attr_t;
 
 #define PTHREAD_CANCEL_ENABLE 0
 #define PTHREAD_CANCEL_DISABLE 1
+#define PTHREAD_CANCEL_MASKED 2
 #define PTHREAD_CANCEL_DEFERRED 0
 #define PTHREAD_CANCEL_ASYNCHRONOUS 1
 
 #define PTHREAD_CANCELED ((void *)-1)
-
-#define PTHREAD_MUTEX_ROBUST 1
+#define PTHREAD_NULL ((pthread_t)0)
 
 #define PTHREAD_PRIO_NONE 0
 #define PTHREAD_PRIO_INHERIT 1
@@ -81,6 +83,12 @@ void pthread_testcancel(void);
 
 int pthread_once(pthread_once_t *once_control, void (*init_routine)(void));
 
+int pthread_getschedparam(pthread_t thread, int *policy, struct sched_param *param);
+int pthread_setschedparam(pthread_t thread, int policy, const struct sched_param *param);
+int pthread_setschedprio(pthread_t thread, int prio);
+
+int pthread_atfork(void (*prepare)(void), void (*parent)(void), void (*child)(void));
+
 int pthread_mutexattr_init(pthread_mutexattr_t *attr);
 int pthread_mutexattr_destroy(pthread_mutexattr_t *attr);
 int pthread_mutexattr_settype(pthread_mutexattr_t *attr, int type);
@@ -91,6 +99,8 @@ int pthread_mutexattr_setprotocol(pthread_mutexattr_t *attr, int protocol);
 int pthread_mutexattr_getprotocol(const pthread_mutexattr_t *attr, int *protocol);
 int pthread_mutexattr_setrobust(pthread_mutexattr_t *attr, int robust);
 int pthread_mutexattr_getrobust(const pthread_mutexattr_t *attr, int *robust);
+int pthread_mutexattr_setprioceiling(pthread_mutexattr_t *attr, int prioceiling);
+int pthread_mutexattr_getprioceiling(const pthread_mutexattr_t *attr, int *prioceiling);
 int pthread_mutex_consistent(pthread_mutex_t *mutex);
 
 int pthread_mutex_init(pthread_mutex_t *mutex, const pthread_mutexattr_t *attr);
@@ -99,6 +109,8 @@ int pthread_mutex_lock(pthread_mutex_t *mutex);
 int pthread_mutex_trylock(pthread_mutex_t *mutex);
 int pthread_mutex_timedlock(pthread_mutex_t *mutex, const struct timespec *abstime);
 int pthread_mutex_unlock(pthread_mutex_t *mutex);
+int pthread_mutex_getprioceiling(const pthread_mutex_t *mutex, int *prioceiling);
+int pthread_mutex_setprioceiling(pthread_mutex_t *mutex, int prioceiling, int *old_ceiling);
 
 int pthread_condattr_init(pthread_condattr_t *attr);
 int pthread_condattr_destroy(pthread_condattr_t *attr);
@@ -172,6 +184,8 @@ int pthread_attr_getschedparam(const pthread_attr_t *attr, struct sched_param *p
 int pthread_sigmask(int how, const sigset_t *set, sigset_t *oldset);
 int pthread_kill(pthread_t thread, int sig);
 
+int pthread_getcpuclockid(pthread_t thread, clockid_t *clock_id);
+
 struct __ptcb {
 	void (*__f)(void *);
 	void *__x;
@@ -183,5 +197,9 @@ void _pthread_cleanup_pop(struct __ptcb *, int);
 
 #define pthread_cleanup_push(f, x) do { struct __ptcb __cb; _pthread_cleanup_push(&__cb, f, x);
 #define pthread_cleanup_pop(r) _pthread_cleanup_pop(&__cb, (r)); } while(0)
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif

@@ -6,7 +6,8 @@ extern "C" {
 #endif
 
 #include <fcntl.h>
-#include <stddef.h>
+#include <time.h>
+#include <sys/types.h>
 
 typedef struct { int __val[8]; } sem_t;
 

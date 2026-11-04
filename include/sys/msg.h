@@ -6,14 +6,11 @@ extern "C" {
 #endif
 
 #include <sys/ipc.h>
-#include <stddef.h>
 #include <sys/types.h>
+#include <stddef.h>
 
-typedef long ssize_t;
 typedef unsigned long msgqnum_t;
 typedef unsigned long msglen_t;
-typedef long time_t;
-typedef int pid_t;
 
 struct msqid_ds {
 	struct ipc_perm msg_perm;

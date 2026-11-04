@@ -6,6 +6,8 @@ fn crypt_under_libc_so() {
 
     let libc_path = manifest_dir.join("target/debug/libc.so");
     assert!(libc_path.exists(), "libc.so not found");
+    let ldso_path = manifest_dir.join("target/debug/libldso.so");
+    assert!(ldso_path.exists(), "libldso.so not found");
 
     // Create test C source
     let test_src = r#"
@@ -64,6 +66,7 @@ int main() {
         .args([
             "-fPIE", "-pie", "-D_GNU_SOURCE",
             "-I", manifest_dir.join("include").to_str().unwrap(),
+            "-Wl,--dynamic-linker", ldso_path.to_str().unwrap(),
             "-L", manifest_dir.join("target/debug").to_str().unwrap(),
             src_path.to_str().unwrap(),
             "-Wl,--allow-shlib-undefined",

@@ -17,8 +17,8 @@ int main(void) {
     if (strverscmp("00", "000") <= 0) { puts("fail: 00>000"); fail++; }
 
     if (strverscmp("9", "10") >= 0) { puts("fail: 9<10"); fail++; }
-    if (strverscmp("1.2", "1.10") <= 0) { puts("fail: 1.2<1.10"); fail++; }
-    if (strverscmp("a1b2", "a1b10") <= 0) { puts("fail: a1b2<a1b10"); fail++; }
+    if (strverscmp("1.2", "1.10") >= 0) { puts("fail: 1.2<1.10"); fail++; }
+    if (strverscmp("a1b2", "a1b10") >= 0) { puts("fail: a1b2<a1b10"); fail++; }
 
     if (strverscmp("01", "010") >= 0) { puts("fail: 01<010"); fail++; }
     if (strverscmp("010", "09") >= 0) { puts("fail: 010<09"); fail++; }

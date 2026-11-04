@@ -141,6 +141,8 @@ int *__errno_location(void);
 #define ERFKILL 132
 #define EHWPOISON 133
 
+#define EWOULDBLOCK EAGAIN
+
 #ifdef __cplusplus
 }
 #endif

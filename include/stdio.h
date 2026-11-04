@@ -3,19 +3,23 @@
 
 #include <stddef.h>
 #include <stdarg.h>
+#include <sys/types.h>
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
 typedef struct _FILE FILE;
-typedef long long fpos_t;
+typedef long fpos_t;
 
 extern FILE *stdin;
 extern FILE *stdout;
 extern FILE *stderr;
 
+#ifndef NULL
 #define NULL ((void*)0)
+#endif
+
 #define EOF (-1)
 
 #define SEEK_SET 0
@@ -31,6 +35,7 @@ extern FILE *stderr;
 #define FOPEN_MAX 1000
 #define TMP_MAX 10000
 #define L_tmpnam 20
+#define L_ctermid 20
 
 /* File access */
 FILE *fopen(const char *, const char *);
@@ -55,8 +60,8 @@ size_t fwrite(const void *, size_t, size_t, FILE *);
 int fseek(FILE *, long, int);
 long ftell(FILE *);
 void rewind(FILE *);
-int fseeko(FILE *, long long, int);
-long long ftello(FILE *);
+int fseeko(FILE *, off_t, int);
+off_t ftello(FILE *);
 int fgetpos(FILE *, fpos_t *);
 int fsetpos(FILE *, const fpos_t *);
 
@@ -75,10 +80,20 @@ int putc(int, FILE *);
 int putchar(int);
 int ungetc(int, FILE *);
 
+int getc_unlocked(FILE *);
+int getchar_unlocked(void);
+int fputc_unlocked(int, FILE *);
+int putc_unlocked(int, FILE *);
+int putchar_unlocked(int);
+void flockfile(FILE *);
+int ftrylockfile(FILE *);
+void funlockfile(FILE *);
+
 /* Line I/O */
 char *fgets(char *, int, FILE *);
 int fputs(const char *, FILE *);
 int puts(const char *);
+char *gets(char *);
 
 /* Formatted output */
 int printf(const char *, ...);
@@ -101,15 +116,19 @@ int vfscanf(FILE *, const char *, va_list);
 int vsscanf(const char *, const char *, va_list);
 
 /* Line input */
-long long getdelim(char **, size_t *, int, FILE *);
-long long getline(char **, size_t *, FILE *);
+ssize_t getdelim(char **, size_t *, int, FILE *);
+ssize_t getline(char **, size_t *, FILE *);
 
 /* File operations */
 int remove(const char *);
 int rename(const char *, const char *);
+int renameat(int, const char *, int, const char *);
 
 /* Temp files */
 char *tmpnam(char *);
+char *tempnam(const char *, const char *);
+int getw(FILE *);
+int putw(int, FILE *);
 FILE *tmpfile(void);
 
 /* Pipes */
@@ -122,6 +141,9 @@ void perror(const char *);
 /* Memory streams */
 FILE *open_memstream(char **, size_t *);
 FILE *fmemopen(void *, size_t, const char *);
+
+/* Terminal identification */
+char *ctermid(char *);
 
 /* mkstemp */
 int mkstemp(char *);

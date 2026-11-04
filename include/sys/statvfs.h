@@ -1,12 +1,11 @@
 #ifndef _SYS_STATVFS_H
 #define _SYS_STATVFS_H
 
+#include <sys/types.h>
+
 #ifdef __cplusplus
 extern "C" {
 #endif
-
-typedef unsigned long fsblkcnt_t;
-typedef unsigned long fsfilcnt_t;
 
 struct statvfs {
 	unsigned long f_bsize;

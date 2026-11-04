@@ -52,3 +52,24 @@ jobs:
         run: |
           cd libc-test-harness
           ./run.sh functional
+
+  riscv64-cross:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install Rust nightly + riscv64 target
+        uses: dtolnay/rust-toolchain@nightly
+        with:
+          targets: riscv64gc-unknown-linux-musl
+
+      - name: Install riscv64 cross compiler and qemu
+        run: sudo apt-get update && sudo apt-get install -y gcc-riscv64-linux-gnu qemu-user
+
+      - name: Cross-build all artifacts
+        env:
+          CARGO_TARGET_RISCV64GC_UNKNOWN_LINUX_MUSL_LINKER: riscv64-linux-gnu-gcc
+        run: cargo build --workspace --target riscv64gc-unknown-linux-musl
+
+      - name: Smoke-test riscv64 under qemu
+        run: ./scripts/riscv-smoke.sh

@@ -7,12 +7,12 @@ unmodified musl-linked x86_64, aarch64, and riscv64 Linux binaries.
 
 | | musl | crabc |
 |---|---|---|
-| **Language** | C (~60k lines) | Rust `no_std` (~15k lines) |
+| **Language** | C (~60k lines) | Rust `no_std` (~21k lines) |
 | **Memory safety** | Manual — depends on developer discipline | Compiler-guaranteed — no buffer overflows, use-after-free, or UB |
 | **Dynamic linker** | Separate `ld-musl-*.so` | Built-in `libldso.so` — runs musl binaries directly |
 | **Embedded/kernel** | Requires cross-compile + link | `no_std` — `use crabc_libc` directly in Rust kernels |
 | **Architecture** | 10+ arches | x86\_64, aarch64, riscv64 (growing) |
-| **Symbol exports** | ~1420 | ~350 (growing incrementally) |
+| **Symbol exports** | ~1420 | ~1500 (growing incrementally) |
 
 **The core advantage: a Rust libc can be integrated directly into Rust `no_std` projects without FFI or cross-compilation.**
 
@@ -61,11 +61,18 @@ cd libc-test-harness
 ./run.sh all          # everything
 ```
 
+Cross-build and smoke-test riscv64 under qemu:
+
+```bash
+rustup target add riscv64gc-unknown-linux-musl
+./scripts/riscv-smoke.sh
+```
+
 ## Project layout
 
 | Path | Description |
 |------|-------------|
-| `src/` | `loader` binary — minimal static-PIE ELF runner |
+| `src/` | `loader` binary — minimal userspace ELF loader |
 | `libc/` | `libc.so` / `libc.a` — `no_std` libc implementation |
 | `ldso/` | `libldso.so` — dynamic linker |
 | `include/` | Public C headers |
@@ -75,8 +82,8 @@ cd libc-test-harness
 ## Notes
 
 - `long double` ABI: x86_64 uses 64-bit (`-mlong-double-64`); aarch64 and riscv64 use 128-bit IEEE quad.
-- `libc-test` reports many `BUILDERROR`s until the full musl symbol set is
-  exported; this is expected.
+- `libc-test` currently passes `functional`, `regression`, and `api` completely. `math` passes 195/199; the four long-double tests that use upstream 80-bit vectors are skipped because crabc's x86_64 ABI is 64-bit.
+- riscv64 is cross-built and smoke-tested under `qemu-riscv64` by `scripts/riscv-smoke.sh` (hello, tiny PIE/loader, TLS/DSO, math, pthread, socket, net, and more).
 
 ## License
 

@@ -5,12 +5,50 @@
 extern "C" {
 #endif
 
+#include <sys/types.h>
+#include <time.h>
+
 typedef unsigned long rlim_t;
 
 struct rlimit {
     rlim_t rlim_cur;
     rlim_t rlim_max;
 };
+
+struct rusage {
+    struct timeval ru_utime;
+    struct timeval ru_stime;
+    long ru_maxrss;
+    long ru_ixrss;
+    long ru_idrss;
+    long ru_isrss;
+    long ru_minflt;
+    long ru_majflt;
+    long ru_nswap;
+    long ru_inblock;
+    long ru_oublock;
+    long ru_msgsnd;
+    long ru_msgrcv;
+    long ru_nsignals;
+    long ru_nvcsw;
+    long ru_nivcsw;
+    long __reserved[16];
+};
+
+#define PRIO_MIN (-20)
+#define PRIO_MAX 20
+
+#define PRIO_PROCESS 0
+#define PRIO_PGRP    1
+#define PRIO_USER    2
+
+#define RUSAGE_SELF     0
+#define RUSAGE_CHILDREN (-1)
+#define RUSAGE_THREAD   1
+
+#define RLIM_INFINITY   (~0UL)
+#define RLIM_SAVED_CUR  RLIM_INFINITY
+#define RLIM_SAVED_MAX  RLIM_INFINITY
 
 #define RLIMIT_CPU      0
 #define RLIMIT_FSIZE    1
@@ -28,10 +66,15 @@ struct rlimit {
 #define RLIMIT_NICE     13
 #define RLIMIT_RTPRIO   14
 #define RLIMIT_RTTIME   15
-#define RLIM_INFINITY   (~0UL)
+#define RLIMIT_NLIMITS  16
+#define RLIM_NLIMITS    RLIMIT_NLIMITS
 
 int getrlimit(int, struct rlimit *);
 int setrlimit(int, const struct rlimit *);
+int getrusage(int, struct rusage *);
+
+int getpriority(int, id_t);
+int setpriority(int, id_t, int);
 
 #ifdef __cplusplus
 }

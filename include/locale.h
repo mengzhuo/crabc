@@ -1,5 +1,15 @@
-#ifndef LOCALE_H
-#define LOCALE_H
+#ifndef _LOCALE_H
+#define _LOCALE_H
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+#include <stddef.h>
+
+#ifndef NULL
+#define NULL ((void*)0)
+#endif
 
 #define LC_CTYPE    0
 #define LC_NUMERIC  1
@@ -36,7 +46,13 @@ struct lconv {
     char int_n_sign_posn;
 };
 
+#ifndef __crabc_locale_t_defined
+#define __crabc_locale_t_defined
+#ifndef __DEFINED_locale_t
+#define __DEFINED_locale_t
 typedef void *locale_t;
+#endif
+#endif
 
 #define LC_GLOBAL_LOCALE ((locale_t)-1)
 
@@ -55,5 +71,9 @@ locale_t newlocale(int mask, const char *name, locale_t base);
 void freelocale(locale_t loc);
 locale_t uselocale(locale_t loc);
 locale_t duplocale(locale_t loc);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif
