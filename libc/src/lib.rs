@@ -5975,7 +5975,8 @@ const O_TRUNC: i32 = 512;
 const O_APPEND: i32 = 1024;
 const O_EXCL: i32 = 128;
 const O_NONBLOCK: i32 = 2048;
-const O_NOFOLLOW: i32 = 0x40000;
+const O_NOFOLLOW: i32 = if cfg!(target_arch = "aarch64") { 0o100000 } else { 0o400000 };
+const O_DIRECTORY: i32 = if cfg!(target_arch = "aarch64") { 0o40000 } else { 0o200000 };
 const O_CLOEXEC: i32 = 0x80000;
 
 const F_GETFD: i32 = 1;
@@ -20592,7 +20593,7 @@ static mut DIR_LEN: usize = 0;
 
 #[no_mangle]
 pub unsafe extern "C" fn opendir(dirname: *const core::ffi::c_char) -> *mut core::ffi::c_void {
-    let fd = openat(AT_FDCWD, dirname, 0 | 0o200000, 0); // O_RDONLY | O_DIRECTORY
+    let fd = openat(AT_FDCWD, dirname, O_DIRECTORY, 0); // O_RDONLY | O_DIRECTORY
     if fd < 0 { return core::ptr::null_mut(); }
     DIR_FD = fd;
     DIR_POS = 0;

@@ -155,7 +155,7 @@ unsafe fn fts_stat_path(path: *const c_char, follow: bool, st: *mut Stat) -> c_i
 }
 
 unsafe fn fts_collect_names(path: *const c_char) -> (*mut *mut c_char, usize) {
-    let fd = crate::open(path, 0o200000, 0); // O_RDONLY|O_DIRECTORY
+    let fd = crate::open(path, crate::O_DIRECTORY, 0); // O_RDONLY|O_DIRECTORY
     if fd < 0 { return (core::ptr::null_mut(), 0); }
     let mut cap = 16usize;
     let mut count = 0usize;

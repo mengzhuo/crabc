@@ -213,7 +213,7 @@ int main(void) {
     memset(&tmv, 0, sizeof(tmv));
     tmv.tm_year = 70; tmv.tm_mday = 1;
     CHECK(wcsftime(wbuf, 64, L"%Y-%m-%d", &tmv) == 10 && wcscmp(wbuf, L"1970-01-01") == 0, "wcsftime");
-    char mbuf[64];
+    char mbuf[256];
     snprintf(mbuf, sizeof(mbuf), "%ls", wbuf);
     CHECK(strcmp(mbuf, "1970-01-01") == 0, "printf %ls");
 

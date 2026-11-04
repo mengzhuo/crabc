@@ -380,7 +380,7 @@ pub unsafe extern "C" fn if_nametoindex(ifname: *const c_char) -> c_uint {
 struct DirentBuf([u8; 4096]);
 
 unsafe fn list_net_names<F: FnMut(*const c_char, usize)>(mut cb: F) {
-    let fd = crate::open(b"/sys/class/net\0".as_ptr() as *const c_char, 0o200000, 0);
+    let fd = crate::open(b"/sys/class/net\0".as_ptr() as *const c_char, crate::O_DIRECTORY, 0);
     if fd < 0 { return; }
     let mut buf = DirentBuf([0u8; 4096]);
     let name_off = core::mem::offset_of!(linux_dirent64, d_name);

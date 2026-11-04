@@ -213,7 +213,7 @@ unsafe fn glob_list_push_n(list: *mut GlobList, s: *const u8, len: usize) {
 }
 
 unsafe fn list_dir_names(path: *const c_char) -> (*mut *mut c_char, usize) {
-    let fd = crate::open(path, 0o200000, 0);
+    let fd = crate::open(path, crate::O_DIRECTORY, 0);
     if fd < 0 { return (core::ptr::null_mut(), 0); }
     let mut cap = 32usize;
     let mut count = 0usize;
