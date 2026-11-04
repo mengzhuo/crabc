@@ -72,6 +72,8 @@ int pthread_create(pthread_t *thread, const pthread_attr_t *attr,
                    void *(*start_routine)(void *), void *arg);
 int pthread_detach(pthread_t thread);
 int pthread_join(pthread_t thread, void **retval);
+int pthread_tryjoin_np(pthread_t thread, void **retval);
+int pthread_timedjoin_np(pthread_t thread, void **retval, const struct timespec *abstime);
 void pthread_exit(void *retval) __attribute__((__noreturn__));
 pthread_t pthread_self(void);
 int pthread_equal(pthread_t t1, pthread_t t2);

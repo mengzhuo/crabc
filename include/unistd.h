@@ -175,6 +175,8 @@ char *getpass(const char *);
 int daemon(int, int);
 int acct(const char *);
 long syscall(long, ...);
+ssize_t posix_getdents(int, void *, size_t, int);
+int membarrier(int, int, int);
 int execvpe(const char *, char *const [], char *const []);
 int issetugid(void);
 int getentropy(void *, size_t);

@@ -54,6 +54,7 @@ extern "C" {
 
 void *mmap(void *, size_t, int, int, int, off_t);
 int munmap(void *, size_t);
+void *mremap(void *, size_t, size_t, int, ...);
 
 int mprotect(void *, size_t, int);
 int msync(void *, size_t, int);

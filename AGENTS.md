@@ -64,6 +64,8 @@ Math fixtures add `-frounding-math`; on x86_64 also `-mlong-double-64`. `tests/c
 - `ldso/build.rs` links with `-nostartfiles -nostdlib -e _start -Wl,-Bsymbolic`; keep `_start` as the `global_asm!` entry in `ldso/src/lib.rs`.
 - CI (`.github/workflows/ci.yml`) runs build + `cargo test --workspace` on x86_64 and aarch64, plus a riscv64 cross-build and qemu smoke test. riscv64 is not natively run in CI.
 - `scripts/local-ci.sh` accepts `CI_RUNNER` (podman/docker) and `CI_IMAGE` overrides.
+- All public musl function symbols are now exported. The resolver (`res_*`) and utmp/utmpx are real implementations; `_init`, `_fini`, and `_dl_debug_*` are linker internals and are intentionally absent from `libc.so`.
+- `tests/compat.rs` exercises the non-libc-test ABI surface (statfs, sysinfo, posix_getdents, pthread join variants, futimesat, mremap, etc.).
 
 ## riscv64
 

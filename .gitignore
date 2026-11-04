@@ -42,6 +42,7 @@ Cargo.lock
 /tests/fixtures/net_test
 /tests/fixtures/wave4_test
 /tests/fixtures/wave5_test
+/tests/fixtures/compat_test
 
 # libc-test harness generated files
 /libc-test-harness/build/

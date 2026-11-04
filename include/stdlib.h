@@ -114,12 +114,16 @@ size_t wcstombs(char *, const wchar_t *, size_t);
 
 char *mkdtemp(char *);
 int mkstemp(char *);
+int mkstemps(char *, int);
+int mkostemp(char *, int);
+int mkostemps(char *, int, int);
 int getsubopt(char **, char *const *, char **);
 char *realpath(const char *, char *);
 int posix_openpt(int);
 int grantpt(int);
 int unlockpt(int);
 char *ptsname(int);
+int ptsname_r(int, char *, size_t);
 
 #ifdef __cplusplus
 }

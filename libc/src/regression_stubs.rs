@@ -184,17 +184,3 @@ pub unsafe extern "C" fn mkdtemp(template: *mut c_char) -> *mut c_char {
 pub unsafe extern "C" fn mktemp(template: *mut c_char) -> *mut c_char {
     mktemp_internal(template, None)
 }
-
-#[no_mangle]
-pub unsafe extern "C" fn getpwnam_r(
-    _name: *const c_char,
-    _pwd: *mut c_void,
-    _buf: *mut c_char,
-    _buflen: usize,
-    result: *mut *mut c_void,
-) -> c_int {
-    if !result.is_null() {
-        *result = core::ptr::null_mut();
-    }
-    0
-}

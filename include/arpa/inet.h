@@ -18,9 +18,12 @@ typedef uint32_t in_addr_t;
 typedef uint16_t in_port_t;
 #endif
 
+#ifndef __crabc_in_addr_struct
+#define __crabc_in_addr_struct
 struct in_addr {
     in_addr_t s_addr;
 };
+#endif
 
 #define INET_ADDRSTRLEN  16
 #define INET6_ADDRSTRLEN 46

@@ -62,7 +62,7 @@ run() {
 run hello "$ROOT/tests/fixtures/hello.c"
 for n in ctype string stdlib strtol fenv setjmp signal process socket net statvfs \
          pthread pthread_atfork lrand48 locale iconv fnmatch math pthread_full \
-         stdio_full va_list_abi daemon crypt new_functions strverscmp; do
+         stdio_full va_list_abi daemon crypt new_functions strverscmp compat; do
     run "$n" "$ROOT/tests/fixtures/${n}_test.c"
 done
 
