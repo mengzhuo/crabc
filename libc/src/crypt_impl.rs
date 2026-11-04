@@ -842,8 +842,14 @@ pub unsafe extern "C" fn __crypt_r(key: *const c_char, setting: *const c_char, d
             return __crypt_sha512(key, setting, output);
         }
     }
-    // ponytail: DES not implemented; return "*" for unsupported salts
-    *output = b'*' as c_char;
+    if crate::crypt_des(key as *const u8, setting as *const u8, output as *mut u8) != 0 {
+        return output;
+    }
+    if *setting == b'*' as c_char {
+        *output = b'x' as c_char;
+    } else {
+        *output = b'*' as c_char;
+    }
     *output.add(1) = 0;
     output
 }

@@ -2109,6 +2109,140 @@ type LdsoDlsymFn = unsafe extern "C" fn(*mut u8, *const u8) -> *mut u8;
 type LdsoDlcloseFn = unsafe extern "C" fn(*mut u8) -> i32;
 type LdsoDlerrorFn = unsafe extern "C" fn() -> *const u8;
 
+#[repr(C)]
+struct DlPhdrInfo {
+    addr: u64,
+    name: *const u8,
+    phdr: *const u8,
+    phnum: u16,
+    __pad0: u16,
+    __pad1: u32,
+    adds: u64,
+    subs: u64,
+    tls_modid: usize,
+    tls_data: *mut u8,
+}
+
+type LdsoIterateCb = unsafe extern "C" fn(*mut DlPhdrInfo, usize, *mut u8) -> i32;
+type LdsoIterateFn = unsafe extern "C" fn(Option<LdsoIterateCb>, *mut u8) -> i32;
+type LdsoDlinfoFn = unsafe extern "C" fn(*mut u8, i32, *mut u8) -> i32;
+
+#[repr(C)]
+struct LinkMap {
+    l_addr: u64,
+    l_name: *mut u8,
+    l_ld: *mut u8,
+    l_next: *mut LinkMap,
+    l_prev: *mut LinkMap,
+}
+
+const EMPTY_LINK_MAP: LinkMap = LinkMap {
+    l_addr: 0,
+    l_name: core::ptr::null_mut(),
+    l_ld: core::ptr::null_mut(),
+    l_next: core::ptr::null_mut(),
+    l_prev: core::ptr::null_mut(),
+};
+static mut LINK_MAPS: [LinkMap; MAX_LOADED] = [EMPTY_LINK_MAP; MAX_LOADED];
+
+unsafe fn object_index(handle: *mut u8) -> Option<usize> {
+    if handle == DL_GLOBAL_SENTINEL { return Some(0); }
+    let base = core::ptr::addr_of_mut!(LOADED) as usize;
+    let h = handle as usize;
+    if h < base { return None; }
+    let idx = (h - base) / core::mem::size_of::<LoadedObject>();
+    if idx < LOADED_COUNT { Some(idx) } else { None }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn __ldso_dl_iterate_phdr(cb: Option<LdsoIterateCb>, data: *mut u8) -> i32 {
+    let cb = match cb { Some(c) => c, None => return 0 };
+    for i in 0..LOADED_COUNT {
+        let base = LOADED[i].base;
+        let eh = base as *const u8;
+        let mut phdr: *const u8 = core::ptr::null();
+        let mut phnum: u16 = 0;
+        if *eh == 0x7f && *eh.add(1) == b'E' {
+            let e_phoff = u64::from_le_bytes(core::ptr::read_unaligned(eh.add(32) as *const [u8; 8]));
+            let e_phentsize = u16::from_le_bytes(core::ptr::read_unaligned(eh.add(54) as *const [u8; 2]));
+            let e_phnum = u16::from_le_bytes(core::ptr::read_unaligned(eh.add(56) as *const [u8; 2]));
+            if e_phentsize as usize == PHDR_SIZE {
+                phdr = (base + e_phoff) as *const u8;
+                phnum = e_phnum;
+            }
+        }
+        let mut info = DlPhdrInfo {
+            addr: base,
+            name: LOADED[i].name.as_ptr(),
+            phdr,
+            phnum,
+            __pad0: 0,
+            __pad1: 0,
+            adds: 0,
+            subs: 0,
+            tls_modid: i + 1,
+            tls_data: core::ptr::null_mut(),
+        };
+        let r = cb(&mut info as *mut DlPhdrInfo, core::mem::size_of::<DlPhdrInfo>(), data);
+        if r != 0 { return r; }
+    }
+    0
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn __ldso_dlinfo(handle: *mut u8, request: i32, info: *mut u8) -> i32 {
+    if info.is_null() { return -1; }
+    let idx = match object_index(handle) { Some(i) => i, None => return -1 };
+    match request {
+        2 => {
+            // RTLD_DI_LINKMAP
+            for i in 0..LOADED_COUNT {
+                let name = LOADED[i].name.as_mut_ptr();
+                LINK_MAPS[i] = LinkMap {
+                    l_addr: LOADED[i].base,
+                    l_name: name,
+                    l_ld: LOADED[i].dyn_addr as *mut u8,
+                    l_next: core::ptr::null_mut(),
+                    l_prev: core::ptr::null_mut(),
+                };
+            }
+            for i in 0..LOADED_COUNT {
+                if i + 1 < LOADED_COUNT {
+                    LINK_MAPS[i].l_next = &mut LINK_MAPS[i + 1] as *mut LinkMap;
+                }
+                if i > 0 {
+                    LINK_MAPS[i].l_prev = &mut LINK_MAPS[i - 1] as *mut LinkMap;
+                }
+            }
+            *(info as *mut *mut LinkMap) = &mut LINK_MAPS[idx] as *mut LinkMap;
+            0
+        }
+        1 => {
+            // RTLD_DI_ORIGIN
+            let dst = info;
+            let name = LOADED[idx].name.as_ptr();
+            let mut end = 0usize;
+            while end < 255 && *name.add(end) != 0 { end += 1; }
+            let mut slash = end;
+            while slash > 0 {
+                if *name.add(slash - 1) == b'/' { break; }
+                slash -= 1;
+            }
+            if slash == 0 {
+                *dst = b'.' as u8;
+                *dst.add(1) = 0;
+            } else {
+                for i in 0..(slash - 1) {
+                    *dst.add(i) = *name.add(i);
+                }
+                *dst.add(slash - 1) = 0;
+            }
+            0
+        }
+        _ => -1,
+    }
+}
+
 unsafe fn register_dlopen_callbacks() {
     let reg_open = resolve_symbol(b"__ldso_register_dlopen\0".as_ptr());
     if reg_open != 0 {
@@ -2129,6 +2263,16 @@ unsafe fn register_dlopen_callbacks() {
     if reg_error != 0 {
         let f: extern "C" fn(LdsoDlerrorFn) = core::mem::transmute(reg_error);
         f(__ldso_dlerror as LdsoDlerrorFn);
+    }
+    let reg_iter = resolve_symbol(b"__ldso_register_dl_iterate\0".as_ptr());
+    if reg_iter != 0 {
+        let f: extern "C" fn(LdsoIterateFn) = core::mem::transmute(reg_iter);
+        f(__ldso_dl_iterate_phdr as LdsoIterateFn);
+    }
+    let reg_info = resolve_symbol(b"__ldso_register_dlinfo\0".as_ptr());
+    if reg_info != 0 {
+        let f: extern "C" fn(LdsoDlinfoFn) = core::mem::transmute(reg_info);
+        f(__ldso_dlinfo as LdsoDlinfoFn);
     }
 }
 

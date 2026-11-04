@@ -1,6 +1,8 @@
 #ifndef _SPAWN_H
 #define _SPAWN_H
 
+#include <sched.h>
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -64,6 +66,12 @@ int posix_spawn_file_actions_destroy(posix_spawn_file_actions_t *);
 int posix_spawn_file_actions_addopen(posix_spawn_file_actions_t *__restrict, int, const char *__restrict, int, mode_t);
 int posix_spawn_file_actions_addclose(posix_spawn_file_actions_t *, int);
 int posix_spawn_file_actions_adddup2(posix_spawn_file_actions_t *, int, int);
+int posix_spawnattr_getschedparam(const posix_spawnattr_t *__restrict, struct sched_param *__restrict);
+int posix_spawnattr_setschedparam(posix_spawnattr_t *__restrict, const struct sched_param *__restrict);
+int posix_spawnattr_getschedpolicy(const posix_spawnattr_t *__restrict, int *__restrict);
+int posix_spawnattr_setschedpolicy(posix_spawnattr_t *, int);
+int posix_spawn_file_actions_addchdir_np(posix_spawn_file_actions_t *, const char *);
+int posix_spawn_file_actions_addfchdir_np(posix_spawn_file_actions_t *, int);
 
 #ifdef __cplusplus
 }

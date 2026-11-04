@@ -200,6 +200,17 @@ void _pthread_cleanup_pop(struct __ptcb *, int);
 #define pthread_cleanup_push(f, x) do { struct __ptcb __cb; _pthread_cleanup_push(&__cb, f, x);
 #define pthread_cleanup_pop(r) _pthread_cleanup_pop(&__cb, (r)); } while(0)
 
+
+int pthread_getattr_np(pthread_t, pthread_attr_t *);
+int pthread_getattr_default_np(pthread_attr_t *);
+int pthread_setattr_default_np(const pthread_attr_t *);
+int pthread_getname_np(pthread_t, char *, size_t);
+int pthread_setname_np(pthread_t, const char *);
+int pthread_getcpuclockid(pthread_t, clockid_t *);
+int pthread_getschedparam(pthread_t, int *, struct sched_param *);
+int pthread_setschedparam(pthread_t, int, const struct sched_param *);
+int pthread_setschedprio(pthread_t, int);
+
 #ifdef __cplusplus
 }
 #endif

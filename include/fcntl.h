@@ -122,6 +122,13 @@ int posix_fallocate(int, off_t, off_t);
 
 int lockf(int, int, off_t);
 
+#if defined(_GNU_SOURCE)
+#define SYNC_FILE_RANGE_WAIT_BEFORE 1
+#define SYNC_FILE_RANGE_WRITE       2
+#define SYNC_FILE_RANGE_WAIT_AFTER  4
+int sync_file_range(int, off_t, off_t, unsigned);
+#endif
+
 #ifdef __cplusplus
 }
 #endif

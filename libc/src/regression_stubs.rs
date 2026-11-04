@@ -84,20 +84,34 @@ pub unsafe extern "C" fn execle(path: *const c_char, arg: *const c_char, mut arg
 
 #[no_mangle]
 pub unsafe extern "C" fn flockfile(f: *mut crate::FILE) {
-    if !f.is_null() {
-        (*f).lockcount += 1;
+    if (*f).lock < 0 { return; }
+    let tid = crate::sys_gettid() as i32;
+    loop {
+        let v = crate::a_load(&raw const (*f).lock);
+        if v == tid {
+            (*f).lockcount += 1;
+            return;
+        }
+        if v == 0 && crate::a_cas(&raw mut (*f).lock, 0, tid) == 0 {
+            (*f).lockcount = 1;
+            return;
+        }
+        if v != 0 {
+            crate::futex_wait(&raw mut (*f).lock, v);
+        }
     }
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn funlockfile(f: *mut crate::FILE) {
-    if !f.is_null() {
-        if (*f).lockcount > 1 {
-            (*f).lockcount -= 1;
-        } else {
-            (*f).lockcount = 0;
-        }
+    if (*f).lock < 0 { return; }
+    if (*f).lockcount > 1 {
+        (*f).lockcount -= 1;
+        return;
     }
+    (*f).lockcount = 0;
+    crate::a_store(&raw mut (*f).lock, 0);
+    crate::futex_wake(&raw mut (*f).lock, 1);
 }
 
 #[no_mangle]

@@ -84,7 +84,7 @@ rustup target add riscv64gc-unknown-linux-musl
 - `long double` ABI: x86_64 uses 64-bit (`-mlong-double-64`); aarch64 and riscv64 use 128-bit IEEE quad.
 - `libc-test` currently passes `functional`, `regression`, and `api` completely. `math` passes 195/199; the four long-double tests that use upstream 80-bit vectors are skipped because crabc's x86_64 ABI is 64-bit.
 - All public musl function symbols are exported. The resolver (`res_*`) and utmp/utmpx are real implementations; the `_init`, `_fini`, and `_dl_debug_*` linker internals are intentionally not in `libc.so`.
-- `tests/compat.rs` covers the extra ABI surface (statfs, sysinfo, posix_getdents, pthread join variants, futimesat, mremap, and friends).
+- `tests/compat.rs` covers the extra ABI surface (resolver, netdb, passwd/group/shadow, utmp, AIO, glob/nftw/realpath, wordexp, fopencookie, DES crypt, dladdr, statfs, sysinfo, posix_getdents, pthread join variants, futimesat, mremap, and friends).
 - riscv64 is cross-built and smoke-tested under `qemu-riscv64` by `scripts/riscv-smoke.sh` (hello, tiny PIE/loader, TLS/DSO, math, pthread, socket, net, and more).
 
 ## License

@@ -56,7 +56,7 @@ Math fixtures add `-frounding-math`; on x86_64 also `-mlong-double-64`. `tests/c
 
 ## Implementation Notes
 
-- `libc/src/lib.rs` is a single large `no_std` file (~21k lines). Subsystems are `include!`-ed, not `mod`-declared.
+- `libc/src/lib.rs` is a single large `no_std` file. Subsystems are `include!`-ed, not `mod`-declared. The compatibility surface is split across area files: `netdb_extra.rs`, `compat_extra.rs`, `stdio_extra.rs`, `ns_parse.rs`, `fts.rs`, `ifaddrs.rs`, `dl_extra.rs`, `path_extra.rs`, `wordexp.rs`, `des.rs`, and `getopt_impl.rs`.
 - `libc` and `ldso` are `no_std`; only the `src/` loader uses `std`.
 - C ABI exports need `#[no_mangle] pub unsafe extern "C" fn ...`. A plain Rust function will not appear in `libc.so`/`libc.a`.
 - `libm = "0.2"` is only a stopgap for functions not yet ported. When porting one, remove its `libm::` call.
@@ -65,7 +65,7 @@ Math fixtures add `-frounding-math`; on x86_64 also `-mlong-double-64`. `tests/c
 - CI (`.github/workflows/ci.yml`) runs build + `cargo test --workspace` on x86_64 and aarch64, plus a riscv64 cross-build and qemu smoke test. riscv64 is not natively run in CI.
 - `scripts/local-ci.sh` accepts `CI_RUNNER` (podman/docker) and `CI_IMAGE` overrides.
 - All public musl function symbols are now exported. The resolver (`res_*`) and utmp/utmpx are real implementations; `_init`, `_fini`, and `_dl_debug_*` are linker internals and are intentionally absent from `libc.so`.
-- `tests/compat.rs` exercises the non-libc-test ABI surface (statfs, sysinfo, posix_getdents, pthread join variants, futimesat, mremap, etc.).
+- `tests/compat.rs` exercises the non-libc-test ABI surface (resolver, netdb, passwd/group/shadow, utmp, AIO, glob/nftw/realpath, wordexp, fopencookie, DES crypt, dladdr, statfs, sysinfo, posix_getdents, pthread join variants, futimesat, mremap, etc.).
 
 ## riscv64
 

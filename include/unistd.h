@@ -152,6 +152,7 @@ void sync(void);
 pid_t setpgrp(void);
 char *crypt(const char *, const char *);
 void encrypt(char *, int);
+void setkey(const char *);
 void swab(const void *, void *, ssize_t);
 int lockf(int, int, off_t);
 long gethostid(void);
