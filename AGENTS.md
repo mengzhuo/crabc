@@ -67,6 +67,17 @@ Math fixtures add `-frounding-math`; on x86_64 also `-mlong-double-64`. `tests/c
 - All public musl function symbols are now exported. The resolver (`res_*`) and utmp/utmpx are real implementations; `_init`, `_fini`, and `_dl_debug_*` are linker internals and are intentionally absent from `libc.so`.
 - `tests/compat.rs` exercises the non-libc-test ABI surface (resolver, netdb, passwd/group/shadow, utmp, AIO, glob/nftw/realpath, wordexp, fopencookie, DES crypt, dladdr, statfs, sysinfo, posix_getdents, pthread join variants, futimesat, mremap, etc.).
 
+## Releasing
+
+- Bump the version in `Cargo.toml`, `libc/Cargo.toml`, and `ldso/Cargo.toml`, then tag `vX.Y.Z` at the published commit.
+- crates.io verifies each package standalone, where the workspace `panic = "abort"` is absent. Publish the no_std crates with an explicit abort strategy instead of adding profiles to member manifests:
+  ```bash
+  RUSTFLAGS='-C panic=abort' cargo publish -p crabc-libc --registry crates-io
+  RUSTFLAGS='-C panic=abort' cargo publish -p crabc-ldso --registry crates-io
+  cargo publish -p crabc --registry crates-io
+  ```
+- The default registry in this environment is a mirror; pass `--registry crates-io` to publish to crates.io.
+
 ## riscv64
 
 - Cross-build: `CARGO_TARGET_RISCV64GC_UNKNOWN_LINUX_MUSL_LINKER=riscv64-linux-gnu-gcc cargo build --workspace --target riscv64gc-unknown-linux-musl`.
