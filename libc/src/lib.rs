@@ -26,6 +26,7 @@ include!("math_erf.rs");
 include!("math_lgamma.rs");
 include!("math_tgamma.rs");
 include!("math_bessel.rs");
+include!("alloc.rs");
 include!("math_log.rs");
 include!("math_pow.rs");
 include!("math_hypot.rs");
@@ -2721,6 +2722,7 @@ pub unsafe extern "C" fn fork() -> c_int {
         return -1;
     }
     if ret == 0 {
+        allocator_after_fork();
         __fork_handler(1);
     } else {
         __fork_handler(0);
@@ -3563,7 +3565,12 @@ static mut THREADS: [Thread; MAX_THREADS] = [Thread {
         pending: core::ptr::null_mut(),
     },
 }; MAX_THREADS];
-static NEXT_SLOT: AtomicUsize = AtomicUsize::new(0);
+const ALL_SLOT_BITS: usize = if MAX_THREADS >= usize::BITS as usize {
+    usize::MAX
+} else {
+    (1usize << MAX_THREADS) - 1
+};
+static SLOT_USED: AtomicUsize = AtomicUsize::new(0);
 static mut KEY_DTORS: [Option<unsafe extern "C" fn(*mut c_void)>; PTHREAD_KEYS_MAX] = [None; PTHREAD_KEYS_MAX];
 static NEXT_KEY: AtomicUsize = AtomicUsize::new(0);
 
@@ -3651,10 +3658,38 @@ unsafe fn spinlock_unlock(lock: *mut c_int, waiters: *mut c_int) {
     if a_load(waiters) > 0 { futex_wake(lock, 1); }
 }
 
+unsafe fn slot_index(slot: *const Thread) -> usize {
+    let base = core::ptr::addr_of!(THREADS[0]) as usize;
+    (slot as usize - base) / core::mem::size_of::<Thread>()
+}
+
+unsafe fn release_thread_slot(slot: *const Thread) {
+    let idx = slot_index(slot);
+    if idx < MAX_THREADS {
+        SLOT_USED.fetch_and(!(1usize << idx), Ordering::AcqRel);
+    }
+}
+
 unsafe fn alloc_thread_slot() -> Option<&'static mut Thread> {
-    let idx = NEXT_SLOT.fetch_add(1, Ordering::SeqCst);
-    if idx >= MAX_THREADS { return None; }
-    Some(&mut THREADS[idx])
+    let mut used = SLOT_USED.load(Ordering::Acquire);
+    loop {
+        if used == ALL_SLOT_BITS {
+            return None;
+        }
+        let idx = (!used).trailing_zeros() as usize;
+        if idx >= MAX_THREADS {
+            return None;
+        }
+        match SLOT_USED.compare_exchange_weak(
+            used,
+            used | (1usize << idx),
+            Ordering::AcqRel,
+            Ordering::Acquire,
+        ) {
+            Ok(_) => return Some(&mut THREADS[idx]),
+            Err(v) => used = v,
+        }
+    }
 }
 
 unsafe fn run_key_dtors(slot: &mut Thread) {
@@ -3676,6 +3711,12 @@ unsafe fn run_key_dtors(slot: &mut Thread) {
 
 unsafe extern "C" fn thread_entry(slot: *mut c_void) -> *mut c_void {
     let slot = &mut *(slot as *mut Thread);
+    // A reused slot may still carry the previous thread's robust-list state;
+    // register a fresh list for this thread.
+    slot.robust_list.list.next = core::ptr::null_mut();
+    slot.robust_list.futex_offset = 0;
+    slot.robust_list.pending = core::ptr::null_mut();
+    ensure_robust_list(slot);
     let mut set: SigSetT = 0;
     sigemptyset(&mut set);
     sigaddset(&mut set, SIGCANCEL);
@@ -3720,10 +3761,9 @@ pub unsafe extern "C" fn pthread_self() -> PthreadT {
             return slot as PthreadT;
         }
     }
-    // ponytail: register main thread lazily in first free slot
-    let idx = NEXT_SLOT.fetch_add(1, Ordering::SeqCst);
-    if idx < MAX_THREADS {
-        let slot = &raw mut THREADS[idx];
+    // Register the main thread lazily in a free slot.
+    if let Some(slot) = alloc_thread_slot() {
+        let slot = slot as *mut Thread;
         (*slot).tid = me;
         (*slot).detach_state = DT_JOINABLE;
         return slot as PthreadT;
@@ -3751,9 +3791,9 @@ pub unsafe extern "C" fn pthread_create(
         if s > 0 { s } else { STACK_SIZE }
     } else { STACK_SIZE };
     let stack = sys_mmap(null_mut(), stack_size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-    if stack == MMAP_FAILED { return EAGAIN; }
+    if stack == MMAP_FAILED { release_thread_slot(slot); return EAGAIN; }
     let fs_base = __rc_create_thread_tls();
-    if fs_base.is_null() { sys_munmap(stack, stack_size); return EAGAIN; }
+    if fs_base.is_null() { sys_munmap(stack, stack_size); release_thread_slot(slot); return EAGAIN; }
     (*slot).detach_state = DT_JOINABLE;
     (*slot).result = core::ptr::null_mut();
     (*slot).cancel = 0;
@@ -3775,6 +3815,7 @@ pub unsafe extern "C" fn pthread_create(
         (*slot).tid = -1;
         sys_munmap(stack, stack_size);
         sys_munmap(fs_base.sub(__rc_tls_base_offset()), __rc_tls_block_size());
+        release_thread_slot(slot);
         return EAGAIN;
     }
     if !attr.is_null() && (*attr).__i[6] == PTHREAD_CREATE_DETACHED {
@@ -3810,6 +3851,7 @@ pub unsafe extern "C" fn pthread_join(thread: PthreadT, retval: *mut *mut c_void
     (*slot).fs_base = core::ptr::null_mut();
     if !stack.is_null() && stack_size > 0 { sys_munmap(stack, stack_size); }
     if !fs_base.is_null() { let bs = __rc_tls_block_size(); let bo = __rc_tls_base_offset(); if bs > 0 { sys_munmap(fs_base.sub(bo), bs); } }
+    release_thread_slot(slot);
     0
 }
 
@@ -3828,6 +3870,7 @@ pub unsafe extern "C" fn pthread_detach(thread: PthreadT) -> c_int {
         (*slot).fs_base = core::ptr::null_mut();
         if !stack.is_null() && stack_size > 0 { sys_munmap(stack, stack_size); }
         if !fs_base.is_null() { let bs = __rc_tls_block_size(); let bo = __rc_tls_base_offset(); sys_munmap(fs_base.sub(bo), bs); }
+        release_thread_slot(slot);
     }
     0
 }
@@ -8966,81 +9009,11 @@ pub unsafe extern "C" fn rename(old: *const c_char, new_: *const c_char) -> c_in
 }
 
 // ============================================================
-// Allocator: mmap-backed bump allocator
-// ponytail: per-page mmap, free is a no-op, leaks on realloc
+// Allocator basics
 // ============================================================
 
 const MMAP_FAILED: *mut u8 = !0usize as *mut u8;
 const PAGE: usize = 4096;
-
-#[no_mangle]
-pub unsafe extern "C" fn malloc(size: SizeT) -> *mut c_void {
-    // C requires malloc(0) to return either NULL or a unique non-NULL pointer
-    // that can be passed to free. Return a one-page allocation for uniqueness.
-    let alloc_size = if size == 0 { 1 } else { size };
-    // Layout: [alloc_size: usize][data]
-    let total = alloc_size + core::mem::size_of::<usize>();
-    let pages = (total + PAGE - 1) & !(PAGE - 1);
-    let ptr = sys_mmap(
-        null_mut(),
-        pages,
-        PROT_READ | PROT_WRITE,
-        MAP_PRIVATE | MAP_ANONYMOUS,
-        -1,
-        0,
-    );
-    if ptr == MMAP_FAILED {
-        return null_mut();
-    }
-    *(ptr as *mut usize) = pages;
-    ptr.add(core::mem::size_of::<usize>()) as *mut c_void
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn free(ptr: *mut c_void) {
-    if ptr.is_null() {
-        return;
-    }
-    let header = (ptr as *mut u8).sub(core::mem::size_of::<usize>());
-    let pages = *(header as *const usize);
-    sys_munmap(header, pages);
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn calloc(count: SizeT, size: SizeT) -> *mut c_void {
-    let total = count.saturating_mul(size);
-    let ptr = malloc(total);
-    if !ptr.is_null() {
-        core::ptr::write_bytes(ptr as *mut u8, 0, total);
-    }
-    ptr
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn realloc(ptr: *mut c_void, new_size: SizeT) -> *mut c_void {
-    if ptr.is_null() {
-        return malloc(new_size);
-    }
-    if new_size == 0 {
-        free(ptr);
-        return null_mut();
-    }
-    let header = (ptr as *mut u8).sub(core::mem::size_of::<usize>());
-    let old_pages = *(header as *const usize);
-    let old_data_size = old_pages - core::mem::size_of::<usize>();
-    let new_ptr = malloc(new_size);
-    if new_ptr.is_null() {
-        return null_mut();
-    }
-    let copy_size = if old_data_size < new_size {
-        old_data_size
-    } else {
-        new_size
-    };
-    core::ptr::copy_nonoverlapping(ptr as *const u8, new_ptr as *mut u8, copy_size);
-    free(ptr);
-    new_ptr
-}
 
 // ============================================================
 // Process: exit / _exit / _Exit
@@ -17863,34 +17836,29 @@ pub unsafe extern "C" fn mkfifo(pathname: *const core::ffi::c_char, mode: u32) -
 
 #[no_mangle]
 pub unsafe extern "C" fn aligned_alloc(alignment: usize, size: usize) -> *mut core::ffi::c_void {
-    let p = crate::malloc(size + alignment);
-    if p.is_null() { return core::ptr::null_mut(); }
-    let aligned = ((p as usize + alignment - 1) & !(alignment - 1)) as *mut core::ffi::c_void;
-    aligned
+    alloc_aligned_impl(alignment, size) as *mut core::ffi::c_void
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn memalign(alignment: usize, size: usize) -> *mut core::ffi::c_void {
-    let p = crate::malloc(size + alignment);
-    if p.is_null() { return core::ptr::null_mut(); }
-    let aligned = ((p as usize + alignment - 1) & !(alignment - 1)) as *mut core::ffi::c_void;
-    aligned
+    alloc_aligned_impl(alignment, size) as *mut core::ffi::c_void
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn posix_memalign(memptr: *mut *mut core::ffi::c_void, _alignment: usize, size: usize) -> i32 {
-    let p = crate::malloc(size);
-    if p.is_null() { return 12; } // ENOMEM
-    *memptr = p;
+pub unsafe extern "C" fn posix_memalign(memptr: *mut *mut core::ffi::c_void, alignment: usize, size: usize) -> i32 {
+    if memptr.is_null() { return EINVAL; }
+    if alignment < core::mem::size_of::<*mut core::ffi::c_void>() || !alignment.is_power_of_two() {
+        return EINVAL;
+    }
+    let p = alloc_aligned_impl(alignment, size);
+    if p.is_null() { return ENOMEM; }
+    *memptr = p as *mut core::ffi::c_void;
     0
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn valloc(size: usize) -> *mut core::ffi::c_void {
-    let p = crate::malloc(size + 4096);
-    if p.is_null() { return core::ptr::null_mut(); }
-    let aligned = ((p as usize + 4095) & !4095) as *mut core::ffi::c_void;
-    aligned
+    alloc_aligned_impl(PAGE, size) as *mut core::ffi::c_void
 }
 
 // ============================================================
@@ -20088,7 +20056,11 @@ pub unsafe extern "C" fn rand_r(seedp: *mut u32) -> i32 {
 
 #[no_mangle]
 pub unsafe extern "C" fn reallocarray(ptr: *mut core::ffi::c_void, nmemb: usize, size: usize) -> *mut core::ffi::c_void {
-    crate::realloc(ptr, nmemb.wrapping_mul(size))
+    let total = match nmemb.checked_mul(size) {
+        Some(v) => v,
+        None => { ERRNO = ENOMEM; return core::ptr::null_mut(); }
+    };
+    crate::realloc(ptr, total)
 }
 
 #[no_mangle]

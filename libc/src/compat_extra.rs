@@ -963,11 +963,7 @@ pub unsafe extern "C" fn ulckpwdf() -> c_int {
 
 #[no_mangle]
 pub unsafe extern "C" fn malloc_usable_size(ptr: *mut u8) -> usize {
-    if ptr.is_null() { return 0; }
-    let header = ptr.sub(core::mem::size_of::<usize>());
-    let pages = *(header as *const usize);
-    if pages < core::mem::size_of::<usize>() { return 0; }
-    pages - core::mem::size_of::<usize>()
+    crate::alloc_usable_size(ptr)
 }
 
 #[no_mangle]
