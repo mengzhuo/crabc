@@ -77,7 +77,7 @@ Every GitHub release ships unsigned Alpine packages for x86\_64, aarch64, and
 riscv64 (apk-tools v3 / ADB format, Alpine 3.23+):
 
 ```bash
-version=0.4.0
+version=0.4.1
 arch=x86_64   # or aarch64 / riscv64
 base=https://github.com/mengzhuo/crabc/releases/download/v${version}
 curl -LO "$base/crabc-${version}-r0.${arch}.apk"
