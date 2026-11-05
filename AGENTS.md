@@ -69,14 +69,34 @@ Math fixtures add `-frounding-math`; on x86_64 also `-mlong-double-64`. `tests/c
 
 ## Releasing
 
-- Bump the version in `Cargo.toml`, `libc/Cargo.toml`, and `ldso/Cargo.toml`, then tag `vX.Y.Z` at the published commit.
-- crates.io verifies each package standalone, where the workspace `panic = "abort"` is absent. Publish the no_std crates with an explicit abort strategy instead of adding profiles to member manifests:
-  ```bash
-  RUSTFLAGS='-C panic=abort' cargo publish -p crabc-libc --registry crates-io
-  RUSTFLAGS='-C panic=abort' cargo publish -p crabc-ldso --registry crates-io
-  cargo publish -p crabc --registry crates-io
-  ```
-- The default registry in this environment is a mirror; pass `--registry crates-io` to publish to crates.io.
+Releases are published by `.github/workflows/release.yml` on `v*` tags using crates.io Trusted Publishing (OIDC, no long-lived token). The job uses the GitHub environment `release`.
+
+One-time setup on crates.io, for **each** of `crabc`, `crabc-libc`, and `crabc-ldso`:
+
+- open the crate's **Settings → Trusted Publishing → Add a new Trusted Publisher**
+- GitHub repository owner: `mengzhuo`
+- GitHub repository name: `crabc`
+- Workflow filename: `release.yml`
+- Environment: `release`
+
+To cut a release, bump the version in `Cargo.toml`, `libc/Cargo.toml`, and `ldso/Cargo.toml`, commit, then push a matching tag:
+
+```bash
+git tag vX.Y.Z
+git push origin main vX.Y.Z
+```
+
+The workflow verifies that all three manifest versions equal the tag before publishing. It publishes `crabc-libc`, `crabc-ldso`, then `crabc`, and creates a GitHub release.
+
+If publishing manually, crates.io verifies each package standalone, where the workspace `panic = "abort"` is absent. Use an explicit abort strategy for the no_std crates:
+
+```bash
+RUSTFLAGS='-C panic=abort' cargo publish -p crabc-libc --registry crates-io
+RUSTFLAGS='-C panic=abort' cargo publish -p crabc-ldso --registry crates-io
+cargo publish -p crabc --registry crates-io
+```
+
+The default registry in this environment is a mirror; pass `--registry crates-io` to publish to crates.io.
 
 ## riscv64
 

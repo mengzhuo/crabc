@@ -1,0 +1,66 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write   # create the GitHub release
+  id-token: write   # mint the short-lived crates.io token via OIDC
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    # Must match the "Environment" field of the trusted publisher configured
+    # on crates.io for crabc, crabc-libc and crabc-ldso.
+    environment: release
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install Rust nightly
+        uses: dtolnay/rust-toolchain@nightly
+
+      - name: Verify tag matches workspace versions
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          cargo metadata --no-deps --format-version 1 > /tmp/metadata.json
+          for pkg in crabc crabc-libc crabc-ldso; do
+            got=$(jq -r --arg p "$pkg" '.packages[] | select(.name == $p) | .version' /tmp/metadata.json)
+            if [ "$got" != "$version" ]; then
+              echo "::error::$pkg is version $got but tag $GITHUB_REF_NAME expects $version"
+              exit 1
+            fi
+          done
+          echo "Publishing version $version"
+
+      - name: Authenticate with crates.io
+        id: auth
+        uses: rust-lang/crates-io-auth-action@v1
+
+      - name: Publish crabc-libc
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
+        run: RUSTFLAGS='-C panic=abort' cargo publish -p crabc-libc --registry crates-io
+
+      - name: Publish crabc-ldso
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
+        run: RUSTFLAGS='-C panic=abort' cargo publish -p crabc-ldso --registry crates-io
+
+      - name: Publish crabc
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
+        run: cargo publish -p crabc --registry crates-io
+
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1 || \
+            gh release create "$GITHUB_REF_NAME" --generate-notes --verify-tag
