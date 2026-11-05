@@ -152,9 +152,10 @@ MUSL_LIBC=/path/to/musl-1.2.6/lib/libc.so scripts/parity-check.sh symbols
 - Use musl 1.2.6. An older system musl reports false differences (for example
   `strptime` `%F`/`%z` and the default `getmntent` fields).
 - `KNOWN_DIFFS` records the deliberate `strptime` `%s`/`%z` extensions and the
-  math functions still backed by `libm` (1-2 ULP or exception-flag
-  differences). Porting the remaining `libm::` calls from musl removes the
-  math entries.
+  exact `x^1`/`x^-1` identities in `pow`/`powf` (they avoid musl's spurious
+  INEXACT/UNDERFLOW flags). All other math functions are ported from musl in
+  `math_exp.rs`, `math_erf.rs`, `math_lgamma.rs`, `math_tgamma.rs`, and
+  `math_bessel.rs`.
 - `symbols` compares exported dynamic symbol sets; only `_init`, `_fini`,
   `_dl_debug_addr`, and `_dl_debug_state` are absent from `libc.so` as linker
   internals.

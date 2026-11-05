@@ -87,8 +87,8 @@ MUSL_LIBC=/path/to/musl-1.2.6/lib/libc.so ./scripts/parity-check.sh symbols
 `all` covers the `functional`, `regression` and `math` suites (retrying
 timing-sensitive tests and skipping the known 64-bit long-double ABI cases);
 `symbols` compares exported dynamic symbols. Remaining documented differences
-are the newer `strptime` conversions and math functions still implemented via
-the `libm` crate; both are recorded in `KNOWN_DIFFS` in the script.
+are the newer `strptime` conversions and the exact `x^1`/`x^-1` identities in
+`pow`/`powf`; they are recorded in `KNOWN_DIFFS` in the script.
 
 ## Install
 

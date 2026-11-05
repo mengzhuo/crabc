@@ -29,6 +29,15 @@ if [ "$(id -u)" -eq 0 ]; then
     SKIP_TESTS="$SKIP_TESTS regression/pthread_atfork-errno-clobber"
 fi
 
+# ipc_shm compares time(0) with the kernel's shm timestamps and can lose a
+# second around a clock boundary. Retry it before recording a failure.
+FLAKY_TESTS="${FLAKY_TESTS:-functional/ipc_shm}"
+
+is_flaky() {
+    case " $FLAKY_TESTS " in *" $1 "*) return 0 ;; esac
+    return 1
+}
+
 mkdir -p "$FAKE_LIBS" "$BUILD_DIR" "$REPORT_DIR"
 
 
@@ -208,29 +217,39 @@ for dir in $DIRS; do
         fi
 
         ERRFILE="$DIR_BUILD/${base}.err"
-        RUN_RC=0
-        (cd "$LIBC_TEST_DIR" && timeout 30 env LD_LIBRARY_PATH="$FAKE_LIBS" \
-            "$COMMON_BUILD/runtest.exe" -w '' "$EXE" 2>"$ERRFILE") || RUN_RC=$?
+        ATTEMPTS=0
+        while :; do
+            ATTEMPTS=$((ATTEMPTS + 1))
+            RUN_RC=0
+            (cd "$LIBC_TEST_DIR" && timeout 30 env LD_LIBRARY_PATH="$FAKE_LIBS" \
+                "$COMMON_BUILD/runtest.exe" -w '' "$EXE" 2>"$ERRFILE") || RUN_RC=$?
 
-        if [ $RUN_RC -eq 124 ]; then
-            echo "TIMEOUT $dir/$base" >> "$RAW_REPORT"
-            TIMEOUT=$((TIMEOUT + 1))
-        elif [ $RUN_RC -eq 0 ]; then
-            # Check if error file contains actual errors (not just ldso debug output)
-            ACTUAL_ERRORS=$(grep -v "^ldso:\|^JUMP " "$ERRFILE" 2>/dev/null | grep -v "^$")
-            if [ -z "$ACTUAL_ERRORS" ]; then
+            ACTUAL_ERRORS=""
+            if [ $RUN_RC -eq 0 ]; then
+                # Check if error file contains actual errors (not just ldso debug output)
+                ACTUAL_ERRORS=$(grep -v "^ldso:\|^JUMP " "$ERRFILE" 2>/dev/null | grep -v "^$")
+            fi
+
+            if [ $RUN_RC -eq 0 ] && [ -z "$ACTUAL_ERRORS" ]; then
                 echo "PASS $dir/$base" >> "$RAW_REPORT"
                 PASS=$((PASS + 1))
+                break
+            fi
+
+            if [ $ATTEMPTS -lt 3 ] && is_flaky "$dir/$base"; then
+                continue
+            fi
+
+            if [ $RUN_RC -eq 124 ]; then
+                echo "TIMEOUT $dir/$base" >> "$RAW_REPORT"
+                TIMEOUT=$((TIMEOUT + 1))
             else
                 echo "FAIL $dir/$base" >> "$RAW_REPORT"
                 head -5 "$ERRFILE" >> "$RAW_REPORT" 2>/dev/null || true
                 FAIL=$((FAIL + 1))
             fi
-        else
-            echo "FAIL $dir/$base" >> "$RAW_REPORT"
-            head -5 "$ERRFILE" >> "$RAW_REPORT" 2>/dev/null || true
-            FAIL=$((FAIL + 1))
-        fi
+            break
+        done
     done
 done
 

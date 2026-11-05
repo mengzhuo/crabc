@@ -48,11 +48,10 @@ SKIP_TESTS="${PARITY_SKIP:-functional/strtold regression/fpclassify-invalid-ld80
 # musl 1.2.6 leaves the tm fields of %s unspecified and requires four
 # digits for %z. This is a deliberate superset, not a regression.
 #
-# The math entries are functions still backed by the libm crate. Their
-# results differ from musl's algorithms by 1-2 ULP (within libc-test's
-# tolerance), or in powf's case musl itself fails the test. Porting the
-# remaining libm calls from musl removes these entries.
-KNOWN_DIFFS="${PARITY_KNOWN:-functional/strptime math/erfc math/exp2 math/lgamma math/lgamma_r math/pow math/powf math/sinh math/tgamma math/y0}"
+# pow/powf keep exact identities for x^1 and x^-1, so they return x without
+# musl's spurious INEXACT/UNDERFLOW flags (musl itself fails the powf RU
+# case). All other math functions are ported from musl.
+KNOWN_DIFFS="${PARITY_KNOWN:-functional/strptime math/pow math/powf}"
 
 if [ "$SUBSET" = "all" ]; then
     DIRS="functional regression math"
