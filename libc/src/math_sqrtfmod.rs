@@ -47,6 +47,25 @@ fn mul64(a: u64, b: u64) -> u64 {
 // sqrt
 // ============================================================
 
+#[cfg(target_arch = "x86_64")]
+#[no_mangle]
+pub extern "C" fn sqrt(x: f64) -> f64 {
+    // Hardware sqrt respects the current rounding mode and raises the same
+    // INVALID flag as musl's x86_64 sqrt.s, but avoids the generic software
+    // algorithm (which is ~5x slower here).
+    let y: f64;
+    unsafe {
+        core::arch::asm!(
+            "sqrtsd {y}, {x}",
+            y = out(xmm_reg) y,
+            x = in(xmm_reg) x,
+            options(nomem, nostack)
+        );
+    }
+    y
+}
+
+#[cfg(not(target_arch = "x86_64"))]
 #[no_mangle]
 pub extern "C" fn sqrt(x: f64) -> f64 {
     let ix = asuint64(x);
