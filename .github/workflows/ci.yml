@@ -23,8 +23,10 @@ jobs:
             os: ubuntu-24.04-arm
           # Native riscv64 hardware from the RISE RISC-V Runners service.
           # Requires the RISE GitHub App: https://github.com/apps/rise-risc-v-runners
-          - arch: riscv64
-            os: ubuntu-24.04-riscv
+          # Disabled for now: the runner does not come up. Re-enable together
+          # with the riscv64-only steps below.
+          # - arch: riscv64
+          #   os: ubuntu-24.04-riscv
     runs-on: ${{ matrix.os }}
     # RISC-V hardware is scarce and slower; keep it non-blocking and capped.
     continue-on-error: ${{ matrix.arch == 'riscv64' }}
