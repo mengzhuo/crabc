@@ -28,12 +28,12 @@ unsafe fn extract_words(hi: *mut u32, lo: *mut u32, d: f64) {
 }
 
 #[inline]
-unsafe fn get_high_word(d: f64) -> u32 {
+fn get_high_word(d: f64) -> u32 {
     (asuint64(d) >> 32) as u32
 }
 
 #[inline]
-unsafe fn get_low_word(d: f64) -> u32 {
+fn get_low_word(d: f64) -> u32 {
     asuint64(d) as u32
 }
 

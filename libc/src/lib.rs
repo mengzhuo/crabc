@@ -22,6 +22,10 @@ include!("math_bitmanip.rs");
 include!("math_sqrtfmod.rs");
 include!("math_trig.rs");
 include!("math_exp.rs");
+include!("math_erf.rs");
+include!("math_lgamma.rs");
+include!("math_tgamma.rs");
+include!("math_bessel.rs");
 include!("math_log.rs");
 include!("math_pow.rs");
 include!("math_hypot.rs");
@@ -15468,21 +15472,7 @@ pub unsafe extern "C" fn remquo(x: f64, y: f64, quo: *mut i32) -> f64 {
 
 #[no_mangle]
 pub unsafe extern "C" fn exp2(x: f64) -> f64 {
-    if x.is_nan() { return f64::NAN; }
-    if x == f64::INFINITY { return f64::INFINITY; }
-    if x == f64::NEG_INFINITY { return 0.0; }
-    let r = libm::exp2(x);
-    if r.is_infinite() && x.is_finite() {
-        feraiseexcept(FE_OVERFLOW | FE_INEXACT);
-    } else if r == 0.0 && x < -1074.0 {
-        feraiseexcept(FE_UNDERFLOW | FE_INEXACT);
-    } else if r != 0.0 && x != libm::trunc(x) {
-        let bits = r.to_bits();
-        if (bits & 0x7ff0000000000000) == 0 {
-            feraiseexcept(FE_UNDERFLOW | FE_INEXACT);
-        }
-    }
-    r
+    exp2_impl(x)
 }
 
 #[no_mangle]
@@ -15560,45 +15550,22 @@ pub unsafe extern "C" fn cbrt(x: f64) -> f64 {
 
 #[no_mangle]
 pub unsafe extern "C" fn erf(x: f64) -> f64 {
-    libm::erf(x)
+    erf_impl(x)
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn erfc(x: f64) -> f64 {
-    libm::erfc(x)
+    erfc_impl(x)
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn lgamma(x: f64) -> f64 {
-    if x.is_nan() {
-        crate::signgam = 1;
-        return x;
-    }
-    if x == 0.0 {
-        crate::signgam = if x.is_sign_negative() { -1 } else { 1 };
-        feraiseexcept(FE_DIVBYZERO);
-        return f64::INFINITY;
-    }
-    let (r, sign) = libm::lgamma_r(x);
-    crate::signgam = sign;
-    r
+    lgamma_impl(x)
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn tgamma(x: f64) -> f64 {
-    if x.is_nan() { return x; }
-    if x == 0.0 {
-        feraiseexcept(FE_DIVBYZERO);
-        return if x.is_sign_negative() { f64::NEG_INFINITY } else { f64::INFINITY };
-    }
-    if x.is_infinite() {
-        return if x.is_sign_negative() { __math_invalid(x) } else { f64::INFINITY };
-    }
-    if x < 0.0 && x == libm::floor(x) {
-        feraiseexcept(FE_INVALID);
-        return f64::NAN;
-    }
-    libm::tgamma(x)
+    tgamma_impl(x)
 }
 
 #[no_mangle]
@@ -19240,7 +19207,7 @@ pub unsafe extern "C" fn __signbitl(x: f64) -> i32 {
 
 #[no_mangle]
 pub unsafe extern "C" fn j0(x: f64) -> f64 {
-    libm::j0(x)
+    j0_impl(x)
 }
 
 #[no_mangle]
@@ -19270,10 +19237,7 @@ pub unsafe extern "C" fn jnf(n: i32, x: f32) -> f32 {
 
 #[no_mangle]
 pub unsafe extern "C" fn y0(x: f64) -> f64 {
-    if x.is_nan() { return x; }
-    if x < 0.0 { return __math_invalid(x); }
-    if x == 0.0 { feraiseexcept(FE_DIVBYZERO); return f64::NEG_INFINITY; }
-    libm::y0(x)
+    y0_impl(x)
 }
 
 #[no_mangle]
@@ -20750,18 +20714,7 @@ pub unsafe extern "C" fn islessf(x: f32, y: f32) -> i32 {
 
 #[no_mangle]
 pub unsafe extern "C" fn lgamma_r(x: f64, signgamp: *mut i32) -> f64 {
-    if x.is_nan() {
-        if !signgamp.is_null() { *signgamp = 1; }
-        return x;
-    }
-    if x == 0.0 {
-        if !signgamp.is_null() { *signgamp = if x.is_sign_negative() { -1 } else { 1 }; }
-        feraiseexcept(FE_DIVBYZERO);
-        return f64::INFINITY;
-    }
-    let (r, sign) = libm::lgamma_r(x);
-    if !signgamp.is_null() { *signgamp = sign; }
-    r
+    lgamma_r_impl(x, signgamp)
 }
 
 #[no_mangle]

@@ -1,4 +1,4 @@
-// Translated from musl: exp.c, expf.c, exp_data.c, exp2f_data.c
+// Translated from musl: exp.c, exp2.c, expf.c, exp_data.c, exp2f_data.c
 
 // ============================================================
 // Data tables and constants for exp (double precision)
@@ -266,6 +266,95 @@ pub extern "C" fn exp(x: f64) -> f64 {
 
     if predict_false(abstop == 0) {
         return exp_specialcase(tmp, sbits, ki);
+    }
+    let scale = asdouble(sbits);
+    eval_as_double(scale + scale * tmp)
+}
+
+// ============================================================
+// exp2 (double precision)
+// ============================================================
+
+const EXP2_SHIFT: f64 = asdouble(0x42C8000000000000);
+const EXP2_1P_NEG54: f64 = asdouble(0x3C90000000000000);
+const EXP2_C1: f64 = asdouble(0x3FE62E42FEFA39EF);
+const EXP2_C2: f64 = asdouble(0x3FCEBFBDFF82C424);
+const EXP2_C3: f64 = asdouble(0x3FAC6B08D70CF4B5);
+const EXP2_C4: f64 = asdouble(0x3F83B2ABD24650CC);
+const EXP2_C5: f64 = asdouble(0x3F55D7E09B4E3A84);
+
+#[inline]
+fn exp2_specialcase(tmp: f64, sbits: u64, ki: u64) -> f64 {
+    if (ki & 0x80000000) == 0 {
+        // k > 0, the exponent of scale might have overflowed by 1.
+        let sbits = sbits.wrapping_sub(1u64 << 52);
+        let scale = asdouble(sbits);
+        let y = 2.0 * (scale + scale * tmp);
+        return eval_as_double(y);
+    }
+    // k < 0, need special care in the subnormal range.
+    let sbits = sbits.wrapping_add(1022u64 << 52);
+    let scale = asdouble(sbits);
+    let mut y = scale + scale * tmp;
+    if y < 1.0 {
+        let lo = scale - y + scale * tmp;
+        let hi = 1.0 + y;
+        let lo = 1.0 - hi + y + lo;
+        y = eval_as_double(hi + lo) - 1.0;
+        // Avoid -0.0 with downward rounding.
+        if y == 0.0 {
+            y = 0.0;
+        }
+        // The underflow exception needs to be signaled explicitly.
+        fp_force_eval(fp_barrier(EXP_1P_NEG1022) * EXP_1P_NEG1022);
+    }
+    y = EXP_1P_NEG1022 * y;
+    eval_as_double(y)
+}
+
+pub(crate) fn exp2_impl(x: f64) -> f64 {
+    let top12 = |v: f64| (asuint64(v) >> 52) as u32;
+    let mut abstop = top12(x) & 0x7ff;
+    if predict_false(abstop.wrapping_sub(top12(EXP2_1P_NEG54)) >= top12(512.0) - top12(EXP2_1P_NEG54)) {
+        if abstop.wrapping_sub(top12(EXP2_1P_NEG54)) >= 0x80000000 {
+            // Avoid spurious underflow for tiny x. Note: 0 is common input.
+            return 1.0 + x;
+        }
+        if abstop >= top12(1024.0) {
+            if asuint64(x) == asuint64(f64::NEG_INFINITY) {
+                return 0.0;
+            }
+            if abstop >= top12(f64::INFINITY) {
+                return 1.0 + x;
+            }
+            if asuint64(x) >> 63 == 0 {
+                return __math_oflow(0);
+            } else if asuint64(x) >= asuint64(-1075.0) {
+                return __math_uflow(0);
+            }
+        }
+        if 2u64.wrapping_mul(asuint64(x)) > 2u64.wrapping_mul(asuint64(928.0)) {
+            // Large x is special cased below.
+            abstop = 0;
+        }
+    }
+
+    // exp2(x) = 2^(k/N) * 2^r, with 2^r in [2^(-1/2N),2^(1/2N)].
+    let kd = eval_as_double(x + EXP2_SHIFT);
+    let ki = asuint64(kd);
+    let kd = kd - EXP2_SHIFT;
+    let r = x - kd;
+    let idx = (2 * (ki % EXP_N)) as usize;
+    let top = ki << (52 - EXP_TABLE_BITS);
+    let tail = asdouble(EXP_TAB[idx]);
+    let sbits = EXP_TAB[idx + 1].wrapping_add(top);
+    let r2 = r * r;
+    let tmp = tail
+        + r * EXP2_C1
+        + r2 * (EXP2_C2 + r * EXP2_C3)
+        + r2 * r2 * (EXP2_C4 + r * EXP2_C5);
+    if predict_false(abstop == 0) {
+        return exp2_specialcase(tmp, sbits, ki);
     }
     let scale = asdouble(sbits);
     eval_as_double(scale + scale * tmp)
