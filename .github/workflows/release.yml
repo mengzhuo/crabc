@@ -64,6 +64,23 @@ jobs:
 
       - name: Build Alpine packages
         run: ./scripts/package-apk.sh
+      - name: Smoke-test the packaged libc
+        env:
+          VERSION: ${{ github.ref_name }}
+        run: |
+          set -eux
+          version="${VERSION#v}"
+          musl-gcc -fPIE -pie -D_GNU_SOURCE -I include \
+            -Wl,--dynamic-linker=/usr/lib/crabc/libldso.so \
+            -L target/x86_64-unknown-linux-gnu/release \
+            tests/fixtures/compat_test.c -Wl,--allow-shlib-undefined -lpthread -lc \
+            -o /tmp/compat_apk
+          docker run --rm --network=none \
+            -v "$PWD/dist:/dist:ro" -v "/tmp:/work:ro" alpine:3.23 sh -c "
+              apk --no-network add --allow-untrusted /dist/crabc-${version}-r0.x86_64.apk
+              mkdir -p /tmp/crabtest && touch /tmp/crabtest/seed
+              LD_LIBRARY_PATH=/usr/lib/crabc /work/compat_apk
+            "
 
       - name: Authenticate with crates.io
         id: auth
