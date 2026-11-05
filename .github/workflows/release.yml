@@ -86,20 +86,52 @@ jobs:
         id: auth
         uses: rust-lang/crates-io-auth-action@v1
 
+      # Publishing is idempotent: re-running the workflow for a tag whose
+      # crates are already on crates.io skips them instead of failing.
       - name: Publish crabc-libc
         env:
           CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
-        run: RUSTFLAGS='-C panic=abort' cargo publish -p crabc-libc --registry crates-io
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          code=$(curl -s -o /dev/null -w '%{http_code}' \
+            -A 'crabc-release (+https://github.com/mengzhuo/crabc)' \
+            "https://crates.io/api/v1/crates/crabc-libc/$version")
+          case "$code" in
+            200) echo "crabc-libc $version is already published; skipping" ;;
+            404) RUSTFLAGS='-C panic=abort' cargo publish -p crabc-libc --registry crates-io ;;
+            *) echo "::error::unexpected crates.io status $code"; exit 1 ;;
+          esac
 
       - name: Publish crabc-ldso
         env:
           CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
-        run: RUSTFLAGS='-C panic=abort' cargo publish -p crabc-ldso --registry crates-io
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          code=$(curl -s -o /dev/null -w '%{http_code}' \
+            -A 'crabc-release (+https://github.com/mengzhuo/crabc)' \
+            "https://crates.io/api/v1/crates/crabc-ldso/$version")
+          case "$code" in
+            200) echo "crabc-ldso $version is already published; skipping" ;;
+            404) RUSTFLAGS='-C panic=abort' cargo publish -p crabc-ldso --registry crates-io ;;
+            *) echo "::error::unexpected crates.io status $code"; exit 1 ;;
+          esac
 
       - name: Publish crabc
         env:
           CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
-        run: cargo publish -p crabc --registry crates-io
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          code=$(curl -s -o /dev/null -w '%{http_code}' \
+            -A 'crabc-release (+https://github.com/mengzhuo/crabc)' \
+            "https://crates.io/api/v1/crates/crabc/$version")
+          case "$code" in
+            200) echo "crabc $version is already published; skipping" ;;
+            404) cargo publish -p crabc --registry crates-io ;;
+            *) echo "::error::unexpected crates.io status $code"; exit 1 ;;
+          esac
 
       - name: Create GitHub release
         env:
