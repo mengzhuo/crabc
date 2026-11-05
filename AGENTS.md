@@ -16,6 +16,7 @@
 | `libc-test-harness/` | Shell runner for upstream `libc-test`; reports in `libc-test-harness/reports/`. |
 | `scripts/local-ci.sh` | Reproduces CI build/test in podman/docker (it does not run the harness). |
 | `scripts/riscv-smoke.sh` | Cross-builds and runs riscv64 fixtures under `qemu-riscv64`. |
+| `scripts/bench.sh` | Compares crabc with musl on microbenchmarks and startup. |
 
 ## Build And Test
 
@@ -57,6 +58,7 @@ Math fixtures add `-frounding-math`; on x86_64 also `-mlong-double-64`. `tests/c
 ## Implementation Notes
 
 - `libc/src/lib.rs` is a single large `no_std` file. Subsystems are `include!`-ed, not `mod`-declared. The compatibility surface is split across area files: `netdb_extra.rs`, `compat_extra.rs`, `stdio_extra.rs`, `ns_parse.rs`, `fts.rs`, `ifaddrs.rs`, `dl_extra.rs`, `path_extra.rs`, `wordexp.rs`, `des.rs`, and `getopt_impl.rs`.
+- `libc/src/alloc.rs` implements `malloc`/`free`/`calloc`/`realloc` with 16-byte size classes from 32 to 32768 bytes, mmap-backed chunks, direct mmap for large blocks, and a global spin lock. `fork()` resets the lock in the child. Joinable thread slots are reused; the thread table is still capped at 64 concurrent threads.
 - `libc` and `ldso` are `no_std`; only the `src/` loader uses `std`.
 - C ABI exports need `#[no_mangle] pub unsafe extern "C" fn ...`. A plain Rust function will not appear in `libc.so`/`libc.a`.
 - `libm = "0.2"` is only a stopgap for functions not yet ported. When porting one, remove its `libm::` call.
@@ -159,6 +161,14 @@ MUSL_LIBC=/path/to/musl-1.2.6/lib/libc.so scripts/parity-check.sh symbols
 - `symbols` compares exported dynamic symbol sets; only `_init`, `_fini`,
   `_dl_debug_addr`, and `_dl_debug_state` are absent from `libc.so` as linker
   internals.
+
+## Performance
+
+`scripts/bench.sh` compares crabc against a musl 1.2.6 baseline using the same
+binary-swap method as the parity check, plus a fork/exec startup benchmark.
+Results and methodology are in `docs/performance.md`. Use `BENCH_CPU=0` to pin
+the measurement and `ROUNDS=5` (the default) for a median of interleaved
+rounds.
 
 ## Current Baseline
 

@@ -227,6 +227,31 @@ MUSL_LIBC=/path/to/musl-1.2.6/lib/libc.so ./scripts/parity-check.sh symbols
   non-blocking cross job builds riscv64 and runs the fixtures under
   `qemu-riscv64`.
 
+## Performance
+
+A snapshot against musl 1.2.6 on an AMD EPYC 7532 (release build, pinned CPU,
+median of five interleaved rounds):
+
+| Workload | crabc / musl |
+|---|---:|
+| `malloc`/`free` 16B | **0.12x** |
+| `calloc` 1KB | **0.17x** |
+| `snprintf` | **0.76x** |
+| `sin` / `exp` / `sqrt` | 0.99–1.03x |
+| `memcpy` / `memset` 4KB | 1.26–1.43x |
+| `strlen` 4KB | 4.00x |
+| `clock_gettime` | 9.74x |
+| process startup | 2.81x |
+
+Small allocations, stdio formatting, and several string paths are faster than
+musl. The remaining gaps are SIMD string routines, vDSO `clock_gettime`, and
+dynamic-linker startup. See [`docs/performance.md`](docs/performance.md) for
+the full table and methodology; reproduce with:
+
+```bash
+MUSL_LIBC=/path/to/musl-1.2.6/lib/libc.so BENCH_CPU=0 scripts/bench.sh
+```
+
 ## How it works
 
 ```text
@@ -258,6 +283,8 @@ musl-linked program
 | `scripts/parity-check.sh` | Differential behaviour check against real musl |
 | `scripts/package-apk.sh` | Alpine `.apk` packaging |
 | `scripts/riscv-smoke.sh` | riscv64 cross-build and qemu smoke tests |
+| `scripts/bench.sh` | musl comparison benchmarks |
+| `docs/performance.md` | Benchmark methodology and results |
 
 ## Development
 
