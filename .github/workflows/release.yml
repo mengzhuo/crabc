@@ -39,6 +39,32 @@ jobs:
           done
           echo "Publishing version $version"
 
+      - name: Install musl, cross toolchains and targets
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y musl-tools gcc-aarch64-linux-gnu gcc-riscv64-linux-gnu
+          rustup target add \
+            x86_64-unknown-linux-musl \
+            aarch64-unknown-linux-musl \
+            aarch64-unknown-linux-gnu \
+            riscv64gc-unknown-linux-musl
+
+      - name: Build release artifacts
+        run: |
+          set -eux
+          cargo build --release -p crabc-libc -p crabc-ldso --target x86_64-unknown-linux-gnu
+          CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER=musl-gcc \
+            cargo build --release -p crabc --target x86_64-unknown-linux-musl
+          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc \
+            cargo build --release -p crabc-libc -p crabc-ldso --target aarch64-unknown-linux-gnu
+          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER=aarch64-linux-gnu-gcc \
+            cargo build --release -p crabc --target aarch64-unknown-linux-musl
+          CARGO_TARGET_RISCV64GC_UNKNOWN_LINUX_MUSL_LINKER=riscv64-linux-gnu-gcc \
+            cargo build --release --workspace --target riscv64gc-unknown-linux-musl
+
+      - name: Build Alpine packages
+        run: ./scripts/package-apk.sh
+
       - name: Authenticate with crates.io
         id: auth
         uses: rust-lang/crates-io-auth-action@v1
@@ -64,3 +90,4 @@ jobs:
         run: |
           gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1 || \
             gh release create "$GITHUB_REF_NAME" --generate-notes --verify-tag
+          gh release upload "$GITHUB_REF_NAME" dist/*.apk dist/SHA256SUMS --clobber

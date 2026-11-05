@@ -88,6 +88,10 @@ git push origin main vX.Y.Z
 
 The workflow verifies that all three manifest versions equal the tag before publishing. It publishes `crabc-libc`, `crabc-ldso`, then `crabc`, and creates a GitHub release.
 
+The same workflow builds release artifacts for x86_64, aarch64, and riscv64 and packages them with `scripts/package-apk.sh`. The script runs `apk mkpkg` inside an Alpine 3.23 container (Docker or podman), producing v3/ADB packages, then writes `dist/SHA256SUMS`. The `.apk` files and checksums are uploaded to the GitHub release; they install with `apk add --allow-untrusted`.
+
+x86_64 and aarch64 musl targets force `crt-static` and cannot produce a cdylib with the current toolchain, so their no_std libraries are built for the gnu target (they do not depend on the C library) while the loader is built for musl. riscv64 builds the whole workspace for the musl target.
+
 If publishing manually, crates.io verifies each package standalone, where the workspace `panic = "abort"` is absent. Use an explicit abort strategy for the no_std crates:
 
 ```bash

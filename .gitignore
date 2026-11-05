@@ -50,3 +50,6 @@ Cargo.lock
 /libc-test-harness/reports/
 /libc-test-harness/cc-wrapper.sh
 /libc-test-harness/initial-report.txt
+
+# release package staging
+/dist/
