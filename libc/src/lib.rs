@@ -2705,28 +2705,21 @@ unsafe fn sys_getegid() -> i64 {
 #[no_mangle]
 pub unsafe extern "C" fn fork() -> c_int {
     __fork_handler(-1);
-    // Honor RLIMIT_NPROC even when running as root, where the kernel
-    // would otherwise bypass the limit. This matches the libc-test
-    // expectation that fork fails with EAGAIN when the limit is zero.
-    let mut rlim: Rlimit = core::mem::zeroed();
-    let nproc_limit = sys_getrlimit(RLIMIT_NPROC, &mut rlim as *mut _ as *mut u8);
-    let nproc_limited = nproc_limit == 0
-        && rlim.rlim_cur != RLIM_INFINITY
-        && rlim.rlim_cur == 0;
-    let ret = if nproc_limited {
-        -EAGAIN as i64
-    } else {
-        sys_fork()
-    };
-    let errno_save = if ret < 0 { EAGAIN } else { ERRNO };
+    let ret = sys_fork();
+    // Run the atfork handlers before publishing errno, exactly like musl's
+    // __syscall_ret: a failing fork must report the kernel's errno even if a
+    // handler changes errno. RLIMIT_NPROC is enforced by the kernel and does
+    // not apply to root, so do not second-guess it here.
+    if ret < 0 {
+        let err = (-ret) as c_int;
+        __fork_handler(0);
+        ERRNO = err;
+        return -1;
+    }
     if ret == 0 {
         __fork_handler(1);
     } else {
         __fork_handler(0);
-    }
-    if ret < 0 {
-        ERRNO = errno_save;
-        return -1;
     }
     ret as c_int
 }
@@ -7820,52 +7813,75 @@ unsafe fn fmt_hex_float(dst: *mut u8, val: f64, precision: i32, _flags: u8, uppe
     let bits = val.to_bits();
     let exp_bits = ((bits >> 52) & 0x7FF) as i32;
     let mant_bits = bits & 0x000FFFFFFFFFFFFF;
-    let (e, m) = if exp_bits == 0 { (1 - 1023, mant_bits) } else { (exp_bits - 1023, mant_bits | (1u64 << 52)) };
-    let p = if precision < 0 { 13usize } else { precision as usize };
+    let (mut e, mut m) = if exp_bits == 0 { (1 - 1023, mant_bits) } else { (exp_bits - 1023, mant_bits | (1u64 << 52)) };
+    // musl normalizes subnormals so the leading digit is always 1, which
+    // lets the exponent go below -1022 (e.g. 0x1p-1074 for the smallest).
+    if exp_bits == 0 && m != 0 {
+        let shift = m.leading_zeros() as i32 - 11;
+        m <<= shift;
+        e -= shift;
+    }
+    let explicit = precision >= 0;
+    let p = if explicit { precision as usize } else { 13usize };
     let mut pos = 0usize;
     let lc = !uppercase;
     let pfx: &[u8] = if lc { b"0x" } else { b"0X" };
     core::ptr::copy_nonoverlapping(pfx.as_ptr(), dst.add(pos), 2); pos += 2;
 
-    // Leading digit from bit 52
-    let lead = ((m >> 52) & 0xF) as u8;
+    // Leading digit from bit 52 (1 for every normalized value).
+    let lead_pos = pos;
+    let mut lead = ((m >> 52) & 0xF) as u8;
     *dst.add(pos) = hex_digit_char(lead, lc); pos += 1;
+    let mut frac_start = pos;
     if p > 0 {
         *dst.add(pos) = b'.'; pos += 1;
+        frac_start = pos;
     }
 
-    // Extract p hex digits from mantissa bits
-    let frac_start = pos;
-    let mut rm = m << 4; // next nibble starts at bit 48
+    // Extract p hex digits from the fraction, most significant nibble first.
+    let mut rm = m;
     for _ in 0..p {
         let nib = ((rm >> 48) & 0xF) as u8;
         *dst.add(pos) = hex_digit_char(nib, lc); pos += 1;
         rm <<= 4;
     }
 
-    // Rounding based on next nibble
-    if p > 0 {
-        let round_nib = ((rm >> 48) & 0xF) as u8;
-        let rest = rm & 0x0000FFFFFFFFFFFF;
-        let last_nib = if p > 0 {
-            let c = *dst.add(pos - 1);
-            hex_char_val(c)
-        } else { lead };
-        let should_round = round_nib > 8 || (round_nib == 8 && (rest != 0 || (last_nib & 1) != 0));
-        if should_round {
-            let mut j = pos - 1;
-            loop {
-                if j < frac_start { break; }
-                let v = hex_char_val(*dst.add(j));
-                if v < 15 {
-                    *dst.add(j) = hex_digit_char(v + 1, lc);
-                    break;
-                } else {
-                    *dst.add(j) = b'0';
-                    if j == frac_start { break; }
-                    j -= 1;
-                }
+    // Round to nearest, ties to even, based on the next nibble.
+    let round_nib = ((rm >> 48) & 0xF) as u8;
+    let rest = rm & 0x0000FFFFFFFFFFFF;
+    let last_nib = if p > 0 {
+        hex_char_val(*dst.add(pos - 1))
+    } else {
+        lead
+    };
+    let should_round = round_nib > 8 || (round_nib == 8 && (rest != 0 || (last_nib & 1) != 0));
+    if should_round {
+        let mut j = pos;
+        loop {
+            if j == frac_start {
+                // Carry out of the fraction into the leading digit.
+                lead += 1;
+                *dst.add(lead_pos) = hex_digit_char(lead, lc);
+                break;
             }
+            j -= 1;
+            let v = hex_char_val(*dst.add(j));
+            if v < 15 {
+                *dst.add(j) = hex_digit_char(v + 1, lc);
+                break;
+            }
+            *dst.add(j) = b'0';
+        }
+    }
+
+    // With no explicit precision, print the shortest exact representation:
+    // trim trailing fractional zeros and drop the radix point if empty.
+    if !explicit {
+        while pos > frac_start && *dst.add(pos - 1) == b'0' {
+            pos -= 1;
+        }
+        if pos == frac_start {
+            pos = frac_start - 1;
         }
     }
 

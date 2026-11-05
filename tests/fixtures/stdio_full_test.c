@@ -112,6 +112,16 @@ static int test_sprintf_snprintf(void) {
     n = snprintf(buf, 4, "%s", "hello");
     if (n != 5) return 2;
     if (strcmp(buf, "hel") != 0) return 3;
+    n = snprintf(buf, sizeof buf, "%a", 0x1.092b2a541a68ep-19);
+    if (n < 0 || strcmp(buf, "0x1.092b2a541a68ep-19") != 0) return 4;
+    n = snprintf(buf, sizeof buf, "%.3a", 0x1.f8d125ff71ccp-6);
+    if (n < 0 || strcmp(buf, "0x1.f8dp-6") != 0) return 5;
+    n = snprintf(buf, sizeof buf, "%.0a", 1.5);
+    if (n < 0 || strcmp(buf, "0x2p+0") != 0) return 6;
+    n = snprintf(buf, sizeof buf, "%A", 0x1.001f1c62cf304p+0);
+    if (n < 0 || strcmp(buf, "0X1.001F1C62CF304P+0") != 0) return 7;
+    n = snprintf(buf, sizeof buf, "%a", 1.0);
+    if (n < 0 || strcmp(buf, "0x1p+0") != 0) return 8;
     return 0;
 }
 
