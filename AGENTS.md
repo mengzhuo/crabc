@@ -128,20 +128,53 @@ cd libc-test-harness
 - It creates symlinks in `$LIBC_TEST_DIR/src/<subset>/`, so it mutates the external libc-test checkout.
 - Run one subset at a time. All subsets share `build/`, `fake-libs/`, and `reports/`; concurrent runs race and corrupt counts.
 - `math` intentionally SKIPs `acoshl`, `asinhl`, `lgammal`, and `tgammal`: upstream uses 80-bit long-double vectors while crabc's x86_64 ABI is 64-bit. This is recorded in `SKIP_TESTS` in `run.sh`.
+- As root, `regression/pthread_atfork-errno-clobber` is also skipped: `RLIMIT_NPROC` is not enforced for root, so musl itself succeeds at `fork()` in that environment.
+
+## musl Parity Check
+
+`scripts/parity-check.sh` checks behaviour against real musl, not just against
+libc-test's assertions. It compiles each libc-test source twice against the
+same musl libc; the two binaries differ only in their ELF interpreter:
+
+- `musl` runs with `$MUSL_LIBC` (the real loader/libc);
+- `crabc` runs with `target/debug/libldso.so` and `LD_LIBRARY_PATH=target/debug`.
+
+It compares exit status, stdout and stderr, retries timing-sensitive tests,
+and skips the x86_64 long-double ABI tests.
+
+```bash
+# Build a matching baseline once. crabc ports musl 1.2.6 behaviour.
+(cd /path/to/musl-1.2.6 && ./configure && make -j)
+MUSL_LIBC=/path/to/musl-1.2.6/lib/libc.so scripts/parity-check.sh all
+MUSL_LIBC=/path/to/musl-1.2.6/lib/libc.so scripts/parity-check.sh symbols
+```
+
+- Use musl 1.2.6. An older system musl reports false differences (for example
+  `strptime` `%F`/`%z` and the default `getmntent` fields).
+- `KNOWN_DIFFS` records the deliberate `strptime` `%s`/`%z` extensions and the
+  math functions still backed by `libm` (1-2 ULP or exception-flag
+  differences). Porting the remaining `libm::` calls from musl removes the
+  math entries.
+- `symbols` compares exported dynamic symbol sets; only `_init`, `_fini`,
+  `_dl_debug_addr`, and `_dl_debug_state` are absent from `libc.so` as linker
+  internals.
 
 ## Current Baseline
 
-Verified on 2026-11-04:
+Verified on 2026-11-05:
 
 ```text
 cargo test --workspace          # green
-./run.sh all                    # 419 total: 415 PASS, 4 SKIP, 0 FAIL
+./run.sh all                    # 419 total: 414 PASS, 5 SKIP, 0 FAIL (as root)
 ./run.sh api                    # 79/79
 ./run.sh functional             # 73/73
-./run.sh regression             # 68/68
+./run.sh regression             # 67 PASS, 1 SKIP, 0 FAIL (as root)
 ./run.sh math                   # 195 PASS, 4 SKIP, 0 FAIL
+scripts/parity-check.sh all     # 0 unexpected diffs vs musl 1.2.6
 scripts/riscv-smoke.sh          # riscv64 cross-build + qemu fixtures, 0 failures
 ```
 
+- CI runs as an unprivileged user, so `pthread_atfork-errno-clobber` runs and
+  passes there: `415 PASS, 4 SKIP`.
 - If a run shows a different result, first re-run sequentially and compare against the previous report in `libc-test-harness/reports/`.
 - The four math SKIPs are the only known expected non-passes; do not "fix" them by weakening the implementation.

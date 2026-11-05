@@ -69,6 +69,27 @@ rustup target add riscv64gc-unknown-linux-musl
 ./scripts/riscv-smoke.sh
 ```
 
+### Compare behaviour with real musl
+
+`libc-test` asserts that individual functions work; the parity check goes
+further and compares crabc's observable behaviour with musl. The same test
+source is compiled twice against musl, and the two binaries differ only in
+their ELF interpreter — one runs on musl, one runs with crabc's
+`libldso.so`/`libc.so` at runtime. Exit status, stdout and stderr must match.
+
+```bash
+# crabc ports musl 1.2.6; use a 1.2.6 baseline to avoid version noise
+(cd /path/to/musl-1.2.6 && ./configure && make -j)
+MUSL_LIBC=/path/to/musl-1.2.6/lib/libc.so ./scripts/parity-check.sh all
+MUSL_LIBC=/path/to/musl-1.2.6/lib/libc.so ./scripts/parity-check.sh symbols
+```
+
+`all` covers the `functional`, `regression` and `math` suites (retrying
+timing-sensitive tests and skipping the known 64-bit long-double ABI cases);
+`symbols` compares exported dynamic symbols. Remaining documented differences
+are the newer `strptime` conversions and math functions still implemented via
+the `libm` crate; both are recorded in `KNOWN_DIFFS` in the script.
+
 ## Install
 
 ### Alpine Linux packages

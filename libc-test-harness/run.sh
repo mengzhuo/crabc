@@ -22,6 +22,13 @@ SUBSET="${1:-functional}"
 # vectors cannot be matched exactly; the double-precision variants still run.
 SKIP_TESTS="math/acoshl math/asinhl math/lgammal math/tgammal"
 
+# RLIMIT_NPROC is not enforced for root, so this regression test can only
+# pass as an unprivileged user. musl itself behaves the same way (fork
+# succeeds when root, despite RLIMIT_NPROC=0).
+if [ "$(id -u)" -eq 0 ]; then
+    SKIP_TESTS="$SKIP_TESTS regression/pthread_atfork-errno-clobber"
+fi
+
 mkdir -p "$FAKE_LIBS" "$BUILD_DIR" "$REPORT_DIR"
 
 
@@ -178,7 +185,14 @@ for dir in $DIRS; do
         EXE="$DIR_BUILD/${base}.exe"
         COMPANION_SO="$DIR_BUILD/${base}_dso.so"
         COMPANION_LD=""
-        [ -f "$COMPANION_SO" ] && COMPANION_LD="$COMPANION_SO"
+        # Only link the companion DSO when the upstream test declares it as a
+        # link dependency (e.g. tls_align). Tests such as dlopen and
+        # tls_align_dlopen only dlopen it at run time; linking it in would put
+        # its symbols in the global scope and change what the test observes.
+        if [ -f "$COMPANION_SO" ] && [ -f "$SRC_DIR/${base}.mk" ] && \
+           grep -q 'LDLIBS.*_dso\.so' "$SRC_DIR/${base}.mk"; then
+            COMPANION_LD="$COMPANION_SO"
+        fi
         LINK_RC=0
         musl-gcc -L"$FAKE_LIBS" -g -rdynamic -o "$EXE" \
             -Wl,--dynamic-linker="$LDSO_SO" -Wl,--allow-shlib-undefined -Wl,-rpath='$ORIGIN' \
