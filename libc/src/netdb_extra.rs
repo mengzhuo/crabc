@@ -257,7 +257,7 @@ unsafe fn serv_copy_out(se: *mut ServEnt, buf: *mut c_char, buflen: usize, res: 
 pub unsafe extern "C" fn getservbyname_r(
     name: *const c_char,
     proto: *const c_char,
-    se: *mut ServEnt,
+    _se: *mut ServEnt,
     buf: *mut c_char,
     buflen: usize,
     res: *mut *mut ServEnt,
@@ -274,7 +274,7 @@ pub unsafe extern "C" fn getservbyname_r(
 pub unsafe extern "C" fn getservbyport_r(
     port: c_int,
     proto: *const c_char,
-    se: *mut ServEnt,
+    _se: *mut ServEnt,
     buf: *mut c_char,
     buflen: usize,
     res: *mut *mut ServEnt,
@@ -764,7 +764,7 @@ pub unsafe extern "C" fn getnameinfo(
     let family = *(sa as *const u16) as c_int;
     let mut addr = [0u8; 16];
     let mut scope: u32 = 0;
-    let mut port: u16;
+    let port: u16;
     match family {
         AF_INET => {
             if salen < 16 { return EAI_FAMILY_V; }
@@ -1236,7 +1236,6 @@ unsafe fn host_copy_out(
     core::ptr::copy_nonoverlapping(src, p, alen);
     *addr_list = p;
     *addr_list.add(1) = core::ptr::null_mut();
-    p = p.add(alen);
 
     (*ret).h_aliases = aliases;
     (*ret).h_addrtype = (*h).h_addrtype;

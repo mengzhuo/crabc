@@ -25,7 +25,7 @@ pub unsafe extern "C" fn realpath(
     if flen >= PATH_MAX_V { ERRNO = 36; return core::ptr::null_mut(); }
 
     let mut out = [0u8; PATH_MAX_V + 1];
-    let mut olen = 0usize;
+    let mut olen;
     let mut pend = [0u8; 2 * PATH_MAX_V + 1];
     core::ptr::copy_nonoverlapping(filename as *const u8, pend.as_mut_ptr(), flen);
     pend[flen] = 0;
@@ -99,12 +99,8 @@ pub unsafe extern "C" fn realpath(
             if olen > 0 { olen -= 1; }
             let mut next = [0u8; 2 * PATH_MAX_V + 1];
             let link_abs = link[0] == b'/';
-            let mut nl = 0usize;
-            if !link_abs && olen > 0 {
-                // keep relative target relative to the current directory
-            }
+            let mut nl = n;
             core::ptr::copy_nonoverlapping(link.as_ptr(), next.as_mut_ptr(), n);
-            nl = n;
             let rest = &pend[pi..];
             let rest_len = crate::strlen(rest.as_ptr() as *const c_char);
             if rest_len > 0 {
@@ -654,7 +650,7 @@ unsafe fn nftw_do(
     fd_limit: c_int,
     flags: c_int,
     h: *mut History,
-    base: c_int,
+    _base: c_int,
     level: c_int,
 ) -> c_int {
     let path = buf as *const c_char;

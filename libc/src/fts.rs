@@ -244,7 +244,7 @@ unsafe fn fts_walk(fts: *mut Fts, ent: *mut FtsEnt) {
     let (names, count) = fts_collect_names((*ent).fts_path);
     if !names.is_null() {
         let ptrsz = core::mem::size_of::<*mut c_char>();
-        let mut kids = crate::malloc((count + 1) * ptrsz) as *mut *mut FtsEnt;
+        let kids = crate::malloc((count + 1) * ptrsz) as *mut *mut FtsEnt;
         if !kids.is_null() {
             let mut nkids = 0usize;
             for i in 0..count {
@@ -259,11 +259,10 @@ unsafe fn fts_walk(fts: *mut Fts, ent: *mut FtsEnt) {
                 crate::free(full as *mut c_void);
                 if child.is_null() { continue; }
                 let mut st: Stat = core::mem::zeroed();
-                let mut follow = (*fts).options & FTS_LOGICAL_V != 0;
+                let follow = (*fts).options & FTS_LOGICAL_V != 0;
                 let mut rc = fts_stat_path((*child).fts_path, follow, &mut st);
                 if rc != 0 && !follow {
                     rc = fts_stat_path((*child).fts_path, true, &mut st);
-                    if rc == 0 { follow = true; }
                 }
                 if rc != 0 {
                     (*child).fts_errno = ERRNO;

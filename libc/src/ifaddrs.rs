@@ -176,7 +176,7 @@ unsafe fn parse_rtattrs<F: FnMut(u16, *const u8, usize)>(
 
 unsafe fn netlink_msg_to_ifaddr(ctx: *mut IfaCtx, hdr: *const NlMsgHdr) -> c_int {
     let htype = (*hdr).type_;
-    let mut ifs: *mut IfaStorage;
+    let ifs: *mut IfaStorage;
     let mut ifs0: *mut IfaStorage = core::ptr::null_mut();
     if htype == RTM_NEWLINK {
         let hb = hdr as *const u8;

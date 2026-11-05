@@ -235,13 +235,11 @@ pub unsafe extern "C" fn __fpclassifyf(x: f32) -> c_int {
     }
 }
 
-#[inline]
 #[no_mangle]
 pub fn __signbit(x: f64) -> c_int {
     ((asuint64(x) >> 63) & 1) as c_int
 }
 
-#[inline]
 #[no_mangle]
 pub fn __signbitf(x: f32) -> c_int {
     ((asuint(x) >> 31) & 1) as c_int

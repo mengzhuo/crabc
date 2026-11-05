@@ -1,6 +1,6 @@
 #![no_std]
 #![no_main]
-#![allow(dead_code, deref_nullptr)]
+#![allow(dead_code, deref_nullptr, static_mut_refs)]
 
 use core::ffi::{c_char, c_void};
 use core::sync::atomic::{AtomicBool, Ordering};
@@ -2110,7 +2110,7 @@ type LdsoDlcloseFn = unsafe extern "C" fn(*mut u8) -> i32;
 type LdsoDlerrorFn = unsafe extern "C" fn() -> *const u8;
 
 #[repr(C)]
-struct DlPhdrInfo {
+pub struct DlPhdrInfo {
     addr: u64,
     name: *const u8,
     phdr: *const u8,
