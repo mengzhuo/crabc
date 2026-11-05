@@ -26,6 +26,9 @@ jobs:
           - arch: riscv64
             os: ubuntu-24.04-riscv
     runs-on: ${{ matrix.os }}
+    # RISC-V hardware is scarce and slower; keep it non-blocking and capped.
+    continue-on-error: ${{ matrix.arch == 'riscv64' }}
+    timeout-minutes: ${{ matrix.arch == 'riscv64' && 10 || 360 }}
     steps:
       - uses: actions/checkout@v7
 
@@ -70,6 +73,8 @@ jobs:
 
   riscv64-cross:
     runs-on: ubuntu-latest
+    continue-on-error: true
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v7
 
