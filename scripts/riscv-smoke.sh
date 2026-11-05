@@ -14,8 +14,23 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 TARGET_NAME=riscv64gc-unknown-linux-musl
 CARGO_TARGET="${CARGO_TARGET_DIR:-$ROOT/target}"
 T="$CARGO_TARGET/$TARGET_NAME/debug"
-CC_BIN="${RISCV_CC:-riscv64-linux-gnu-gcc}"
-QEMU_BIN="${QEMU:-qemu-riscv64}"
+HOST_ARCH="$(uname -m)"
+# On native riscv64 hardware use the local musl toolchain and run directly;
+# otherwise cross-compile and execute under qemu-user.
+if [ -n "${RISCV_CC+x}" ]; then
+    CC_BIN="${RISCV_CC}"
+elif [ "$HOST_ARCH" = "riscv64" ]; then
+    CC_BIN=musl-gcc
+else
+    CC_BIN=riscv64-linux-gnu-gcc
+fi
+if [ -n "${QEMU+x}" ]; then
+    QEMU_BIN="${QEMU}"
+elif [ "$HOST_ARCH" = "riscv64" ]; then
+    QEMU_BIN=""
+else
+    QEMU_BIN=qemu-riscv64
+fi
 GCCINC="$("$CC_BIN" -print-file-name=include)"
 TMP="$(mktemp -d /tmp/crabc-riscv-smoke.XXXXXX)"
 trap 'rm -rf "$TMP"' EXIT
@@ -51,7 +66,12 @@ run() {
         FAILS=$((FAILS + 1))
         return
     fi
-    if ! LD_LIBRARY_PATH="$LIBS" "$QEMU_BIN" "$out" >"$TMP/$name.out" 2>"$TMP/$name.err"; then
+    if [ -n "$QEMU_BIN" ]; then
+        LD_LIBRARY_PATH="$LIBS" "$QEMU_BIN" "$out" >"$TMP/$name.out" 2>"$TMP/$name.err"
+    else
+        LD_LIBRARY_PATH="$LIBS" "$out" >"$TMP/$name.out" 2>"$TMP/$name.err"
+    fi
+    if [ $? -ne 0 ]; then
         echo "RUNFAIL $name: $(head -c 160 "$TMP/$name.err" | tr '\n' ' ')"
         FAILS=$((FAILS + 1))
         return
@@ -68,7 +88,12 @@ done
 
 # Static PIE through the userspace loader.
 "$CC_BIN" -fPIE -pie -nostdlib -nostartfiles "$ROOT/tests/fixtures/tiny.c" -o "$TMP/tiny"
-if [ "$("$QEMU_BIN" -L /usr/riscv64-linux-gnu "$T/loader" "$TMP/tiny" 2>/dev/null)" = Hello ]; then
+if [ -n "$QEMU_BIN" ]; then
+    LOADER_OUT="$("$QEMU_BIN" -L /usr/riscv64-linux-gnu "$T/loader" "$TMP/tiny" 2>/dev/null)"
+else
+    LOADER_OUT="$("$T/loader" "$TMP/tiny" 2>/dev/null)"
+fi
+if [ "$LOADER_OUT" = Hello ]; then
     echo "PASS tiny-loader"
 else
     echo "FAIL tiny-loader"

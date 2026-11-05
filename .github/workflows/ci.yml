@@ -18,8 +18,13 @@ jobs:
         include:
           - arch: x86_64
             os: ubuntu-latest
+          # Native arm64 runners.
           - arch: aarch64
             os: ubuntu-24.04-arm
+          # Native riscv64 hardware from the RISE RISC-V Runners service.
+          # Requires the RISE GitHub App: https://github.com/apps/rise-risc-v-runners
+          - arch: riscv64
+            os: ubuntu-24.04-riscv
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v7
@@ -44,6 +49,16 @@ jobs:
 
       - name: Run integration tests
         run: cargo test --workspace
+
+      - name: Install riscv64 musl target
+        if: matrix.arch == 'riscv64'
+        run: rustup target add riscv64gc-unknown-linux-musl
+
+      - name: Run riscv64 smoke suite natively
+        if: matrix.arch == 'riscv64'
+        env:
+          CARGO_TARGET_RISCV64GC_UNKNOWN_LINUX_MUSL_LINKER: musl-gcc
+        run: ./scripts/riscv-smoke.sh
 
       - name: Run libc-test harness (informational)
         continue-on-error: true
