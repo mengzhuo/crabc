@@ -276,7 +276,7 @@ if grep -qa "^TIMEOUT" "$RAW_REPORT" 2>/dev/null; then
 fi
 
 if grep -qa "^SKIP" "$RAW_REPORT" 2>/dev/null; then
-    echo "SKIP tests (64-bit long double ABI):" >> "$SUMMARY_REPORT"
+    echo "SKIP tests:" >> "$SUMMARY_REPORT"
     grep -a "^SKIP" "$RAW_REPORT" | sed 's/SKIP /  /' >> "$SUMMARY_REPORT"
     echo "" >> "$SUMMARY_REPORT"
 fi
