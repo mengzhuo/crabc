@@ -30,29 +30,29 @@ and the reproduction scripts rather than the absolute values.
 | `memcpy` 64B | 10.9 ns | 6.8 ns | 0.62x |
 | `memcpy` 4KB | 59.0 ns | 43.4 ns | 0.74x |
 | `memset` 4KB | 63.4 ns | 48.4 ns | 0.76x |
-| `memcmp` 4KB | 866 ns | 34.5 ns | 0.04x |
-| `strlen` 4KB | 315 ns | 54.4 ns | 0.17x |
-| `strcmp` (short) | 9.3 ns | 5.8 ns | 0.62x |
-| `strstr` | 55.6 ns | 7.3 ns | 0.13x |
-| `snprintf` | 438 ns | 222 ns | 0.51x |
-| `fprintf` → `/dev/null` | 415 ns | 226 ns | 0.54x |
-| `malloc`/`free` 16B | 106 ns | 13.1 ns | 0.12x |
-| `malloc`/`free` 256B | 106 ns | 13.0 ns | 0.12x |
-| `calloc` 1KB | 171 ns | 29.9 ns | 0.17x |
+| `memcmp` 4KB | 869 ns | 43.8 ns | 0.05x |
+| `strlen` 4KB | 316 ns | 55.2 ns | 0.17x |
+| `strcmp` (short) | 10.3 ns | 6.1 ns | 0.60x |
+| `strstr` | 54.2 ns | 7.5 ns | 0.14x |
+| `snprintf` | 435 ns | 232 ns | 0.53x |
+| `fprintf` → `/dev/null` | 416 ns | 227 ns | 0.55x |
+| `malloc`/`free` 16B | 110 ns | 13.1 ns | 0.12x |
+| `malloc`/`free` 256B | 109 ns | 13.0 ns | 0.12x |
+| `calloc` 1KB | 174 ns | 23.2 ns | 0.13x |
 | `realloc` (grow) | 21.9 ns | 9.3 ns | 0.42x |
 | `sin` | 5.19 ns | 5.25 ns | 1.01x |
 | `exp` | 6.57 ns | 6.59 ns | 1.00x |
 | `log` | 8.58 ns | 8.90 ns | 1.04x |
-| `pow` | 21.9 ns | 23.6 ns | 1.08x |
-| `sqrt` | 2.86 ns | 2.95 ns | 1.03x |
+| `pow` | 21.9 ns | 23.3 ns | 1.07x |
+| `sqrt` | 2.91 ns | 2.94 ns | 1.01x |
 | `getpid` | 183 ns | 183 ns | 1.00x |
 | `clock_gettime` | 27.9 ns | 27.8 ns | 1.00x |
 | `open`+`close` | 3481 ns | 3409 ns | 0.98x |
 | `stat` | 1469 ns | 1466 ns | 1.00x |
 | `getenv` | 89.7 ns | 26.3 ns | 0.29x |
 | `pthread_mutex` lock/unlock | 12.4 ns | 7.2 ns | 0.58x |
-| `pthread_create`+`join` | 39.0 µs | 41.1 µs | 1.05x |
-| Process startup | 334 µs | 455 µs | 1.36x |
+| `pthread_create`+`join` | 39.3 µs | 40.7 µs | 1.04x |
+| Process startup | 338 µs | 417 µs | 1.23x |
 
 The thread benchmark creates and joins 2000 threads; all 2000 ran in every
 crabc round.
@@ -83,6 +83,10 @@ QEMU/TCG numbers are not hardware numbers; only the ratios are meaningful.
   splits unaligned 64-bit accesses into bytes) and offset-addressed blocks.
 - **vDSO `clock_gettime`.** crabc resolves `__vdso_clock_gettime` from
   `AT_SYSINFO_EHDR` and calls it directly; the syscall remains the fallback.
+- **Packed relative relocations.** `libc.so` is linked with
+  `-z pack-relative-relocs`; the loader applies both `DT_RELA` and `DT_RELR`,
+  which also covers binaries produced by distro toolchains that default to
+  packed relocations.
 - **Dynamic linker.** Symbol lookup now uses each object's GNU/SysV hash
   table instead of a linear walk over every symbol. The loader uses the
   kernel's existing `AT_PHDR` executable mapping instead of re-reading
@@ -98,14 +102,14 @@ QEMU/TCG numbers are not hardware numbers; only the ratios are meaningful.
 
 ## Remaining gaps
 
-- **Process startup, 1.36x.** musl's dynamic linker *is* its libc, so one
+- **Process startup, 1.23x.** musl's dynamic linker *is* its libc, so one
   file is mapped by the kernel. crabc maps `libldso.so` and then loads and
-  relocates a separate 1.5 MB `libc.so`; the remaining difference is mostly
-  that second DSO's relocation and first-touch page-fault cost.
-- **`pow`, 1.08x.** The port keeps exact `x^1` / `x^-1` identities (see
+  relocates a separate `libc.so`; the remaining difference is mostly that
+  second DSO's relocation and first-touch page-fault cost.
+- **`pow`, 1.07x.** The port keeps exact `x^1` / `x^-1` identities (see
   `AGENTS.md`), which adds a small amount of work to the front of the
   function.
-- **`pthread_create`+`join`, 1.05x.** Within run-to-run noise on this host.
+- **`pthread_create`+`join`, 1.04x.** Within run-to-run noise on this host.
 
 ## Reproduce
 

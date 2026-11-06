@@ -42,6 +42,9 @@ const DT_INIT_ARRAYSZ: u64 = 27;
 const DT_FINI_ARRAYSZ: u64 = 28;
 const DT_RUNPATH: u64 = 29;
 const DT_GNU_HASH: u64 = 0x6ffffef5;
+const DT_RELRSZ: u64 = 35;
+const DT_RELR: u64 = 36;
+const DT_RELRENT: u64 = 37;
 
 const R_X86_64_64: u64 = 1;
 const R_X86_64_COPY: u64 = 5;
@@ -1473,42 +1476,49 @@ unsafe fn load_dso_from_fd(fd: i64, desired_base: u64) -> Option<u64> {
         let adj = seg.p_vaddr & (PAGE - 1);
         let map_addr = actual_base + seg.p_vaddr - adj;
         let map_off = seg.p_offset - adj;
-        let map_len = ((seg.p_memsz + adj + PAGE - 1) & !(PAGE - 1)) as usize;
+        let mem_len = ((seg.p_memsz + adj + PAGE - 1) & !(PAGE - 1)) as usize;
+        let file_len = ((seg.p_filesz + adj + PAGE - 1) & !(PAGE - 1)) as usize;
         let prot = prot_from_flags(seg.p_flags);
 
-        // Map the whole segment anonymously first so the tail (bss) is backed
-        // by zeroed anonymous pages, then overlay the file-backed portion.
-        let ptr = sys_mmap(
-            map_addr as *mut u8,
-            map_len,
-            prot,
-            MAP_PRIVATE | MAP_FIXED | MAP_ANONYMOUS,
-            -1,
-            0,
-        );
-        if ptr as usize == MAP_FAILED {
-            return None;
-        }
-
-        let file_map_len = ((seg.p_filesz + adj + PAGE - 1) & !(PAGE - 1)) as usize;
-        if file_map_len > 0 {
-            let fptr = sys_mmap(
+        if file_len > 0 {
+            let fp = sys_mmap(
                 map_addr as *mut u8,
-                file_map_len,
+                file_len,
                 prot,
                 MAP_PRIVATE | MAP_FIXED,
                 fd as i32,
                 map_off as i64,
             );
-            if fptr as usize == MAP_FAILED {
+            if fp as usize == MAP_FAILED {
                 return None;
             }
         }
 
         if seg.p_memsz > seg.p_filesz {
-            let bss_start = (actual_base + seg.p_vaddr + seg.p_filesz) as *mut u8;
-            let bss_len = (seg.p_memsz - seg.p_filesz) as usize;
-            core::ptr::write_bytes(bss_start, 0, bss_len);
+            let vseg = actual_base + seg.p_vaddr;
+            // The last file page can contain bytes beyond p_filesz; zero just
+            // that part. The remaining BSS is fresh anonymous zero pages.
+            let bss_start = vseg + seg.p_filesz;
+            let bss_end = vseg + seg.p_memsz;
+            let file_end = map_addr + file_len as u64;
+            let zero_end = if file_end < bss_end { file_end } else { bss_end };
+            if zero_end > bss_start {
+                core::ptr::write_bytes(bss_start as *mut u8, 0, (zero_end - bss_start) as usize);
+            }
+            if mem_len > file_len {
+                let tail = map_addr + file_len as u64;
+                let tp = sys_mmap(
+                    tail as *mut u8,
+                    mem_len - file_len,
+                    prot,
+                    MAP_PRIVATE | MAP_FIXED | MAP_ANONYMOUS,
+                    -1,
+                    0,
+                );
+                if tp as usize == MAP_FAILED {
+                    return None;
+                }
+            }
         }
     }
 
@@ -1961,18 +1971,19 @@ unsafe fn tls_tcb_offset_from_tp() -> isize {
 unsafe fn process_all_relocations() {
     // First pass: non-COPY relocations so source symbols have final values.
     for i in 0..LOADED_COUNT {
-        let (base, rela_off, rela_sz, jmprel_off, jmprel_sz) = relocation_info(i);
+        let (base, rela_off, rela_sz, jmprel_off, jmprel_sz, relr_off, relr_sz) = relocation_info(i);
+        apply_relr(base, relr_off, relr_sz);
         apply_rela_table(i, base, rela_off, rela_sz, false);
         apply_rela_table(i, base, jmprel_off, jmprel_sz, false);
     }
     // Second pass: COPY relocations copy initialized data into the executable.
     for i in 0..LOADED_COUNT {
-        let (base, rela_off, rela_sz, _, _) = relocation_info(i);
+        let (base, rela_off, rela_sz, _, _, _, _) = relocation_info(i);
         apply_rela_table(i, base, rela_off, rela_sz, true);
     }
 }
 
-unsafe fn relocation_info(i: usize) -> (u64, u64, u64, u64, u64) {
+unsafe fn relocation_info(i: usize) -> (u64, u64, u64, u64, u64, u64, u64) {
     let obj = &LOADED[i];
     let base = obj.base;
     let dp = obj.dyn_addr;
@@ -1982,6 +1993,8 @@ unsafe fn relocation_info(i: usize) -> (u64, u64, u64, u64, u64) {
     let mut rela_sz: u64 = 0;
     let mut jmprel_off: u64 = 0;
     let mut jmprel_sz: u64 = 0;
+    let mut relr_off: u64 = 0;
+    let mut relr_sz: u64 = 0;
 
     let mut pos = dp;
     while pos + 16 <= dyn_end {
@@ -1995,11 +2008,47 @@ unsafe fn relocation_info(i: usize) -> (u64, u64, u64, u64, u64) {
             DT_RELASZ => rela_sz = d_val,
             DT_JMPREL => jmprel_off = d_val,
             DT_PLTRELSZ => jmprel_sz = d_val,
+            DT_RELR => relr_off = d_val,
+            DT_RELRSZ => relr_sz = d_val,
             _ => {}
         }
         pos += 16;
     }
-    (base, rela_off, rela_sz, jmprel_off, jmprel_sz)
+    (base, rela_off, rela_sz, jmprel_off, jmprel_sz, relr_off, relr_sz)
+}
+
+/// Apply packed relative relocations (DT_RELR): entries are either an
+/// address or a bitmap of the 63 words following the previous address.
+unsafe fn apply_relr(base: u64, relr_off: u64, relr_sz: u64) {
+    if relr_sz == 0 {
+        return;
+    }
+    let table = (base + relr_off) as *const u8;
+    let count = (relr_sz / 8) as usize;
+    let mut where_: u64 = 0;
+    let mut i = 0usize;
+    while i < count {
+        let e = u64::from_le_bytes(core::ptr::read_unaligned(table.add(i * 8) as *const [u8; 8]));
+        if e & 1 == 0 {
+            where_ = e;
+            let slot = (base + where_) as *mut u64;
+            *slot = (*slot).wrapping_add(base);
+            where_ += 8;
+        } else {
+            let mut bits = e >> 1;
+            let mut off = where_;
+            while bits != 0 {
+                if bits & 1 != 0 {
+                    let slot = (base + off) as *mut u64;
+                    *slot = (*slot).wrapping_add(base);
+                }
+                bits >>= 1;
+                off += 8;
+            }
+            where_ += 63 * 8;
+        }
+        i += 1;
+    }
 }
 
 /// Apply entries from one relocation table.

@@ -495,12 +495,122 @@ fn pow_zeroinfnan(i: u64) -> bool {
 // pow (double precision)
 // ============================================================
 
+
+// Kept out of line: every path in here returns, and it is only entered for
+// subnormal/non-finite inputs or extreme exponents.
+#[inline(never)]
+fn pow_special(x: f64, y: f64, ix: u64, iy: u64, mut topx: u32, topy: u32) -> f64 {
+    let mut sign_bias: u64 = 0;
+
+    // Note: if |y| > 1075*ln2*2^53 then pow(x,y) = inf/0
+    // and if |y| < 2^-54/1075 then pow(x,y) = +-1.
+    // Special cases: (x < 0x1p-126 or inf or nan) or
+    // (|y| < 0x1p-65 or |y| >= 0x1p63 or nan).
+    if predict_false(pow_zeroinfnan(iy)) {
+        if 2u64.wrapping_mul(iy) == 0 {
+            // issignaling_inline(x) is always false
+            return 1.0;
+        }
+        if ix == asuint64(1.0) {
+            // issignaling_inline(y) is always false
+            return 1.0;
+        }
+        if 2u64.wrapping_mul(ix) > 2u64.wrapping_mul(asuint64(f64::INFINITY))
+            || 2u64.wrapping_mul(iy) > 2u64.wrapping_mul(asuint64(f64::INFINITY))
+        {
+            return x + y;
+        }
+        if 2u64.wrapping_mul(ix) == 2u64.wrapping_mul(asuint64(1.0)) {
+            return 1.0;
+        }
+        if (2u64.wrapping_mul(ix) < 2u64.wrapping_mul(asuint64(1.0)))
+            == !(iy >> 63 != 0)
+        {
+            return 0.0; // |x|<1 && y==inf or |x|>1 && y==-inf.
+        }
+        return y * y;
+    }
+    if predict_false(pow_zeroinfnan(ix)) {
+        let mut x2 = x * x;
+        if ix >> 63 != 0 && pow_checkint(iy) == 1 {
+            x2 = -x2;
+        }
+        // Without the barrier some versions of clang hoist the 1/x2 and
+        // thus division by zero exception can be signaled spuriously.
+        return if iy >> 63 != 0 {
+            fp_barrier(1.0 / x2)
+        } else {
+            x2
+        };
+    }
+    // Here x and y are non-zero finite.
+    let mut ix = ix;
+    if ix >> 63 != 0 {
+        // Finite x < 0.
+        let yint = pow_checkint(iy);
+        if yint == 0 {
+            return __math_invalid(x);
+        }
+        if yint == 1 {
+            sign_bias = POW_SIGN_BIAS;
+        }
+        ix &= 0x7fffffffffffffff;
+        topx &= 0x7ff;
+    }
+    if (topy & 0x7ff).wrapping_sub(0x3be) >= 0x43e - 0x3be {
+        // Note: sign_bias == 0 here because y is not odd.
+        if ix == asuint64(1.0) {
+            return 1.0;
+        }
+        if (topy & 0x7ff) < 0x3be {
+            // |y| < 2^-65, x^y ~= 1 + y*log(x).
+            return if ix > asuint64(1.0) {
+                1.0 + y
+            } else {
+                1.0 - y
+            };
+        }
+        return if (ix > asuint64(1.0)) == (topy < 0x800) {
+            __math_oflow(0)
+        } else {
+            __math_uflow(0)
+        };
+    }
+    if topx == 0 {
+        // Normalize subnormal x so exponent becomes negative.
+        let mut ix = asuint64(x * asdouble(0x4330000000000000)); // 0x1p52
+        ix &= 0x7fffffffffffffff;
+        ix = ix.wrapping_sub(52u64 << 52);
+        // Fall through to log_inline/exp_inline with normalized ix.
+        let mut lo: f64 = 0.0;
+        let hi = pow_log_inline(ix, &mut lo);
+        let yhi = asdouble(iy & (!0u64 << 27));
+        let ylo = y - yhi;
+        let lhi = asdouble(asuint64(hi) & (!0u64 << 27));
+        let llo = hi - lhi + lo;
+        let ehi = yhi * lhi;
+        let elo = ylo * lhi + y * llo;
+        return pow_exp_inline(ehi, elo, sign_bias);
+    }
+    // Non-subnormal, non-special x.
+    let mut lo: f64 = 0.0;
+    let hi = pow_log_inline(ix, &mut lo);
+    let yhi = asdouble(iy & (!0u64 << 27));
+    let ylo = y - yhi;
+    let lhi = asdouble(asuint64(hi) & (!0u64 << 27));
+    let llo = hi - lhi + lo;
+    let ehi = yhi * lhi;
+    let elo = ylo * lhi + y * llo;
+    return pow_exp_inline(ehi, elo, sign_bias);
+
+}
+
 #[no_mangle]
 pub extern "C" fn pow(x: f64, y: f64) -> f64 {
-    let mut sign_bias: u64 = 0;
+    let sign_bias: u64 = 0;
     let ix = asuint64(x);
     let iy = asuint64(y);
-    let mut topx = pow_top12(x);
+    let topx = pow_top12(x);
     let topy = pow_top12(y);
 
     // Exact identity: x^1 is x for all finite/infinite/NaN x, with no exceptions.
@@ -516,106 +626,7 @@ pub extern "C" fn pow(x: f64, y: f64) -> f64 {
         topx.wrapping_sub(0x001) >= 0x7ff - 0x001
             || (topy & 0x7ff).wrapping_sub(0x3be) >= 0x43e - 0x3be,
     ) {
-        // Note: if |y| > 1075*ln2*2^53 then pow(x,y) = inf/0
-        // and if |y| < 2^-54/1075 then pow(x,y) = +-1.
-        // Special cases: (x < 0x1p-126 or inf or nan) or
-        // (|y| < 0x1p-65 or |y| >= 0x1p63 or nan).
-        if predict_false(pow_zeroinfnan(iy)) {
-            if 2u64.wrapping_mul(iy) == 0 {
-                // issignaling_inline(x) is always false
-                return 1.0;
-            }
-            if ix == asuint64(1.0) {
-                // issignaling_inline(y) is always false
-                return 1.0;
-            }
-            if 2u64.wrapping_mul(ix) > 2u64.wrapping_mul(asuint64(f64::INFINITY))
-                || 2u64.wrapping_mul(iy) > 2u64.wrapping_mul(asuint64(f64::INFINITY))
-            {
-                return x + y;
-            }
-            if 2u64.wrapping_mul(ix) == 2u64.wrapping_mul(asuint64(1.0)) {
-                return 1.0;
-            }
-            if (2u64.wrapping_mul(ix) < 2u64.wrapping_mul(asuint64(1.0)))
-                == !(iy >> 63 != 0)
-            {
-                return 0.0; // |x|<1 && y==inf or |x|>1 && y==-inf.
-            }
-            return y * y;
-        }
-        if predict_false(pow_zeroinfnan(ix)) {
-            let mut x2 = x * x;
-            if ix >> 63 != 0 && pow_checkint(iy) == 1 {
-                x2 = -x2;
-            }
-            // Without the barrier some versions of clang hoist the 1/x2 and
-            // thus division by zero exception can be signaled spuriously.
-            return if iy >> 63 != 0 {
-                fp_barrier(1.0 / x2)
-            } else {
-                x2
-            };
-        }
-        // Here x and y are non-zero finite.
-        let mut ix = ix;
-        if ix >> 63 != 0 {
-            // Finite x < 0.
-            let yint = pow_checkint(iy);
-            if yint == 0 {
-                return __math_invalid(x);
-            }
-            if yint == 1 {
-                sign_bias = POW_SIGN_BIAS;
-            }
-            ix &= 0x7fffffffffffffff;
-            topx &= 0x7ff;
-        }
-        if (topy & 0x7ff).wrapping_sub(0x3be) >= 0x43e - 0x3be {
-            // Note: sign_bias == 0 here because y is not odd.
-            if ix == asuint64(1.0) {
-                return 1.0;
-            }
-            if (topy & 0x7ff) < 0x3be {
-                // |y| < 2^-65, x^y ~= 1 + y*log(x).
-                return if ix > asuint64(1.0) {
-                    1.0 + y
-                } else {
-                    1.0 - y
-                };
-            }
-            return if (ix > asuint64(1.0)) == (topy < 0x800) {
-                __math_oflow(0)
-            } else {
-                __math_uflow(0)
-            };
-        }
-        if topx == 0 {
-            // Normalize subnormal x so exponent becomes negative.
-            let mut ix = asuint64(x * asdouble(0x4330000000000000)); // 0x1p52
-            ix &= 0x7fffffffffffffff;
-            ix = ix.wrapping_sub(52u64 << 52);
-            // Fall through to log_inline/exp_inline with normalized ix.
-            let mut lo: f64 = 0.0;
-            let hi = pow_log_inline(ix, &mut lo);
-            let yhi = asdouble(iy & (!0u64 << 27));
-            let ylo = y - yhi;
-            let lhi = asdouble(asuint64(hi) & (!0u64 << 27));
-            let llo = hi - lhi + lo;
-            let ehi = yhi * lhi;
-            let elo = ylo * lhi + y * llo;
-            return pow_exp_inline(ehi, elo, sign_bias);
-        }
-        // Non-subnormal, non-special x.
-        let mut lo: f64 = 0.0;
-        let hi = pow_log_inline(ix, &mut lo);
-        let yhi = asdouble(iy & (!0u64 << 27));
-        let ylo = y - yhi;
-        let lhi = asdouble(asuint64(hi) & (!0u64 << 27));
-        let llo = hi - lhi + lo;
-        let ehi = yhi * lhi;
-        let elo = ylo * lhi + y * llo;
-        return pow_exp_inline(ehi, elo, sign_bias);
+        return pow_special(x, y, ix, iy, topx, topy);
     }
 
     // Fast path: both x and y are normal, non-special.
