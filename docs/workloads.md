@@ -36,8 +36,8 @@ exit status and the same relevant stdout as the musl baseline.
     `libldso.so`, `/lib/libc.musl-x86_64.so.1` points at crabc's `libc.so`,
     and `LD_LIBRARY_PATH=/opt/crabc`.
 - `/proc`, `/dev`, `/sys` and a shared `/work` directory are bind-mounted into
-  both chroots. PostgreSQL and Redis run as uid/gid 1000/1001 as required by
-  their packages.
+  both chroots. PostgreSQL runs as uid 1000 (its package user); the other
+  workloads run as root inside the chroot, as they would in a container.
 
 ## Method
 
@@ -48,8 +48,7 @@ exit status and the same relevant stdout as the musl baseline.
    functional output matches the musl baseline.
 
 The scripts use only the packaged binaries; no recompilation, no patches and no
-crabc-specific build flags are involved. The one exception is the test harness
-itself, which is a plain shell script.
+crabc-specific build flags are involved.
 
 ## Known issues and scope
 
