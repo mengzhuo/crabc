@@ -129,7 +129,7 @@ extern "C" {
 #ifndef _SIGSET_T_DEFINED
 #define _SIGSET_T_DEFINED
 #endif
-typedef unsigned long sigset_t;
+typedef struct __sigset_t { unsigned long __bits[128/sizeof(unsigned long)]; } sigset_t;
 #endif
 #endif
 
@@ -209,10 +209,9 @@ struct sigaction {
         void (*sa_handler)(int);
         void (*sa_sigaction)(int, siginfo_t *, void *);
     } __sa_handler;
-    int sa_flags;
-    int __sa_flags_pad;
-    void (*sa_restorer)(void);
     sigset_t sa_mask;
+    int sa_flags;
+    void (*sa_restorer)(void);
 };
 
 #define sa_handler   __sa_handler.sa_handler

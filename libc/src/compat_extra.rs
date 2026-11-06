@@ -336,14 +336,108 @@ static mut PTHREAD_DEFAULT_STACK: usize = STACK_SIZE;
 static mut PTHREAD_DEFAULT_GUARD: usize = 4096;
 static mut PTHREAD_CONCURRENCY: c_int = 0;
 
+/// Find the mapping that contains `addr` by reading the tail of
+/// /proc/self/maps. Used for the main thread, whose stack was set up by the
+/// loader and is not tracked in a `Thread` slot.
+unsafe fn mapping_containing(addr: usize) -> Option<(usize, usize)> {
+    let fd = crate::open(b"/proc/self/maps\0".as_ptr() as *const core::ffi::c_char, 0, 0);
+    if fd < 0 {
+        return None;
+    }
+    let size: i64 = crate::lseek(fd, 0, 2);
+    let want: i64 = if size > 16384 { 16384 } else { size };
+    let start = if size > want { size - want } else { 0 };
+    if crate::lseek(fd, start, 0) < 0 {
+        crate::close(fd);
+        return None;
+    }
+    let mut buf = [0u8; 16384];
+    let mut len = 0usize;
+    while len < buf.len() {
+        let n = crate::read(
+            fd,
+            buf.as_mut_ptr().add(len) as *mut core::ffi::c_void,
+            buf.len() - len,
+        );
+        if n <= 0 {
+            break;
+        }
+        len += n as usize;
+    }
+    crate::close(fd);
+
+    let mut result = None;
+    let mut line_start = 0usize;
+    while line_start < len {
+        let mut line_end = line_start;
+        while line_end < len && buf[line_end] != b'\n' {
+            line_end += 1;
+        }
+        let line = &buf[line_start..line_end];
+        if let Some(dash) = line.iter().position(|&c| c == b'-') {
+            let mut lo = 0usize;
+            let mut ok = true;
+            for &c in &line[..dash] {
+                if c.is_ascii_digit() {
+                    lo = lo * 16 + (c - b'0') as usize;
+                } else if (b'a'..=b'f').contains(&c) {
+                    lo = lo * 16 + (c - b'a' + 10) as usize;
+                } else {
+                    ok = false;
+                    break;
+                }
+            }
+            if ok && !line[..dash].is_empty() {
+                let mut hi = 0usize;
+                let mut i = dash + 1;
+                while i < line.len() {
+                    let c = line[i];
+                    if c.is_ascii_digit() {
+                        hi = hi * 16 + (c - b'0') as usize;
+                    } else if (b'a'..=b'f').contains(&c) {
+                        hi = hi * 16 + (c - b'a' + 10) as usize;
+                    } else {
+                        break;
+                    }
+                    i += 1;
+                }
+                if i > dash + 1 && lo <= addr && addr < hi {
+                    result = Some((lo, hi - lo));
+                }
+            }
+        }
+        line_start = line_end + 1;
+    }
+    result
+}
+
 #[no_mangle]
 pub unsafe extern "C" fn pthread_getattr_np(thread: PthreadT, attr: *mut pthread_attr_t) -> c_int {
     if attr.is_null() || thread == 0 { return EINVAL; }
     let slot = thread as *mut Thread;
     core::ptr::write_bytes(attr, 0, 1);
-    *((*attr).__i.as_mut_ptr() as *mut usize) = if (*slot).stack_size > 0 { (*slot).stack_size } else { PTHREAD_DEFAULT_STACK };
+    let mut stack_base = (*slot).stack as usize;
+    let mut stack_size = if (*slot).stack_size > 0 { (*slot).stack_size } else { PTHREAD_DEFAULT_STACK };
+    if stack_base == 0 {
+        // Main thread: the loader allocated its stack, so ask the kernel which
+        // mapping holds the current stack pointer. Returning 0 here makes
+        // runtimes such as V8 conclude they are running on a foreign stack.
+        let sp: usize;
+        #[cfg(target_arch = "x86_64")]
+        core::arch::asm!("mov {}, rsp", out(reg) sp, options(nomem, nostack));
+        #[cfg(any(target_arch = "aarch64", target_arch = "riscv64"))]
+        core::arch::asm!("mv {}, sp", out(reg) sp, options(nomem, nostack));
+        if let Some((base, size)) = mapping_containing(sp) {
+            stack_base = base;
+            stack_size = size;
+        } else {
+            stack_base = sp & !0xfff;
+            stack_size = 4096;
+        }
+    }
+    *((*attr).__i.as_mut_ptr() as *mut usize) = stack_size;
     *((*attr).__i.as_mut_ptr().add(2) as *mut usize) = PTHREAD_DEFAULT_GUARD;
-    *((*attr).__i.as_mut_ptr().add(4) as *mut *mut c_void) = (*slot).stack as *mut c_void;
+    *((*attr).__i.as_mut_ptr().add(4) as *mut *mut c_void) = stack_base as *mut c_void;
     (*attr).__i[6] = if (*slot).detach_state == DT_DETACHED { 1 } else { 0 };
     (*attr).__i[7] = 0;
     0

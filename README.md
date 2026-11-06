@@ -13,6 +13,11 @@ same binaries under musl and crabc, and it is faster than musl on both
 x86\_64 and riscv64 (qemu-user) in the microbenchmark suite; process startup
 is the one structural exception. See `docs/performance.md`.
 
+Real, unmodified Alpine binaries are tracked in the
+[workload matrix](docs/workloads.md): BusyBox, curl, Git, SQLite, nginx,
+Redis, CPython, Node.js and PostgreSQL all run under crabc, with a per-project
+report and baseline comparison.
+
 Build and cross-compilation instructions are in `AGENTS.md`. Release builds
 are size-optimized and stripped, and are produced from `v*` tags; the
 workspace is published as the `crabc`, `crabc-libc` and `crabc-ldso` crates.

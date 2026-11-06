@@ -116,7 +116,7 @@ const PH_MEMSZ: usize = 40;
 const PH_ALIGN: usize = 48;
 
 const SYMTAB_ENT_SIZE: usize = 24;
-const MAX_LOADED: usize = 16;
+const MAX_LOADED: usize = 64;
 const TCB_SIZE: usize = 256;
 const DSO_BASE_START: u64 = 0x200000000;
 const DSO_BASE_STRIDE: u64 = 0x100000000;
@@ -146,6 +146,11 @@ struct LoadedObject {
     init_array_present: bool,
     global: bool,
     is_self: bool,
+    // Identity of the file backing this object. Different names (libc.so vs
+    // libc.musl-x86_64.so.1, or symlinks in LD_LIBRARY_PATH) must not load
+    // the same library twice.
+    dev: u64,
+    ino: u64,
     name: [u8; 256],
 }
 
@@ -170,6 +175,8 @@ const EMPTY_OBJ: LoadedObject = LoadedObject {
     init_array_present: false,
     global: false,
     is_self: false,
+    dev: 0,
+    ino: 0,
     name: [0; 256],
 };
 
@@ -998,8 +1005,10 @@ mod sysnr {
     pub const SYS_LSEEK: i64 = 8;
     pub const SYS_MMAP: i64 = 9;
     pub const SYS_MUNMAP: i64 = 11;
+    pub const SYS_FSTAT: i64 = 5;
     pub const SYS_READLINKAT: i64 = 267;
     pub const SYS_ARCH_PRCTL: i64 = 158;
+    pub const SYS_GETRLIMIT: i64 = 97;
     pub const SYS_EXIT: i64 = 60;
 }
 #[cfg(target_arch = "aarch64")]
@@ -1011,7 +1020,9 @@ mod sysnr {
     pub const SYS_LSEEK: i64 = 62;
     pub const SYS_MMAP: i64 = 222;
     pub const SYS_MUNMAP: i64 = 215;
+    pub const SYS_FSTAT: i64 = 80;
     pub const SYS_READLINKAT: i64 = 78;
+    pub const SYS_GETRLIMIT: i64 = 163;
     pub const SYS_EXIT: i64 = 93;
 }
 #[cfg(target_arch = "riscv64")]
@@ -1023,7 +1034,9 @@ mod sysnr {
     pub const SYS_LSEEK: i64 = 62;
     pub const SYS_MMAP: i64 = 222;
     pub const SYS_MUNMAP: i64 = 215;
+    pub const SYS_FSTAT: i64 = 80;
     pub const SYS_READLINKAT: i64 = 78;
+    pub const SYS_GETRLIMIT: i64 = 163;
     pub const SYS_EXIT: i64 = 93;
 }
 pub use sysnr::*;
@@ -1373,7 +1386,34 @@ fn sys_munmap(addr: *mut u8, length: usize) -> i64 {
     unsafe { <Arch as Syscalls>::syscall2(SYS_MUNMAP, addr as i64, length as i64) }
 }
 
+unsafe fn fd_identity(fd: i64) -> (u64, u64) {
+    // st_dev and st_ino are the first two 64-bit words of struct stat on all
+    // supported architectures.
+    let mut st = [0u64; 32];
+    let r = <Arch as Syscalls>::syscall2(SYS_FSTAT, fd, st.as_mut_ptr() as i64);
+    if r < 0 {
+        (0, 0)
+    } else {
+        (st[0], st[1])
+    }
+}
+
+unsafe fn loaded_object_by_identity(dev: u64, ino: u64) -> Option<usize> {
+    if dev == 0 && ino == 0 {
+        return None;
+    }
+    for i in 1..LOADED_COUNT {
+        if LOADED[i].dev == dev && LOADED[i].ino == ino {
+            return Some(i);
+        }
+    }
+    None
+}
+
 unsafe fn load_dso_from_fd(fd: i64, desired_base: u64) -> Option<u64> {
+    let object_dev_ino = fd_identity(fd);
+    let object_dev = object_dev_ino.0;
+    let object_ino = object_dev_ino.1;
     let mut buf = [0u8; 4096];
     let n = sys_read(fd, buf.as_mut_ptr(), buf.len());
     if n < 64 {
@@ -1608,6 +1648,8 @@ unsafe fn load_dso_from_fd(fd: i64, desired_base: u64) -> Option<u64> {
             init_array_present: dt_init_array_present,
             global: false,
             is_self: false,
+            dev: object_dev,
+            ino: object_ino,
             name: [0; 256],
         };
         LOADED_COUNT += 1;
@@ -1849,23 +1891,26 @@ unsafe fn resolve_copy_source(obj_idx: usize, sym_idx: usize) -> (u64, usize) {
     resolve_symbol_with_size(name, obj_idx)
 }
 
-unsafe fn resolve_symbol_module(obj_idx: usize, sym_idx: usize) -> usize {
+/// Resolve a (possibly undefined) TLS symbol to the module that defines it
+/// and that module's TLS offset. Undefined TLS symbols have `st_value == 0`
+/// in the referencing object; the real offset lives in the defining DSO.
+unsafe fn resolve_tls_symbol(obj_idx: usize, sym_idx: usize) -> (usize, u64) {
     let obj = &LOADED[obj_idx];
     if sym_idx == 0 || obj.symtab.is_null() || obj.strtab.is_null() {
-        return obj_idx;
+        return (obj_idx, 0);
     }
     if sym_idx * SYMTAB_ENT_SIZE >= obj.sym_count * SYMTAB_ENT_SIZE {
-        return obj_idx;
+        return (obj_idx, 0);
     }
     let sym_entry = obj.symtab.add(sym_idx * SYMTAB_ENT_SIZE);
     let st_name =
         u32::from_le_bytes(core::ptr::read_unaligned(sym_entry as *const [u8; 4])) as usize;
-    if st_name == 0 || st_name >= obj.strsz {
-        return obj_idx;
-    }
-    let st_info = *sym_entry.add(4);
-    if (st_info & 0xf) == 6 {
-        return obj_idx;
+    let st_shndx =
+        u16::from_le_bytes(core::ptr::read_unaligned(sym_entry.add(6) as *const [u8; 2]));
+    let st_value = u64::from_le_bytes(core::ptr::read_unaligned(sym_entry.add(8) as *const [u8; 8]));
+    if st_shndx != 0 || st_name == 0 || st_name >= obj.strsz {
+        // Defined here (or anonymous): use the local symbol.
+        return (obj_idx, st_value);
     }
     let name = obj.strtab.add(st_name);
     let name_len = str_len(name);
@@ -1878,22 +1923,24 @@ unsafe fn resolve_symbol_module(obj_idx: usize, sym_idx: usize) -> usize {
             let se = o.symtab.add(j * SYMTAB_ENT_SIZE);
             let s_name =
                 u32::from_le_bytes(core::ptr::read_unaligned(se as *const [u8; 4])) as usize;
-            let s_value = u64::from_le_bytes(core::ptr::read_unaligned(
-                se.add(8) as *const [u8; 8],
-            ));
-            if s_value == 0 {
-                continue;
-            }
-            if s_name >= o.strsz {
+            let s_shndx =
+                u16::from_le_bytes(core::ptr::read_unaligned(se.add(6) as *const [u8; 2]));
+            if s_shndx == 0 || s_name >= o.strsz {
                 continue;
             }
             let sym_name = o.strtab.add(s_name);
             if str_eq(name, name_len, sym_name) {
-                return i;
+                let value =
+                    u64::from_le_bytes(core::ptr::read_unaligned(se.add(8) as *const [u8; 8]));
+                return (i, value);
             }
         }
     }
-    obj_idx
+    (obj_idx, st_value)
+}
+
+unsafe fn resolve_symbol_module(obj_idx: usize, sym_idx: usize) -> usize {
+    resolve_tls_symbol(obj_idx, sym_idx).0
 }
 
 unsafe fn tls_sym_offset(obj_idx: usize, sym_idx: usize) -> u64 {
@@ -1909,12 +1956,8 @@ unsafe fn tls_sym_offset(obj_idx: usize, sym_idx: usize) -> u64 {
 }
 
 unsafe fn tls_tprel_offset(obj_idx: usize, sym_idx: usize, addend: i64) -> i64 {
-    let module = if sym_idx == 0 {
-        obj_idx
-    } else {
-        resolve_symbol_module(obj_idx, sym_idx)
-    };
-    let off_in_mod = tls_sym_offset(obj_idx, sym_idx) as i64 + addend;
+    let (module, sym_off) = resolve_tls_symbol(obj_idx, sym_idx);
+    let off_in_mod = sym_off as i64 + addend;
     (TLS_LAYOUT_OFFSET[module] as i64) + off_in_mod - (tls_var_area_offset_from_tp() as i64)
 }
 
@@ -1969,15 +2012,24 @@ unsafe fn tls_tcb_offset_from_tp() -> isize {
 
 /// Process all relocations for every loaded object.
 unsafe fn process_all_relocations() {
+    process_relocations_range(0);
+}
+
+/// Relocate the objects in `start..LOADED_COUNT`.
+///
+/// DT_RELR entries are applied as `*slot += base`, so re-running them over
+/// objects that were already relocated adds the base twice and corrupts
+/// every pointer. dlopen therefore relocates only the objects it just added.
+unsafe fn process_relocations_range(start: usize) {
     // First pass: non-COPY relocations so source symbols have final values.
-    for i in 0..LOADED_COUNT {
+    for i in start..LOADED_COUNT {
         let (base, rela_off, rela_sz, jmprel_off, jmprel_sz, relr_off, relr_sz) = relocation_info(i);
         apply_relr(base, relr_off, relr_sz);
         apply_rela_table(i, base, rela_off, rela_sz, false);
         apply_rela_table(i, base, jmprel_off, jmprel_sz, false);
     }
     // Second pass: COPY relocations copy initialized data into the executable.
-    for i in 0..LOADED_COUNT {
+    for i in start..LOADED_COUNT {
         let (base, rela_off, rela_sz, _, _, _, _) = relocation_info(i);
         apply_rela_table(i, base, rela_off, rela_sz, true);
     }
@@ -2119,17 +2171,13 @@ unsafe fn apply_rela_table(
             }
             #[cfg(target_arch = "riscv64")]
             R_RISCV_TLS_DTPMOD64 => {
-                let module = if r_sym_idx == 0 {
-                    obj_idx
-                } else {
-                    resolve_symbol_module(obj_idx, r_sym_idx)
-                };
+                let (module, _) = resolve_tls_symbol(obj_idx, r_sym_idx);
                 *slot = module as u64;
             }
             #[cfg(target_arch = "riscv64")]
             R_RISCV_TLS_DTPREL64 => {
-                let off = (tls_sym_offset(obj_idx, r_sym_idx) as i64 + r_addend) as u64;
-                *slot = off;
+                let (_, sym_off) = resolve_tls_symbol(obj_idx, r_sym_idx);
+                *slot = (sym_off as i64 + r_addend) as u64;
             }
             #[cfg(target_arch = "riscv64")]
             R_RISCV_TLS_TPREL64 => {
@@ -2147,16 +2195,12 @@ unsafe fn apply_rela_table(
                 *slot = sym_value;
             }
             R_X86_64_DTPMOD64 | R_AARCH64_TLS_DTPMOD64 => {
-                let module = if r_sym_idx == 0 {
-                    obj_idx
-                } else {
-                    resolve_symbol_module(obj_idx, r_sym_idx)
-                };
+                let (module, _) = resolve_tls_symbol(obj_idx, r_sym_idx);
                 *slot = module as u64;
             }
             R_X86_64_DTPOFF64 | R_AARCH64_TLS_DTPREL64 => {
-                let off = (tls_sym_offset(obj_idx, r_sym_idx) as i64 + r_addend) as u64;
-                *slot = off;
+                let (_, sym_off) = resolve_tls_symbol(obj_idx, r_sym_idx);
+                *slot = (sym_off as i64 + r_addend) as u64;
             }
             R_X86_64_TPOFF64 | R_AARCH64_TLS_TPREL64 => {
                 let fs_off = tls_tprel_offset(obj_idx, r_sym_idx, r_addend);
@@ -2195,7 +2239,11 @@ unsafe fn apply_rela_table(
 }
 
 unsafe fn run_constructors() {
-    for i in 0..LOADED_COUNT {
+    // Dependencies must be initialized before their dependents, and the
+    // executable last; the load list is breadth-first, so walk it backwards.
+    let mut i = LOADED_COUNT;
+    while i > 0 {
+        i -= 1;
         run_constructors_for(i);
     }
 }
@@ -2257,7 +2305,14 @@ unsafe fn expand_thread_tls(old_total: usize, old_module_count: usize) {
         return;
     }
     let old_fs = read_tp();
-    let old_var_base = (old_fs as isize - tls_var_area_offset_from_tp() as isize) as *mut u8;
+    // The old block was laid out with `old_total`, which may be smaller than
+    // the current TLS_TOTAL_SIZE. Using the new size here shifts the source
+    // and silently corrupts every thread-local variable during dlopen.
+    let old_var_base = if cfg!(target_arch = "x86_64") {
+        (old_fs as isize - old_total as isize) as *mut u8
+    } else {
+        old_fs as *mut u8
+    };
     if old_total > 0 {
         core::ptr::copy_nonoverlapping(old_var_base, block.add(tls_var_area_offset_from_block()), old_total);
     }
@@ -2301,7 +2356,11 @@ unsafe fn update_tls_for_new_module(idx: usize) {
         }
     }
 
-    let new_offset = (highest_end + align - 1) & !(align - 1);
+    // Existing modules live at offsets below old_total. When none of them had
+    // TLS, highest_end is 0; starting the new module there would shrink the
+    // block below old_total and break the layout/copy invariant.
+    let base_end = if highest_end < old_total { old_total } else { highest_end };
+    let new_offset = (base_end + align - 1) & !(align - 1);
     TLS_LAYOUT_OFFSET[idx] = new_offset;
     TLS_FILESZ[idx] = obj.tls_filesz;
     TLS_MEMSZ[idx] = obj.tls_memsz;
@@ -2557,6 +2616,13 @@ pub unsafe extern "C" fn __ldso_dlopen(filename: *const u8, flags: i32) -> *mut 
         set_dlerror(b"dlopen: cannot open file\0");
         return core::ptr::null_mut();
     }
+    let (dev, ino) = fd_identity(fd);
+    if let Some(idx) = loaded_object_by_identity(dev, ino) {
+        sys_close(fd);
+        LOADED[idx].global = LOADED[idx].global || (flags & RTLD_GLOBAL) != 0;
+        return &mut LOADED[idx] as *mut LoadedObject as *mut u8;
+    }
+    let first_new = LOADED_COUNT;
     let desired = DSO_BASE_START + (LOADED_COUNT as u64) * DSO_BASE_STRIDE;
     let _base = match load_dso_from_fd(fd, desired) {
         Some(b) => b,
@@ -2570,9 +2636,25 @@ pub unsafe extern "C" fn __ldso_dlopen(filename: *const u8, flags: i32) -> *mut 
     let idx = LOADED_COUNT - 1;
     set_loaded_name(idx, filename, name_len);
     LOADED[idx].global = (flags & RTLD_GLOBAL) != 0;
-    process_all_relocations();
-    update_tls_for_new_module(idx);
-    run_constructors_for(idx);
+
+    // Pull in the module's own DT_NEEDED closure before relocating it.
+    let mut scan = first_new;
+    let make_global = (flags & RTLD_GLOBAL) != 0;
+    while scan < LOADED_COUNT {
+        load_object_needed(scan, ld, make_global);
+        scan += 1;
+    }
+
+    process_relocations_range(first_new);
+    for i in first_new..LOADED_COUNT {
+        update_tls_for_new_module(i);
+    }
+    // Dependencies first, then the module that requested them.
+    let mut i = LOADED_COUNT;
+    while i > first_new {
+        i -= 1;
+        run_constructors_for(i);
+    }
     &mut LOADED[idx] as *mut LoadedObject as *mut u8
 }
 
@@ -2900,6 +2982,8 @@ unsafe fn register_self(ldso_base: u64) {
             init_present: false,
             init_array_present: false,
             global: false,
+            dev: 0,
+            ino: 0,
             name: [0; 256],
         };
         LOADED_COUNT += 1;
@@ -2931,6 +3015,78 @@ unsafe fn loaded_object_by_name(name: *const u8, name_len: usize) -> Option<usiz
         }
     }
     None
+}
+
+// ============================================================
+// Dependency loading
+// ============================================================
+
+/// Load one DT_NEEDED entry if it is not already in the object list.
+unsafe fn load_needed_dso(
+    name: *const u8,
+    name_len: usize,
+    ld_path: Option<*const u8>,
+    make_global: bool,
+) {
+    for i in 0..LOADED_COUNT {
+        if LOADED[i].name[0] != 0 && str_eq(name, name_len, LOADED[i].name.as_ptr()) {
+            return;
+        }
+    }
+    if LOADED_COUNT >= MAX_LOADED {
+        die(87, b"too_many_dso", LOADED_COUNT);
+    }
+    let fd = find_library_fd(name, name_len, ld_path);
+    if fd < 0 {
+        die(89, b"needed_fd", LOADED_COUNT);
+    }
+    let (dev, ino) = fd_identity(fd);
+    if let Some(idx) = loaded_object_by_identity(dev, ino) {
+        sys_close(fd);
+        if make_global {
+            LOADED[idx].global = true;
+        }
+        return;
+    }
+    let desired_base = DSO_BASE_START + (LOADED_COUNT as u64) * DSO_BASE_STRIDE;
+    if load_dso_from_fd(fd, desired_base).is_none() {
+        sys_close(fd);
+        die(88, b"load_dso", desired_base as usize);
+    }
+    sys_close(fd);
+    let idx = LOADED_COUNT - 1;
+    set_loaded_name(idx, name, name_len);
+    if make_global {
+        LOADED[idx].global = true;
+    }
+}
+
+/// Walk one loaded object's dynamic section and load its DT_NEEDED entries.
+unsafe fn load_object_needed(obj_idx: usize, ld_path: Option<*const u8>, make_global: bool) {
+    let (dyn_addr, dyn_memsz, strtab, strsz) = {
+        let obj = &LOADED[obj_idx];
+        (obj.dyn_addr, obj.dyn_memsz, obj.strtab, obj.strsz)
+    };
+    let end = dyn_addr + dyn_memsz;
+    let mut pos = dyn_addr;
+    while pos + 16 <= end {
+        let tag = u64::from_le_bytes(core::ptr::read_unaligned(pos as *const [u8; 8]));
+        if tag == DT_NULL {
+            break;
+        }
+        if tag == DT_NEEDED {
+            let off =
+                u64::from_le_bytes(core::ptr::read_unaligned((pos + 8) as *const [u8; 8])) as usize;
+            if off < strsz {
+                let name = strtab.add(off);
+                let len = str_len(name);
+                if len > 0 {
+                    load_needed_dso(name, len, ld_path, make_global);
+                }
+            }
+        }
+        pos += 16;
+    }
 }
 
 // ============================================================
@@ -3134,24 +3290,23 @@ unsafe fn load_and_jump(sp: usize, ldso_base: u64) -> ! {
         init_present: dt_init_present,
         init_array_present: dt_init_array_present,
         global: true,
+        dev: 0,
+        ino: 0,
         name: [0; 256],
     };
     LOADED_COUNT = 1;
 
-    // 5. Load each DT_NEEDED DSO
+    // 5. Load the executable's DT_NEEDED entries, then every loaded
+    // object's dependencies, breadth-first. DSO dependencies are not
+    // optional: real programs (curl, git, python, ...) rely on them.
     for i in 0..needed_count {
         let (name_ptr, name_len) = needed_names[i];
-        let lib_fd = find_library_fd(name_ptr, name_len, ld_path);
-        if lib_fd < 0 {
-            die(89, b"needed_fd", i);
-        }
-        let desired_base = DSO_BASE_START + (i as u64) * DSO_BASE_STRIDE;
-        if load_dso_from_fd(lib_fd, desired_base).is_none() {
-            sys_close(lib_fd);
-            die(88, b"load_dso", desired_base as usize);
-        }
-        sys_close(lib_fd);
-        set_loaded_name(LOADED_COUNT - 1, name_ptr, name_len);
+        load_needed_dso(name_ptr, name_len, ld_path, true);
+    }
+    let mut scan = 1usize;
+    while scan < LOADED_COUNT {
+        load_object_needed(scan, ld_path, true);
+        scan += 1;
     }
 
     // Register the interpreter last: symbol lookup walks LOADED in order, and
@@ -3270,7 +3425,17 @@ unsafe fn build_and_jump(entry: u64, phdr_addr: u64, phnum: u16, orig_sp: usize)
 
     let orig_auxv = read_orig_auxv(orig_sp, envc);
 
-    let stack_size = 256 * 1024usize;
+    // Give the program a usable main stack. The previous 256 KiB was small
+    // enough that runtimes like V8 (which derives its JS stack limit from
+    // pthread_getattr_np) report "Maximum call stack size exceeded".
+    let mut rlim = [0u64; 2];
+    let mut stack_size = 8 * 1024 * 1024usize;
+    if <Arch as Syscalls>::syscall2(SYS_GETRLIMIT, 3, &mut rlim as *mut [u64; 2] as i64) == 0 {
+        let cur = rlim[0] as usize;
+        if cur >= 1024 * 1024 && cur <= 64 * 1024 * 1024 {
+            stack_size = cur;
+        }
+    }
     let stack_base = sys_mmap(
         core::ptr::null_mut(),
         stack_size,

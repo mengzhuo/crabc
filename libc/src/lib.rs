@@ -67,6 +67,18 @@ const ENOTRECOVERABLE: c_int = 131;
 
 static mut ERRNO: c_int = 0;
 
+/// Normalize a raw syscall result the way musl's `__syscall_ret` does:
+/// turn `-errno` into `-1` and publish the error through `errno`.
+#[inline]
+unsafe fn syscall_ret(r: i64) -> i64 {
+    if r < 0 {
+        ERRNO = (-r) as c_int;
+        -1
+    } else {
+        r
+    }
+}
+
 #[no_mangle]
 pub unsafe extern "C" fn __errno_location() -> *mut c_int {
     core::ptr::addr_of_mut!(ERRNO)
@@ -562,10 +574,11 @@ mod sysnr {
     pub const SYS_VHANGUP: i64 = 153;
     pub const SYS_VMSPLICE: i64 = 278;
     pub const SYS_GETDENTS64: i64 = 217;
-    pub const SYS_EPOLL_CREATE: i64 = 232;
+    pub const SYS_EPOLL_CREATE: i64 = 213;
     pub const SYS_EPOLL_CREATE1: i64 = 291;
     pub const SYS_EPOLL_CTL: i64 = 233;
-    pub const SYS_EPOLL_WAIT: i64 = 234;
+    pub const SYS_EPOLL_WAIT: i64 = 232;
+    pub const SYS_EPOLL_PWAIT: i64 = 281;
     pub const SYS_EVENTFD2: i64 = 290;
     pub const SYS_SIGNALFD4: i64 = 289;
     pub const SYS_TIMERFD_CREATE: i64 = 283;
@@ -724,6 +737,7 @@ mod sysnr {
     pub const SYS_EPOLL_CREATE1: i64 = 20;
     pub const SYS_EPOLL_CTL: i64 = 21;
     pub const SYS_EPOLL_WAIT: i64 = 22;
+    pub const SYS_EPOLL_PWAIT: i64 = 22;
     pub const SYS_EVENTFD2: i64 = 19;
     pub const SYS_SIGNALFD4: i64 = 74;
     pub const SYS_TIMERFD_CREATE: i64 = 85;
@@ -877,6 +891,7 @@ mod sysnr {
     pub const SYS_EPOLL_CREATE1: i64 = 20;
     pub const SYS_EPOLL_CTL: i64 = 21;
     pub const SYS_EPOLL_WAIT: i64 = 22;
+    pub const SYS_EPOLL_PWAIT: i64 = 22;
     pub const SYS_EVENTFD2: i64 = 19;
     pub const SYS_SIGNALFD4: i64 = 74;
     pub const SYS_TIMERFD_CREATE: i64 = 85;
@@ -940,8 +955,8 @@ unsafe fn sys_open(path: *const u8, flags: i64, mode: i64) -> i64 {
 }
 
 #[inline]
-unsafe fn sys_close(fd: i64) {
-    let _ = <Arch as Syscalls>::syscall1(SYS_CLOSE, fd as i64);
+unsafe fn sys_close(fd: i64) -> i64 {
+    <Arch as Syscalls>::syscall1(SYS_CLOSE, fd as i64)
 }
 
 #[inline]
@@ -1886,12 +1901,23 @@ pub struct stack_t {
     pub ss_size: usize,
 }
 
+// Kernel ABI for rt_sigaction (x86_64/riscv64/aarch64 all use the same
+// handler/flags/restorer/8-byte-mask layout).
 #[repr(C)]
-pub struct sigaction {
+pub struct KSigAction {
     pub sa_handler: usize,
     pub sa_flags: c_ulong,
     pub sa_restorer: usize,
     pub sa_mask: [c_ulong; 1],
+}
+
+// musl's public layout: handler, 128-byte sigset_t, flags, restorer.
+#[repr(C)]
+pub struct sigaction {
+    pub sa_handler: usize,
+    pub sa_mask: [u64; 16],
+    pub sa_flags: c_int,
+    pub sa_restorer: usize,
 }
 
 pub type SigSetT = c_ulong;
@@ -1929,8 +1955,8 @@ extern "C" {
 
 #[inline]
 unsafe fn sys_rt_sigaction(sig: c_int,
-    act: *const sigaction,
-    oldact: *mut sigaction,
+    act: *const KSigAction,
+    oldact: *mut KSigAction,
     sigsetsize: usize,) -> i64 {
     <Arch as Syscalls>::syscall4(SYS_RT_SIGACTION, sig as i64, act as i64, oldact as i64, sigsetsize as i64)
 }
@@ -2020,41 +2046,48 @@ pub unsafe extern "C" fn sigaction(
     act: *const sigaction,
     oldact: *mut sigaction,
 ) -> c_int {
-    let kact: sigaction;
+    let mut kact: KSigAction = core::mem::zeroed();
     let act_ptr = if act.is_null() {
         core::ptr::null()
     } else {
-        kact = sigaction {
-            sa_handler: (*act).sa_handler,
-            sa_flags: (*act).sa_flags | SA_RESTORER,
-            sa_restorer: sig_restorer as *const () as usize,
-            sa_mask: (*act).sa_mask,
+        kact.sa_handler = (*act).sa_handler;
+        kact.sa_flags = ((*act).sa_flags as c_ulong) | SA_RESTORER;
+        kact.sa_restorer = if (*act).sa_flags as c_ulong & SA_RESTORER != 0
+            && (*act).sa_restorer != 0
+        {
+            (*act).sa_restorer
+        } else {
+            sig_restorer as *const () as usize
         };
-        &kact as *const sigaction
+        kact.sa_mask[0] = (*act).sa_mask[0];
+        &kact
     };
-    let r = sys_rt_sigaction(signum, act_ptr, oldact, core::mem::size_of::<SigSetT>());
+    let mut kold: KSigAction = core::mem::zeroed();
+    let old_ptr = if oldact.is_null() { core::ptr::null_mut() } else { &mut kold };
+    let r = sys_rt_sigaction(signum, act_ptr, old_ptr, 8);
     if r < 0 {
         ERRNO = (-r) as c_int;
-        -1
-    } else {
-        0
+        return -1;
     }
+    if !oldact.is_null() {
+        (*oldact).sa_handler = kold.sa_handler;
+        (*oldact).sa_flags = kold.sa_flags as c_int;
+        (*oldact).sa_restorer = kold.sa_restorer;
+        (*oldact).sa_mask = [0; 16];
+        (*oldact).sa_mask[0] = kold.sa_mask[0];
+    }
+    0
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn signal(signum: c_int, handler: usize) -> usize {
     let act = sigaction {
         sa_handler: handler,
-        sa_flags: SA_RESTORER,
-        sa_restorer: sig_restorer as *const () as usize,
-        sa_mask: [0],
-    };
-    let mut old = sigaction {
-        sa_handler: 0,
+        sa_mask: [0; 16],
         sa_flags: 0,
         sa_restorer: 0,
-        sa_mask: [0],
     };
+    let mut old: sigaction = core::mem::zeroed();
     if sigaction(signum, &act, &mut old) == -1 {
         SIG_ERR
     } else {
@@ -2064,12 +2097,16 @@ pub unsafe extern "C" fn signal(signum: c_int, handler: usize) -> usize {
 
 #[no_mangle]
 pub unsafe extern "C" fn kill(pid: c_int, sig: c_int) -> c_int {
-    sys_kill(pid, sig) as c_int
+    let r = sys_kill(pid, sig);
+    if r < 0 { ERRNO = (-r) as c_int; return -1; }
+    0
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn tgkill(tgid: c_int, tid: c_int, sig: c_int) -> c_int {
-    if sys_tgkill(tgid, tid, sig) < 0 { -1 } else { 0 }
+    let r = sys_tgkill(tgid, tid, sig);
+    if r < 0 { ERRNO = (-r) as c_int; return -1; }
+    0
 }
 
 #[no_mangle]
@@ -2079,7 +2116,9 @@ pub unsafe extern "C" fn getpid() -> c_int {
 
 #[no_mangle]
 pub unsafe extern "C" fn raise(sig: c_int) -> c_int {
-    if sys_tgkill(sys_getpid() as c_int, sys_gettid() as c_int, sig) < 0 {
+    let r = sys_tgkill(sys_getpid() as c_int, sys_gettid() as c_int, sig);
+    if r < 0 {
+        ERRNO = (-r) as c_int;
         -1
     } else {
         0
@@ -2397,7 +2436,9 @@ core::arch::global_asm!(
     "   jz 1f",
     "   pop qword ptr [rdi + 64]",
     "   mov qword ptr [rdi + 80], rbx",
-    "   push rbx",
+    // Do not push rbx here: it would move the stack by 8 bytes and make
+    // setjmp save an rsp that is 8 bytes below the caller's, misaligning the
+    // caller after longjmp (postgres bootstrap crashes in AVX memset).
     "   mov rbx, rdi",
     "   call setjmp",
     "   push qword ptr [rbx + 64]",
@@ -2655,17 +2696,23 @@ pub unsafe extern "C" fn execve(
     argv: *const *const c_char,
     envp: *const *const c_char,
 ) -> c_int {
-    sys_execve(path, argv, envp) as c_int
+    let r = sys_execve(path, argv, envp);
+    if r < 0 { ERRNO = (-r) as c_int; return -1; }
+    r as c_int
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn wait(status: *mut c_int) -> c_int {
-    sys_wait4(-1, status, 0, core::ptr::null_mut()) as c_int
+    let r = sys_wait4(-1, status, 0, core::ptr::null_mut());
+    if r < 0 { ERRNO = (-r) as c_int; return -1; }
+    r as c_int
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn waitpid(pid: c_int, status: *mut c_int, options: c_int) -> c_int {
-    sys_wait4(pid, status, options, core::ptr::null_mut()) as c_int
+    let r = sys_wait4(pid, status, options, core::ptr::null_mut());
+    if r < 0 { ERRNO = (-r) as c_int; return -1; }
+    r as c_int
 }
 
 #[no_mangle]
@@ -2696,7 +2743,9 @@ pub unsafe extern "C" fn getegid() -> c_uint {
 // ponytail: vfork forwards to fork; real vfork optimization not needed for tests
 #[no_mangle]
 pub unsafe extern "C" fn vfork() -> c_int {
-    sys_fork() as c_int
+    let r = sys_fork();
+    if r < 0 { ERRNO = (-r) as c_int; return -1; }
+    r as c_int
 }
 
 #[no_mangle]
@@ -3104,7 +3153,9 @@ pub unsafe extern "C" fn recvfrom(
 
 #[no_mangle]
 pub unsafe extern "C" fn shutdown(fd: c_int, how: c_int) -> c_int {
-    sys_shutdown(fd, how) as c_int
+    let r = sys_shutdown(fd, how);
+    if r < 0 { ERRNO = (-r) as c_int; return -1; }
+    0
 }
 
 #[no_mangle]
@@ -3115,12 +3166,16 @@ pub unsafe extern "C" fn setsockopt(
     optval: *const c_void,
     optlen: c_uint,
 ) -> c_int {
-    sys_setsockopt(fd, level, optname, optval, optlen) as c_int
+    let r = sys_setsockopt(fd, level, optname, optval, optlen);
+    if r < 0 { ERRNO = (-r) as c_int; return -1; }
+    0
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn getsockname(fd: c_int, addr: *mut sockaddr, len: *mut c_uint) -> c_int {
-    sys_getsockname(fd, addr, len) as c_int
+    let r = sys_getsockname(fd, addr, len);
+    if r < 0 { ERRNO = (-r) as c_int; return -1; }
+    0
 }
 
 #[no_mangle]
@@ -3459,6 +3514,12 @@ struct Thread {
     stack: *mut u8,
     stack_size: usize,
     fs_base: *mut u8,
+    // TLS block as allocated at creation. The global TLS size can grow when
+    // a DSO is dlopen'ed, so it must not be used to free an older thread's
+    // block: the address and length would be wrong and could unmap a
+    // neighbouring thread stack.
+    tls_base: *mut u8,
+    tls_size: usize,
     tsd: [*mut c_void; PTHREAD_KEYS_MAX],
     cancelbuf: *mut __ptcb,
     robust_list: robust_list_head,
@@ -3476,6 +3537,8 @@ static mut THREADS: [Thread; MAX_THREADS] = [Thread {
     stack: core::ptr::null_mut(),
     stack_size: 0,
     fs_base: core::ptr::null_mut(),
+    tls_base: core::ptr::null_mut(),
+    tls_size: 0,
     tsd: [core::ptr::null_mut(); PTHREAD_KEYS_MAX],
     cancelbuf: core::ptr::null_mut(),
     robust_list: robust_list_head {
@@ -3713,6 +3776,8 @@ pub unsafe extern "C" fn pthread_create(
     if stack == MMAP_FAILED { release_thread_slot(slot); return EAGAIN; }
     let fs_base = __rc_create_thread_tls();
     if fs_base.is_null() { sys_munmap(stack, stack_size); release_thread_slot(slot); return EAGAIN; }
+    let tls_base = fs_base.sub(__rc_tls_base_offset());
+    let tls_size = __rc_tls_block_size();
     (*slot).detach_state = DT_JOINABLE;
     (*slot).result = core::ptr::null_mut();
     (*slot).cancel = 0;
@@ -3725,6 +3790,8 @@ pub unsafe extern "C" fn pthread_create(
     (*slot).stack = stack;
     (*slot).stack_size = stack_size;
     (*slot).fs_base = fs_base;
+    (*slot).tls_base = tls_base;
+    (*slot).tls_size = tls_size;
     let stack_top = stack.add(stack_size);
     let tid_ptr = &raw mut (*slot).tid;
     let flags = CLONE_VM | CLONE_FS | CLONE_FILES | CLONE_SIGHAND | CLONE_THREAD
@@ -3733,7 +3800,7 @@ pub unsafe extern "C" fn pthread_create(
     if tid < 0 {
         (*slot).tid = -1;
         sys_munmap(stack, stack_size);
-        sys_munmap(fs_base.sub(__rc_tls_base_offset()), __rc_tls_block_size());
+        sys_munmap(tls_base, tls_size);
         release_thread_slot(slot);
         return EAGAIN;
     }
@@ -3761,15 +3828,27 @@ pub unsafe extern "C" fn pthread_join(thread: PthreadT, retval: *mut *mut c_void
     if !retval.is_null() { *retval = (*slot).result; }
     let stack = (*slot).stack;
     let stack_size = (*slot).stack_size;
-    let fs_base = (*slot).fs_base;
+    let tls_base = (*slot).tls_base;
+    let tls_size = (*slot).tls_size;
     (*slot).tid = -1;
     (*slot).detach_state = DT_JOINABLE;
     (*slot).result = core::ptr::null_mut();
     (*slot).stack = core::ptr::null_mut();
     (*slot).stack_size = 0;
     (*slot).fs_base = core::ptr::null_mut();
+    (*slot).tls_base = core::ptr::null_mut();
+    (*slot).tls_size = 0;
     if !stack.is_null() && stack_size > 0 { sys_munmap(stack, stack_size); }
-    if !fs_base.is_null() { let bs = __rc_tls_block_size(); let bo = __rc_tls_base_offset(); if bs > 0 { sys_munmap(fs_base.sub(bo), bs); } }
+    // Keep the TLS mapping but return its pages to the kernel. Some runtimes
+    // (notably V8) retain pointers into an exited thread's TLS and read them
+    // during process teardown; unmapping makes that a SIGSEGV, while zero
+    // pages are handled gracefully. The VA range is tiny (TLS_TOTAL_SIZE).
+    // Retain the TLS block instead of unmapping it. V8 keeps pointers into a
+    // joined thread's TLS and dereferences them during process teardown;
+    // unmapping turns that into SIGSEGV, and MADV_DONTNEED races with it.
+    // The block is small (TLS_TOTAL_SIZE + TCB_SIZE) and bounded by thread
+    // creation, so keeping it mapped is the safe trade-off.
+    let _ = (tls_base, tls_size);
     release_thread_slot(slot);
     0
 }
@@ -3782,13 +3861,17 @@ pub unsafe extern "C" fn pthread_detach(thread: PthreadT) -> c_int {
     if old == DT_EXITED {
         let stack = (*slot).stack;
         let stack_size = (*slot).stack_size;
-        let fs_base = (*slot).fs_base;
+        let tls_base = (*slot).tls_base;
+        let tls_size = (*slot).tls_size;
         (*slot).tid = -1;
         (*slot).stack = core::ptr::null_mut();
         (*slot).stack_size = 0;
         (*slot).fs_base = core::ptr::null_mut();
+        (*slot).tls_base = core::ptr::null_mut();
+        (*slot).tls_size = 0;
         if !stack.is_null() && stack_size > 0 { sys_munmap(stack, stack_size); }
-        if !fs_base.is_null() { let bs = __rc_tls_block_size(); let bo = __rc_tls_base_offset(); sys_munmap(fs_base.sub(bo), bs); }
+        // See pthread_join: keep the TLS block mapped after the thread dies.
+        let _ = (tls_base, tls_size);
         release_thread_slot(slot);
     }
     0
@@ -4915,13 +4998,13 @@ static CANCEL_INIT: AtomicI32 = AtomicI32::new(0);
 
 unsafe fn ensure_cancel_handler() {
     if CANCEL_INIT.swap(1, Ordering::AcqRel) == 0 {
-        let act = sigaction {
+        let act = KSigAction {
             sa_handler: cancel_handler as *const () as usize,
             sa_flags: SA_RESTORER,
             sa_restorer: sig_restorer as *const () as usize,
             sa_mask: [!0u64],
         };
-        sys_rt_sigaction(SIGCANCEL, &act as *const sigaction, core::ptr::null_mut(), 8);
+        sys_rt_sigaction(SIGCANCEL, &act as *const KSigAction, core::ptr::null_mut(), 8);
     }
 }
 
@@ -5905,28 +5988,27 @@ pub unsafe extern "C" fn iconv_close(_cd: IconvT) -> c_int { 0 }
 
 #[no_mangle]
 pub unsafe extern "C" fn write(fd: c_int, buf: *const c_void, count: SizeT) -> SSizeT {
-    sys_write(fd as i64, buf as *const u8, count) as SSizeT
+    syscall_ret(sys_write(fd as i64, buf as *const u8, count)) as SSizeT
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn read(fd: c_int, buf: *mut c_void, count: SizeT) -> SSizeT {
-    sys_read(fd as i64, buf as *mut u8, count) as SSizeT
+    syscall_ret(sys_read(fd as i64, buf as *mut u8, count)) as SSizeT
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn open(path: *const c_char, flags: c_int, mode: c_int) -> c_int {
-    sys_open(path as *const u8, flags as i64, mode as i64) as c_int
+    syscall_ret(sys_open(path as *const u8, flags as i64, mode as i64)) as c_int
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn close(fd: c_int) -> c_int {
-    sys_close(fd as i64);
-    0
+    syscall_ret(sys_close(fd as i64)) as c_int
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn lseek(fd: c_int, offset: i64, whence: c_int) -> i64 {
-    sys_lseek(fd as i64, offset, whence as i64)
+    syscall_ret(sys_lseek(fd as i64, offset, whence as i64))
 }
 
 // ============================================================
@@ -8858,7 +8940,7 @@ pub unsafe extern "C" fn pclose(f: *mut FILE) -> c_int {
     let mut w: c_int;
     loop {
         w = waitpid(pid, &mut status, 0);
-        if w >= 0 || w != -EINTR { break; }
+        if w >= 0 || ERRNO != EINTR_VAL { break; }
     }
     if w < 0 || r != 0 { return -1; }
     status
@@ -11845,14 +11927,14 @@ pub unsafe extern "C" fn system(cmd: *const c_char) -> c_int {
         }
     }
 
-    let sa_ignore = sigaction {
+    let sa_ignore = KSigAction {
         sa_handler: SIG_IGN,
         sa_flags: SA_RESTORER,
         sa_restorer: sig_restorer as *const () as usize,
         sa_mask: [0],
     };
-    let mut oldint: sigaction = core::mem::zeroed();
-    let mut oldquit: sigaction = core::mem::zeroed();
+    let mut oldint: KSigAction = core::mem::zeroed();
+    let mut oldquit: KSigAction = core::mem::zeroed();
 
     sys_rt_sigaction(SIGINT, &sa_ignore, &mut oldint, 8);
     sys_rt_sigaction(SIGQUIT, &sa_ignore, &mut oldquit, 8);
@@ -16583,7 +16665,7 @@ pub unsafe extern "C" fn call_once(flag: *mut u32, func: Option<unsafe extern "C
 // accept4 - Linux-specific extension
 #[no_mangle]
 pub unsafe extern "C" fn accept4(fd: i32, addr: *mut core::ffi::c_void, addrlen: *mut u32, flags: i32) -> i32 {
-    <Arch as Syscalls>::syscall4(SYS_ACCEPT4, fd as i64, addr as i64, addrlen as i64, flags as i64) as i32
+    syscall_ret(<Arch as Syscalls>::syscall4(SYS_ACCEPT4, fd as i64, addr as i64, addrlen as i64, flags as i64)) as i32
 }
 
 // getifaddrs / freeifaddrs
@@ -16594,40 +16676,67 @@ pub unsafe extern "C" fn accept4(fd: i32, addr: *mut core::ffi::c_void, addrlen:
 #[no_mangle]
 pub unsafe extern "C" fn epoll_create(size: i32) -> i32 {
     #[cfg(target_arch = "x86_64")]
-    { <Arch as Syscalls>::syscall1(SYS_EPOLL_CREATE, size as i64) as i32 }
+    { syscall_ret(<Arch as Syscalls>::syscall1(SYS_EPOLL_CREATE, size as i64)) as i32 }
     #[cfg(any(target_arch = "aarch64", target_arch = "riscv64"))]
     {
         if size < 1 {
             ERRNO = EINVAL;
             return -1;
         }
-        <Arch as Syscalls>::syscall1(SYS_EPOLL_CREATE1, 0) as i32
+        syscall_ret(<Arch as Syscalls>::syscall1(SYS_EPOLL_CREATE1, 0)) as i32
     }
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn epoll_create1(flags: i32) -> i32 {
-    <Arch as Syscalls>::syscall1(SYS_EPOLL_CREATE1, flags as i64) as i32
+    syscall_ret(<Arch as Syscalls>::syscall1(SYS_EPOLL_CREATE1, flags as i64)) as i32
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn epoll_ctl(epfd: i32, op: i32, fd: i32, event: *mut core::ffi::c_void) -> i32 {
-    <Arch as Syscalls>::syscall4(SYS_EPOLL_CTL, epfd as i64, op as i64, fd as i64, event as i64) as i32
+    syscall_ret(<Arch as Syscalls>::syscall4(SYS_EPOLL_CTL, epfd as i64, op as i64, fd as i64, event as i64)) as i32
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn epoll_wait(epfd: i32, events: *mut core::ffi::c_void, maxevents: i32, timeout: i32) -> i32 {
-    <Arch as Syscalls>::syscall4(SYS_EPOLL_WAIT, epfd as i64, events as i64, maxevents as i64, timeout as i64) as i32
+    #[cfg(target_arch = "x86_64")]
+    {
+        syscall_ret(<Arch as Syscalls>::syscall4(
+            SYS_EPOLL_WAIT,
+            epfd as i64,
+            events as i64,
+            maxevents as i64,
+            timeout as i64,
+        )) as i32
+    }
+    #[cfg(any(target_arch = "aarch64", target_arch = "riscv64"))]
+    {
+        epoll_pwait(epfd, events, maxevents, timeout, core::ptr::null())
+    }
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn epoll_pwait(epfd: i32, events: *mut core::ffi::c_void, maxevents: i32, timeout: i32, sigmask: *const u64) -> i32 {
-    <Arch as Syscalls>::syscall6(SYS_EPOLL_WAIT, epfd as i64, events as i64, maxevents as i64, timeout as i64, sigmask as i64, 8) as i32
+pub unsafe extern "C" fn epoll_pwait(
+    epfd: i32,
+    events: *mut core::ffi::c_void,
+    maxevents: i32,
+    timeout: i32,
+    sigmask: *const u64,
+) -> i32 {
+    syscall_ret(<Arch as Syscalls>::syscall6(
+        SYS_EPOLL_PWAIT,
+        epfd as i64,
+        events as i64,
+        maxevents as i64,
+        timeout as i64,
+        sigmask as i64,
+        8,
+    )) as i32
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn eventfd(initval: u32, flags: i32) -> i32 {
-    <Arch as Syscalls>::syscall2(SYS_EVENTFD2, initval as i64, flags as i64) as i32
+    syscall_ret(<Arch as Syscalls>::syscall2(SYS_EVENTFD2, initval as i64, flags as i64)) as i32
 }
 
 #[no_mangle]
@@ -16644,22 +16753,22 @@ pub unsafe extern "C" fn eventfd_write(fd: i32, value: u64) -> i32 {
 
 #[no_mangle]
 pub unsafe extern "C" fn signalfd(fd: i32, mask: *const u64, flags: i32) -> i32 {
-    <Arch as Syscalls>::syscall4(SYS_SIGNALFD4, fd as i64, mask as i64, 8, flags as i64) as i32
+    syscall_ret(<Arch as Syscalls>::syscall4(SYS_SIGNALFD4, fd as i64, mask as i64, 8, flags as i64)) as i32
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn timerfd_create(clockid: i32, flags: i32) -> i32 {
-    <Arch as Syscalls>::syscall2(SYS_TIMERFD_CREATE, clockid as i64, flags as i64) as i32
+    syscall_ret(<Arch as Syscalls>::syscall2(SYS_TIMERFD_CREATE, clockid as i64, flags as i64)) as i32
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn timerfd_settime(fd: i32, flags: i32, new_value: *const core::ffi::c_void, old_value: *mut core::ffi::c_void) -> i32 {
-    <Arch as Syscalls>::syscall4(SYS_TIMERFD_SETTIME, fd as i64, flags as i64, new_value as i64, old_value as i64) as i32
+    syscall_ret(<Arch as Syscalls>::syscall4(SYS_TIMERFD_SETTIME, fd as i64, flags as i64, new_value as i64, old_value as i64)) as i32
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn timerfd_gettime(fd: i32, curr_value: *mut core::ffi::c_void) -> i32 {
-    <Arch as Syscalls>::syscall2(SYS_TIMERFD_GETTIME, fd as i64, curr_value as i64) as i32
+    syscall_ret(<Arch as Syscalls>::syscall2(SYS_TIMERFD_GETTIME, fd as i64, curr_value as i64)) as i32
 }
 
 // ============================================================
@@ -16672,17 +16781,17 @@ pub unsafe extern "C" fn prctl(option: i32, mut args: ...) -> i32 {
     let a2 = args.next_arg::<i64>();
     let a3 = args.next_arg::<i64>();
     let a4 = args.next_arg::<i64>();
-    <Arch as Syscalls>::syscall5(SYS_PRCTL, option as i64, a1, a2, a3, a4) as i32
+    syscall_ret(<Arch as Syscalls>::syscall5(SYS_PRCTL, option as i64, a1, a2, a3, a4)) as i32
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn quotactl(cmd: i32, special: *const core::ffi::c_char, id: i32, addr: *mut core::ffi::c_char) -> i32 {
-    <Arch as Syscalls>::syscall4(sysno(179, 60), cmd as i64, special as i64, id as i64, addr as i64) as i32
+    syscall_ret(<Arch as Syscalls>::syscall4(sysno(179, 60), cmd as i64, special as i64, id as i64, addr as i64)) as i32
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn klogctl(type_: i32, bufp: *mut core::ffi::c_char, len: i32) -> i32 {
-    <Arch as Syscalls>::syscall3(sysno(103, 116), type_ as i64, bufp as i64, len as i64) as i32
+    syscall_ret(<Arch as Syscalls>::syscall3(sysno(103, 116), type_ as i64, bufp as i64, len as i64)) as i32
 }
 
 static mut SYSLOG_IDENT: [core::ffi::c_char; 64] = [0; 64];
@@ -16778,47 +16887,47 @@ pub unsafe extern "C" fn setlogmask(mask: i32) -> i32 {
 
 #[no_mangle]
 pub unsafe extern "C" fn acct(filename: *const core::ffi::c_char) -> i32 {
-    <Arch as Syscalls>::syscall1(SYS_ACCT, filename as i64) as i32
+    syscall_ret(<Arch as Syscalls>::syscall1(SYS_ACCT, filename as i64)) as i32
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn swapon(path: *const core::ffi::c_char, flags: i32) -> i32 {
-    <Arch as Syscalls>::syscall2(SYS_SWAPON, path as i64, flags as i64) as i32
+    syscall_ret(<Arch as Syscalls>::syscall2(SYS_SWAPON, path as i64, flags as i64)) as i32
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn swapoff(path: *const core::ffi::c_char) -> i32 {
-    <Arch as Syscalls>::syscall1(SYS_SWAPOFF, path as i64) as i32
+    syscall_ret(<Arch as Syscalls>::syscall1(SYS_SWAPOFF, path as i64)) as i32
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn syncfs(fd: i32) -> i32 {
-    <Arch as Syscalls>::syscall1(SYS_SYNCFS, fd as i64) as i32
+    syscall_ret(<Arch as Syscalls>::syscall1(SYS_SYNCFS, fd as i64)) as i32
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn sync_file_range(fd: i32, offset: i64, nbytes: u64, flags: u32) -> i32 {
-    <Arch as Syscalls>::syscall4(sysno(277, 84), fd as i64, offset, nbytes as i64, flags as i64) as i32
+    syscall_ret(<Arch as Syscalls>::syscall4(sysno(277, 84), fd as i64, offset, nbytes as i64, flags as i64)) as i32
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn posix_fadvise(fd: i32, offset: i64, len: u64, advice: i32) -> i32 {
-    <Arch as Syscalls>::syscall4(sysno(221, 223), fd as i64, offset, len as i64, advice as i64) as i32
+    syscall_ret(<Arch as Syscalls>::syscall4(sysno(221, 223), fd as i64, offset, len as i64, advice as i64)) as i32
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn posix_fallocate(fd: i32, offset: i64, len: u64) -> i32 {
-    <Arch as Syscalls>::syscall3(SYS_FALLOCATE, fd as i64, offset, len as i64) as i32
+    syscall_ret(<Arch as Syscalls>::syscall3(SYS_FALLOCATE, fd as i64, offset, len as i64)) as i32
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn readahead(fd: i32, offset: i64, count: usize) -> i32 {
-    <Arch as Syscalls>::syscall3(sysno(187, 213), fd as i64, offset, count as i64) as i32
+    syscall_ret(<Arch as Syscalls>::syscall3(sysno(187, 213), fd as i64, offset, count as i64)) as i32
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn fallocate(fd: i32, mode: i32, offset: i64, len: u64) -> i32 {
-    <Arch as Syscalls>::syscall4(SYS_FALLOCATE, fd as i64, mode as i64, offset, len as i64) as i32
+    syscall_ret(<Arch as Syscalls>::syscall4(SYS_FALLOCATE, fd as i64, mode as i64, offset, len as i64)) as i32
 }
 
 // ============================================================
@@ -16827,7 +16936,7 @@ pub unsafe extern "C" fn fallocate(fd: i32, mode: i32, offset: i64, len: u64) ->
 
 #[no_mangle]
 pub unsafe extern "C" fn tcgetattr(fd: i32, termios_p: *mut core::ffi::c_void) -> i32 {
-    <Arch as Syscalls>::syscall3(SYS_IOCTL, fd as i64, 0x5401, termios_p as i64) as i32
+    syscall_ret(<Arch as Syscalls>::syscall3(SYS_IOCTL, fd as i64, 0x5401, termios_p as i64)) as i32
 }
 
 #[no_mangle]
@@ -16838,27 +16947,27 @@ pub unsafe extern "C" fn tcsetattr(fd: i32, optional_actions: i32, termios_p: *c
         2 => 0x5404,
         _ => 0x5402,
     };
-    <Arch as Syscalls>::syscall3(SYS_IOCTL, fd as i64, cmd, termios_p as i64) as i32
+    syscall_ret(<Arch as Syscalls>::syscall3(SYS_IOCTL, fd as i64, cmd, termios_p as i64)) as i32
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn tcdrain(fd: i32) -> i32 {
-    <Arch as Syscalls>::syscall3(SYS_IOCTL, fd as i64, 0x5409, 1) as i32
+    syscall_ret(<Arch as Syscalls>::syscall3(SYS_IOCTL, fd as i64, 0x5409, 1)) as i32
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn tcflush(fd: i32, queue_selector: i32) -> i32 {
-    <Arch as Syscalls>::syscall3(SYS_IOCTL, fd as i64, 0x540B, queue_selector as i64) as i32
+    syscall_ret(<Arch as Syscalls>::syscall3(SYS_IOCTL, fd as i64, 0x540B, queue_selector as i64)) as i32
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn tcflow(fd: i32, action: i32) -> i32 {
-    <Arch as Syscalls>::syscall3(SYS_IOCTL, fd as i64, 0x540A, action as i64) as i32
+    syscall_ret(<Arch as Syscalls>::syscall3(SYS_IOCTL, fd as i64, 0x540A, action as i64)) as i32
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn tcsendbreak(fd: i32, duration: i32) -> i32 {
-    <Arch as Syscalls>::syscall3(SYS_IOCTL, fd as i64, 0x5425, duration as i64) as i32
+    syscall_ret(<Arch as Syscalls>::syscall3(SYS_IOCTL, fd as i64, 0x5425, duration as i64)) as i32
 }
 
 #[no_mangle]
@@ -16877,7 +16986,7 @@ pub unsafe extern "C" fn tcgetpgrp(fd: i32) -> i32 {
 
 #[no_mangle]
 pub unsafe extern "C" fn tcsetpgrp(fd: i32, pgrp: i32) -> i32 {
-    <Arch as Syscalls>::syscall3(SYS_IOCTL, fd as i64, 0x5410, &pgrp as *const i32 as i64) as i32
+    syscall_ret(<Arch as Syscalls>::syscall3(SYS_IOCTL, fd as i64, 0x5410, &pgrp as *const i32 as i64)) as i32
 }
 
 // ============================================================
@@ -16947,47 +17056,47 @@ pub unsafe extern "C" fn pthread_setaffinity_np(thread: usize, cpusetsize: usize
 
 #[no_mangle]
 pub unsafe extern "C" fn sched_yield() -> i32 {
-    <Arch as Syscalls>::syscall0(sysno(24, 124)) as i32
+    syscall_ret(<Arch as Syscalls>::syscall0(sysno(24, 124))) as i32
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn sched_get_priority_max(policy: i32) -> i32 {
-    <Arch as Syscalls>::syscall1(sysno(146, 125), policy as i64) as i32
+    syscall_ret(<Arch as Syscalls>::syscall1(sysno(146, 125), policy as i64)) as i32
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn sched_get_priority_min(policy: i32) -> i32 {
-    <Arch as Syscalls>::syscall1(sysno(147, 126), policy as i64) as i32
+    syscall_ret(<Arch as Syscalls>::syscall1(sysno(147, 126), policy as i64)) as i32
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn sched_getparam(pid: i32, param: *mut core::ffi::c_void) -> i32 {
-    <Arch as Syscalls>::syscall2(sysno(143, 121), pid as i64, param as i64) as i32
+    syscall_ret(<Arch as Syscalls>::syscall2(sysno(143, 121), pid as i64, param as i64)) as i32
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn sched_setparam(pid: i32, param: *const core::ffi::c_void) -> i32 {
-    <Arch as Syscalls>::syscall2(sysno(142, 118), pid as i64, param as i64) as i32
+    syscall_ret(<Arch as Syscalls>::syscall2(sysno(142, 118), pid as i64, param as i64)) as i32
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn sched_getscheduler(pid: i32) -> i32 {
-    <Arch as Syscalls>::syscall1(sysno(145, 120), pid as i64) as i32
+    syscall_ret(<Arch as Syscalls>::syscall1(sysno(145, 120), pid as i64)) as i32
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn sched_setscheduler(pid: i32, policy: i32, param: *const core::ffi::c_void) -> i32 {
-    <Arch as Syscalls>::syscall3(sysno(144, 119), pid as i64, policy as i64, param as i64) as i32
+    syscall_ret(<Arch as Syscalls>::syscall3(sysno(144, 119), pid as i64, policy as i64, param as i64)) as i32
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn sched_setaffinity(pid: i32, cpusetsize: usize, cpuset: *const u8) -> i32 {
-    <Arch as Syscalls>::syscall3(sysno(203, 122), pid as i64, cpusetsize as i64, cpuset as i64) as i32
+    syscall_ret(<Arch as Syscalls>::syscall3(sysno(203, 122), pid as i64, cpusetsize as i64, cpuset as i64)) as i32
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn sched_getaffinity(pid: i32, cpusetsize: usize, cpuset: *mut u8) -> i32 {
-    <Arch as Syscalls>::syscall3(sysno(204, 123), pid as i64, cpusetsize as i64, cpuset as i64) as i32
+    syscall_ret(<Arch as Syscalls>::syscall3(sysno(204, 123), pid as i64, cpusetsize as i64, cpuset as i64)) as i32
 }
 
 #[no_mangle]
@@ -16999,7 +17108,7 @@ pub unsafe extern "C" fn sched_getcpu() -> i32 {
 
 #[no_mangle]
 pub unsafe extern "C" fn sched_rr_get_interval(pid: i32, tp: *mut core::ffi::c_void) -> i32 {
-    <Arch as Syscalls>::syscall2(sysno(148, 127), pid as i64, tp as i64) as i32
+    syscall_ret(<Arch as Syscalls>::syscall2(sysno(148, 127), pid as i64, tp as i64)) as i32
 }
 
 // ============================================================
@@ -17008,32 +17117,32 @@ pub unsafe extern "C" fn sched_rr_get_interval(pid: i32, tp: *mut core::ffi::c_v
 
 #[no_mangle]
 pub unsafe extern "C" fn timer_create(clockid: i32, sevp: *mut core::ffi::c_void, timerid: *mut i32) -> i32 {
-    <Arch as Syscalls>::syscall3(sysno(222, 107), clockid as i64, sevp as i64, timerid as i64) as i32
+    syscall_ret(<Arch as Syscalls>::syscall3(sysno(222, 107), clockid as i64, sevp as i64, timerid as i64)) as i32
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn timer_delete(timerid: i32) -> i32 {
-    <Arch as Syscalls>::syscall1(sysno(226, 111), timerid as i64) as i32
+    syscall_ret(<Arch as Syscalls>::syscall1(sysno(226, 111), timerid as i64)) as i32
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn timer_settime(timerid: i32, flags: i32, new_value: *const core::ffi::c_void, old_value: *mut core::ffi::c_void) -> i32 {
-    <Arch as Syscalls>::syscall4(sysno(223, 110), timerid as i64, flags as i64, new_value as i64, old_value as i64) as i32
+    syscall_ret(<Arch as Syscalls>::syscall4(sysno(223, 110), timerid as i64, flags as i64, new_value as i64, old_value as i64)) as i32
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn timer_gettime(timerid: i32, curr_value: *mut core::ffi::c_void) -> i32 {
-    <Arch as Syscalls>::syscall2(sysno(224, 108), timerid as i64, curr_value as i64) as i32
+    syscall_ret(<Arch as Syscalls>::syscall2(sysno(224, 108), timerid as i64, curr_value as i64)) as i32
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn timer_getoverrun(timerid: i32) -> i32 {
-    <Arch as Syscalls>::syscall1(sysno(225, 109), timerid as i64) as i32
+    syscall_ret(<Arch as Syscalls>::syscall1(sysno(225, 109), timerid as i64)) as i32
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn clock_adjtime(_clockid: i32, buf: *mut core::ffi::c_void) -> i32 {
-    <Arch as Syscalls>::syscall2(SYS_ADJTIMEX, buf as i64, 0) as i32
+    syscall_ret(<Arch as Syscalls>::syscall2(SYS_ADJTIMEX, buf as i64, 0)) as i32
 }
 
 #[no_mangle]
@@ -17571,27 +17680,27 @@ pub unsafe extern "C" fn memccpy(dest: *mut u8, src: *const u8, c: i32, n: usize
 
 #[no_mangle]
 pub unsafe extern "C" fn faccessat(dirfd: i32, pathname: *const core::ffi::c_char, mode: i32, flags: i32) -> i32 {
-    <Arch as Syscalls>::syscall4(SYS_FACCESSAT, dirfd as i64, pathname as i64, mode as i64, flags as i64) as i32
+    syscall_ret(<Arch as Syscalls>::syscall4(SYS_FACCESSAT, dirfd as i64, pathname as i64, mode as i64, flags as i64)) as i32
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn fchmodat(dirfd: i32, pathname: *const core::ffi::c_char, mode: u32, flags: i32) -> i32 {
-    <Arch as Syscalls>::syscall4(SYS_FCHMODAT, dirfd as i64, pathname as i64, mode as i64, flags as i64) as i32
+    syscall_ret(<Arch as Syscalls>::syscall4(SYS_FCHMODAT, dirfd as i64, pathname as i64, mode as i64, flags as i64)) as i32
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn fchownat(dirfd: i32, pathname: *const core::ffi::c_char, uid: u32, gid: u32, flags: i32) -> i32 {
-    <Arch as Syscalls>::syscall5(sysno(260, 54), dirfd as i64, pathname as i64, uid as i64, gid as i64, flags as i64) as i32
+    syscall_ret(<Arch as Syscalls>::syscall5(sysno(260, 54), dirfd as i64, pathname as i64, uid as i64, gid as i64, flags as i64)) as i32
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn linkat(olddirfd: i32, oldpath: *const core::ffi::c_char, newdirfd: i32, newpath: *const core::ffi::c_char, flags: i32) -> i32 {
-    <Arch as Syscalls>::syscall5(SYS_LINKAT, olddirfd as i64, oldpath as i64, newdirfd as i64, newpath as i64, flags as i64) as i32
+    syscall_ret(<Arch as Syscalls>::syscall5(SYS_LINKAT, olddirfd as i64, oldpath as i64, newdirfd as i64, newpath as i64, flags as i64)) as i32
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn mkdirat(dirfd: i32, pathname: *const core::ffi::c_char, mode: u32) -> i32 {
-    <Arch as Syscalls>::syscall3(SYS_MKDIRAT, dirfd as i64, pathname as i64, mode as i64) as i32
+    syscall_ret(<Arch as Syscalls>::syscall3(SYS_MKDIRAT, dirfd as i64, pathname as i64, mode as i64)) as i32
 }
 
 #[no_mangle]
@@ -17601,32 +17710,32 @@ pub unsafe extern "C" fn mkfifoat(dirfd: i32, pathname: *const core::ffi::c_char
 
 #[no_mangle]
 pub unsafe extern "C" fn mknodat(dirfd: i32, pathname: *const core::ffi::c_char, mode: u32, dev: u64) -> i32 {
-    <Arch as Syscalls>::syscall4(sysno(259, 33), dirfd as i64, pathname as i64, mode as i64, dev as i64) as i32
+    syscall_ret(<Arch as Syscalls>::syscall4(sysno(259, 33), dirfd as i64, pathname as i64, mode as i64, dev as i64)) as i32
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn readlinkat(dirfd: i32, pathname: *const core::ffi::c_char, buf: *mut core::ffi::c_char, bufsiz: usize) -> isize {
-    <Arch as Syscalls>::syscall4(SYS_READLINKAT, dirfd as i64, pathname as i64, buf as i64, bufsiz as i64) as isize
+    syscall_ret(<Arch as Syscalls>::syscall4(SYS_READLINKAT, dirfd as i64, pathname as i64, buf as i64, bufsiz as i64)) as isize
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn renameat(olddirfd: i32, oldpath: *const core::ffi::c_char, newdirfd: i32, newpath: *const core::ffi::c_char) -> i32 {
-    <Arch as Syscalls>::syscall4(SYS_RENAMEAT2, olddirfd as i64, oldpath as i64, newdirfd as i64, newpath as i64) as i32
+    syscall_ret(<Arch as Syscalls>::syscall4(SYS_RENAMEAT2, olddirfd as i64, oldpath as i64, newdirfd as i64, newpath as i64)) as i32
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn renameat2(olddirfd: i32, oldpath: *const core::ffi::c_char, newdirfd: i32, newpath: *const core::ffi::c_char, flags: u32) -> i32 {
-    <Arch as Syscalls>::syscall5(SYS_RENAMEAT2, olddirfd as i64, oldpath as i64, newdirfd as i64, newpath as i64, flags as i64) as i32
+    syscall_ret(<Arch as Syscalls>::syscall5(SYS_RENAMEAT2, olddirfd as i64, oldpath as i64, newdirfd as i64, newpath as i64, flags as i64)) as i32
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn symlinkat(target: *const core::ffi::c_char, newdirfd: i32, linkpath: *const core::ffi::c_char) -> i32 {
-    <Arch as Syscalls>::syscall3(SYS_SYMLINKAT, target as i64, newdirfd as i64, linkpath as i64) as i32
+    syscall_ret(<Arch as Syscalls>::syscall3(SYS_SYMLINKAT, target as i64, newdirfd as i64, linkpath as i64)) as i32
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn unlinkat(dirfd: i32, pathname: *const core::ffi::c_char, flags: i32) -> i32 {
-    <Arch as Syscalls>::syscall3(SYS_UNLINKAT, dirfd as i64, pathname as i64, flags as i64) as i32
+    syscall_ret(<Arch as Syscalls>::syscall3(SYS_UNLINKAT, dirfd as i64, pathname as i64, flags as i64)) as i32
 }
 
 #[no_mangle]
@@ -17645,32 +17754,32 @@ pub unsafe extern "C" fn futimes(fd: i32, times: *const core::ffi::c_void) -> i3
 
 #[no_mangle]
 pub unsafe extern "C" fn inotify_init() -> i32 {
-    <Arch as Syscalls>::syscall1(sysno(253, 26), 0) as i32
+    syscall_ret(<Arch as Syscalls>::syscall1(sysno(253, 26), 0)) as i32
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn inotify_init1(flags: i32) -> i32 {
-    <Arch as Syscalls>::syscall1(sysno(294, 26), flags as i64) as i32
+    syscall_ret(<Arch as Syscalls>::syscall1(sysno(294, 26), flags as i64)) as i32
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn inotify_add_watch(fd: i32, pathname: *const core::ffi::c_char, mask: u32) -> i32 {
-    <Arch as Syscalls>::syscall3(sysno(254, 27), fd as i64, pathname as i64, mask as i64) as i32
+    syscall_ret(<Arch as Syscalls>::syscall3(sysno(254, 27), fd as i64, pathname as i64, mask as i64)) as i32
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn inotify_rm_watch(fd: i32, wd: i32) -> i32 {
-    <Arch as Syscalls>::syscall2(sysno(255, 28), fd as i64, wd as i64) as i32
+    syscall_ret(<Arch as Syscalls>::syscall2(sysno(255, 28), fd as i64, wd as i64)) as i32
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn fanotify_init(flags: i32, event_f_flags: i32) -> i32 {
-    <Arch as Syscalls>::syscall2(sysno(300, 262), flags as i64, event_f_flags as i64) as i32
+    syscall_ret(<Arch as Syscalls>::syscall2(sysno(300, 262), flags as i64, event_f_flags as i64)) as i32
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn fanotify_mark(fd: i32, flags: i32, mask: u64, dirfd: i32, pathname: *const core::ffi::c_char) -> i32 {
-    <Arch as Syscalls>::syscall5(sysno(301, 263), fd as i64, flags as i64, mask as i64, dirfd as i64, pathname as i64) as i32
+    syscall_ret(<Arch as Syscalls>::syscall5(sysno(301, 263), fd as i64, flags as i64, mask as i64, dirfd as i64, pathname as i64)) as i32
 }
 
 // ============================================================
@@ -17701,22 +17810,18 @@ pub unsafe extern "C" fn ffsll(x: i64) -> i32 {
 
 #[no_mangle]
 pub unsafe extern "C" fn fchdir(fd: i32) -> i32 {
-    <Arch as Syscalls>::syscall1(SYS_FCHDIR, fd as i64) as i32
+    syscall_ret(<Arch as Syscalls>::syscall1(SYS_FCHDIR, fd as i64)) as i32
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn fchown(fd: i32, uid: u32, gid: u32) -> i32 {
-    <Arch as Syscalls>::syscall3(SYS_FCHOWN, fd as i64, uid as i64, gid as i64) as i32
+    syscall_ret(<Arch as Syscalls>::syscall3(SYS_FCHOWN, fd as i64, uid as i64, gid as i64)) as i32
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn fdopendir(fd: i32) -> *mut core::ffi::c_void {
-    // Convert fd to DIR*
-    if fd < 0 { return core::ptr::null_mut(); }
-    DIR_FD = fd;
-    DIR_POS = 0;
-    DIR_LEN = 0;
-    &DIR_FD as *const i32 as *mut core::ffi::c_void
+    if fd < 0 { ERRNO = 9; return core::ptr::null_mut(); }
+    dir_stream_new(fd)
 }
 
 #[no_mangle]
@@ -17731,17 +17836,40 @@ pub unsafe extern "C" fn getdtablesize() -> i32 {
 
 #[no_mangle]
 pub unsafe extern "C" fn getentropy(buf: *mut u8, buflen: usize) -> i32 {
-    getrandom(buf, buflen, 0) as i32
+    if buflen > 256 {
+        ERRNO = EIO_VAL;
+        return -1;
+    }
+    let mut pos = buf;
+    let mut left = buflen;
+    while left > 0 {
+        let r = getrandom(pos, left, 0);
+        if r < 0 {
+            if ERRNO == EINTR_VAL {
+                continue;
+            }
+            return -1;
+        }
+        pos = pos.add(r as usize);
+        left -= r as usize;
+    }
+    0
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn getrandom(buf: *mut u8, buflen: usize, flags: u32) -> isize {
-    <Arch as Syscalls>::syscall3(sysno(318, 278), buf as i64, buflen as i64, flags as i64) as isize
+    let r = <Arch as Syscalls>::syscall3(sysno(318, 278), buf as i64, buflen as i64, flags as i64);
+    if r < 0 {
+        ERRNO = (-r) as c_int;
+        -1
+    } else {
+        r as isize
+    }
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn killpg(pgrp: i32, sig: i32) -> i32 {
-    <Arch as Syscalls>::syscall2(SYS_KILL, -pgrp as i64, sig as i64) as i32
+    syscall_ret(<Arch as Syscalls>::syscall2(SYS_KILL, -pgrp as i64, sig as i64)) as i32
 }
 
 #[no_mangle]
@@ -18102,12 +18230,19 @@ pub unsafe extern "C" fn mbrtoc32(pc32: *mut u32, s: *const u8, n: usize, _ps: *
 
 #[no_mangle]
 pub unsafe extern "C" fn chown(path: *const core::ffi::c_char, uid: u32, gid: u32) -> i32 {
-    <Arch as Syscalls>::syscall3(SYS_FCHOWNAT, AT_FDCWD as i64, path as i64, ((uid as u64) << 32 | gid as u64) as i64) as i32
+    syscall_ret(<Arch as Syscalls>::syscall5(
+        SYS_FCHOWNAT,
+        AT_FDCWD as i64,
+        path as i64,
+        uid as i64,
+        gid as i64,
+        0,
+    )) as i32
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn lchown(path: *const core::ffi::c_char, uid: u32, gid: u32) -> i32 {
-    <Arch as Syscalls>::syscall4(SYS_FCHOWNAT, AT_FDCWD as i64, path as i64, ((uid as u64) << 32 | gid as u64) as i64, 0x100) as i32
+    syscall_ret(<Arch as Syscalls>::syscall4(SYS_FCHOWNAT, AT_FDCWD as i64, path as i64, ((uid as u64) << 32 | gid as u64) as i64, 0x100)) as i32
 }
 
 // ============================================================
@@ -18116,7 +18251,7 @@ pub unsafe extern "C" fn lchown(path: *const core::ffi::c_char, uid: u32, gid: u
 
 #[no_mangle]
 pub unsafe extern "C" fn chroot(path: *const core::ffi::c_char) -> i32 {
-    <Arch as Syscalls>::syscall1(SYS_CHROOT, path as i64) as i32
+    syscall_ret(<Arch as Syscalls>::syscall1(SYS_CHROOT, path as i64)) as i32
 }
 
 #[no_mangle]
@@ -18137,22 +18272,22 @@ pub unsafe extern "C" fn creat(pathname: *const core::ffi::c_char, mode: u32) ->
 
 #[no_mangle]
 pub unsafe extern "C" fn openat(dirfd: i32, pathname: *const core::ffi::c_char, flags: i32, mode: u32) -> i32 {
-    <Arch as Syscalls>::syscall4(SYS_OPENAT, dirfd as i64, pathname as i64, flags as i64, mode as i64) as i32
+    syscall_ret(<Arch as Syscalls>::syscall4(SYS_OPENAT, dirfd as i64, pathname as i64, flags as i64, mode as i64)) as i32
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn pwrite(fd: i32, buf: *const u8, count: usize, offset: i64) -> isize {
-    <Arch as Syscalls>::syscall4(sysno(18, 68), fd as i64, buf as i64, count as i64, offset) as isize
+    syscall_ret(<Arch as Syscalls>::syscall4(sysno(18, 68), fd as i64, buf as i64, count as i64, offset)) as isize
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn readv(fd: i32, iov: *const core::ffi::c_void, iovcnt: i32) -> isize {
-    <Arch as Syscalls>::syscall3(sysno(19, 65), fd as i64, iov as i64, iovcnt as i64) as isize
+    syscall_ret(<Arch as Syscalls>::syscall3(sysno(19, 65), fd as i64, iov as i64, iovcnt as i64)) as isize
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn writev(fd: i32, iov: *const core::ffi::c_void, iovcnt: i32) -> isize {
-    <Arch as Syscalls>::syscall3(sysno(20, 66), fd as i64, iov as i64, iovcnt as i64) as isize
+    syscall_ret(<Arch as Syscalls>::syscall3(sysno(20, 66), fd as i64, iov as i64, iovcnt as i64)) as isize
 }
 
 // ============================================================
@@ -18161,7 +18296,7 @@ pub unsafe extern "C" fn writev(fd: i32, iov: *const core::ffi::c_void, iovcnt: 
 
 #[no_mangle]
 pub unsafe extern "C" fn flock(fd: i32, operation: i32) -> i32 {
-    <Arch as Syscalls>::syscall2(SYS_FLOCK, fd as i64, operation as i64) as i32
+    syscall_ret(<Arch as Syscalls>::syscall2(SYS_FLOCK, fd as i64, operation as i64)) as i32
 }
 
 #[no_mangle]
@@ -18177,17 +18312,17 @@ pub unsafe extern "C" fn lockf(fd: i32, cmd: i32, len: i64) -> i32 {
 
 #[no_mangle]
 pub unsafe extern "C" fn getdomainname(name: *mut core::ffi::c_char, len: usize) -> i32 {
-    if cfg!(target_arch = "x86_64") { <Arch as Syscalls>::syscall2(156, name as i64, len as i64) as i32 } else { ERRNO = 38; -1 }
+    if cfg!(target_arch = "x86_64") { syscall_ret(<Arch as Syscalls>::syscall2(156, name as i64, len as i64)) as i32 } else { ERRNO = 38; -1 }
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn setdomainname(name: *const core::ffi::c_char, len: usize) -> i32 {
-    <Arch as Syscalls>::syscall2(sysno(171, 162), name as i64, len as i64) as i32
+    syscall_ret(<Arch as Syscalls>::syscall2(sysno(171, 162), name as i64, len as i64)) as i32
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn sethostname(name: *const core::ffi::c_char, len: usize) -> i32 {
-    <Arch as Syscalls>::syscall2(SYS_SETHOSTNAME, name as i64, len as i64) as i32
+    syscall_ret(<Arch as Syscalls>::syscall2(SYS_SETHOSTNAME, name as i64, len as i64)) as i32
 }
 
 #[no_mangle]
@@ -18514,61 +18649,120 @@ pub unsafe extern "C" fn putgrent(f: *mut FILE, g: *const Group) -> c_int {
 
 #[no_mangle]
 pub unsafe extern "C" fn setgroups(ngroups: usize, gidset: *const u32) -> i32 {
-    <Arch as Syscalls>::syscall2(SYS_SETGROUPS, ngroups as i64, gidset as i64) as i32
+    syscall_ret(<Arch as Syscalls>::syscall2(SYS_SETGROUPS, ngroups as i64, gidset as i64)) as i32
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn setresuid(ruid: u32, euid: u32, suid: u32) -> i32 {
-    <Arch as Syscalls>::syscall3(SYS_SETRESUID, ruid as i64, euid as i64, suid as i64) as i32
+    syscall_ret(<Arch as Syscalls>::syscall3(SYS_SETRESUID, ruid as i64, euid as i64, suid as i64)) as i32
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn setresgid(rgid: u32, egid: u32, sgid: u32) -> i32 {
-    <Arch as Syscalls>::syscall3(SYS_SETRESGID, rgid as i64, egid as i64, sgid as i64) as i32
+    syscall_ret(<Arch as Syscalls>::syscall3(SYS_SETRESGID, rgid as i64, egid as i64, sgid as i64)) as i32
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn getresuid(ruid: *mut u32, euid: *mut u32, suid: *mut u32) -> i32 {
-    <Arch as Syscalls>::syscall3(SYS_GETRESUID, ruid as i64, euid as i64, suid as i64) as i32
+    syscall_ret(<Arch as Syscalls>::syscall3(SYS_GETRESUID, ruid as i64, euid as i64, suid as i64)) as i32
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn getresgid(rgid: *mut u32, egid: *mut u32, sgid: *mut u32) -> i32 {
-    <Arch as Syscalls>::syscall3(SYS_GETRESGID, rgid as i64, egid as i64, sgid as i64) as i32
+    syscall_ret(<Arch as Syscalls>::syscall3(SYS_GETRESGID, rgid as i64, egid as i64, sgid as i64)) as i32
 }
 
 // ============================================================
 // Socket functions
 // ============================================================
 
+// musl's public struct msghdr uses 32-bit msg_iovlen/msg_controllen followed
+// by padding on 64-bit little-endian. The kernel reads 64-bit fields, so the
+// padding must be zero; callers (nginx, for example) do not initialize it.
+#[repr(C)]
+struct KernelMsgHdr {
+    msg_name: *mut c_void,
+    msg_namelen: u32,
+    __pad0: u32,
+    msg_iov: *mut c_void,
+    msg_iovlen: u64,
+    msg_control: *mut c_void,
+    msg_controllen: u64,
+    msg_flags: u32,
+    __pad1: u32,
+}
+
+#[repr(C)]
+struct UserMsgHdr {
+    msg_name: *mut c_void,
+    msg_namelen: u32,
+    msg_iov: *mut c_void,
+    msg_iovlen: i32,
+    __pad1: i32,
+    msg_control: *mut c_void,
+    msg_controllen: u32,
+    __pad2: i32,
+    msg_flags: i32,
+}
+
+unsafe fn msg_to_kernel(msg: *const UserMsgHdr, out: &mut KernelMsgHdr) {
+    *out = KernelMsgHdr {
+        msg_name: (*msg).msg_name,
+        msg_namelen: (*msg).msg_namelen,
+        __pad0: 0,
+        msg_iov: (*msg).msg_iov,
+        msg_iovlen: (*msg).msg_iovlen as u32 as u64,
+        msg_control: (*msg).msg_control,
+        msg_controllen: (*msg).msg_controllen as u64,
+        msg_flags: (*msg).msg_flags as u32,
+        __pad1: 0,
+    };
+}
+
 #[no_mangle]
 pub unsafe extern "C" fn sendmsg(fd: i32, msg: *const core::ffi::c_void, flags: i32) -> isize {
-    <Arch as Syscalls>::syscall3(SYS_SENDMSG, fd as i64, msg as i64, flags as i64) as isize
+    if msg.is_null() {
+        ERRNO = EINVAL;
+        return -1;
+    }
+    let mut k: KernelMsgHdr = core::mem::zeroed();
+    msg_to_kernel(msg as *const UserMsgHdr, &mut k);
+    syscall_ret(<Arch as Syscalls>::syscall3(SYS_SENDMSG, fd as i64, &k as *const KernelMsgHdr as i64, flags as i64)) as isize
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn recvmsg(fd: i32, msg: *mut core::ffi::c_void, flags: i32) -> isize {
-    <Arch as Syscalls>::syscall3(SYS_RECVMSG, fd as i64, msg as i64, flags as i64) as isize
+    if msg.is_null() {
+        ERRNO = EINVAL;
+        return -1;
+    }
+    let user = msg as *mut UserMsgHdr;
+    let mut k: KernelMsgHdr = core::mem::zeroed();
+    msg_to_kernel(user, &mut k);
+    let r = syscall_ret(<Arch as Syscalls>::syscall3(SYS_RECVMSG, fd as i64, &mut k as *mut KernelMsgHdr as i64, flags as i64));
+    (*user).msg_flags = k.msg_flags as i32;
+    (*user).msg_controllen = k.msg_controllen as u32;
+    r as isize
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn sendmmsg(fd: i32, msgvec: *mut core::ffi::c_void, vlen: u32, flags: i32) -> i32 {
-    <Arch as Syscalls>::syscall4(sysno(307, 269), fd as i64, msgvec as i64, vlen as i64, flags as i64) as i32
+    syscall_ret(<Arch as Syscalls>::syscall4(sysno(307, 269), fd as i64, msgvec as i64, vlen as i64, flags as i64)) as i32
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn recvmmsg(fd: i32, msgvec: *mut core::ffi::c_void, vlen: u32, flags: i32, timeout: *mut core::ffi::c_void) -> i32 {
-    <Arch as Syscalls>::syscall5(sysno(299, 243), fd as i64, msgvec as i64, vlen as i64, flags as i64, timeout as i64) as i32
+    syscall_ret(<Arch as Syscalls>::syscall5(sysno(299, 243), fd as i64, msgvec as i64, vlen as i64, flags as i64, timeout as i64)) as i32
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn getpeername(fd: i32, addr: *mut core::ffi::c_void, addrlen: *mut u32) -> i32 {
-    <Arch as Syscalls>::syscall3(sysno(52, 205), fd as i64, addr as i64, addrlen as i64) as i32
+    syscall_ret(<Arch as Syscalls>::syscall3(sysno(52, 205), fd as i64, addr as i64, addrlen as i64)) as i32
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn getsockopt(fd: i32, level: i32, optname: i32, optval: *mut core::ffi::c_void, optlen: *mut u32) -> i32 {
-    <Arch as Syscalls>::syscall5(sysno(55, 209), fd as i64, level as i64, optname as i64, optval as i64, optlen as i64) as i32
+    syscall_ret(<Arch as Syscalls>::syscall5(sysno(55, 209), fd as i64, level as i64, optname as i64, optval as i64, optlen as i64)) as i32
 }
 
 // ============================================================
@@ -18628,12 +18822,12 @@ pub unsafe extern "C" fn putchar_unlocked(c: i32) -> i32 {
 
 #[no_mangle]
 pub unsafe extern "C" fn getitimer(which: i32, curr_value: *mut core::ffi::c_void) -> i32 {
-    <Arch as Syscalls>::syscall2(sysno(36, 102), which as i64, curr_value as i64) as i32
+    syscall_ret(<Arch as Syscalls>::syscall2(sysno(36, 102), which as i64, curr_value as i64)) as i32
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn setitimer(which: i32, new_value: *const core::ffi::c_void, old_value: *mut core::ffi::c_void) -> i32 {
-    <Arch as Syscalls>::syscall3(sysno(38, 103), which as i64, new_value as i64, old_value as i64) as i32
+    syscall_ret(<Arch as Syscalls>::syscall3(sysno(38, 103), which as i64, new_value as i64, old_value as i64)) as i32
 }
 
 // ============================================================
@@ -18684,17 +18878,17 @@ pub unsafe extern "C" fn get_phys_pages() -> i64 {
 
 #[no_mangle]
 pub unsafe extern "C" fn capget(header: *mut core::ffi::c_void, data: *mut core::ffi::c_void) -> i32 {
-    <Arch as Syscalls>::syscall2(SYS_CAPGET, header as i64, data as i64) as i32
+    syscall_ret(<Arch as Syscalls>::syscall2(SYS_CAPGET, header as i64, data as i64)) as i32
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn capset(header: *const core::ffi::c_void, data: *const core::ffi::c_void) -> i32 {
-    <Arch as Syscalls>::syscall2(SYS_CAPSET, header as i64, data as i64) as i32
+    syscall_ret(<Arch as Syscalls>::syscall2(SYS_CAPSET, header as i64, data as i64)) as i32
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn arch_prctl(code: i32, addr: u64) -> i32 {
-    if cfg!(target_arch = "x86_64") { <Arch as Syscalls>::syscall2(158, code as i64, addr as i64) as i32 } else { ERRNO = 38; -1 }
+    if cfg!(target_arch = "x86_64") { syscall_ret(<Arch as Syscalls>::syscall2(158, code as i64, addr as i64)) as i32 } else { ERRNO = 38; -1 }
 }
 
 // ============================================================
@@ -18743,22 +18937,22 @@ pub unsafe extern "C" fn cfmakeraw(termios_p: *mut core::ffi::c_void) {
 
 #[no_mangle]
 pub unsafe extern "C" fn getrusage(who: i32, usage: *mut core::ffi::c_void) -> i32 {
-    <Arch as Syscalls>::syscall2(sysno(98, 165), who as i64, usage as i64) as i32
+    syscall_ret(<Arch as Syscalls>::syscall2(sysno(98, 165), who as i64, usage as i64)) as i32
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn getpriority(which: i32, who: u32) -> i32 {
-    <Arch as Syscalls>::syscall2(SYS_GETPRIORITY, which as i64, who as i64) as i32
+    syscall_ret(<Arch as Syscalls>::syscall2(SYS_GETPRIORITY, which as i64, who as i64)) as i32
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn setpriority(which: i32, who: u32, prio: i32) -> i32 {
-    <Arch as Syscalls>::syscall3(SYS_SETPRIORITY, which as i64, who as i64, prio as i64) as i32
+    syscall_ret(<Arch as Syscalls>::syscall3(SYS_SETPRIORITY, which as i64, who as i64, prio as i64)) as i32
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn prlimit(pid: u32, resource: i32, new_limit: *const core::ffi::c_void, old_limit: *mut core::ffi::c_void) -> i32 {
-    <Arch as Syscalls>::syscall4(sysno(302, 261), pid as i64, resource as i64, new_limit as i64, old_limit as i64) as i32
+    syscall_ret(<Arch as Syscalls>::syscall4(sysno(302, 261), pid as i64, resource as i64, new_limit as i64, old_limit as i64)) as i32
 }
 
 // ============================================================
@@ -18767,7 +18961,7 @@ pub unsafe extern "C" fn prlimit(pid: u32, resource: i32, new_limit: *const core
 
 #[no_mangle]
 pub unsafe extern "C" fn clone(flags: u32, child_stack: *mut u8, _args: ...) -> i32 {
-    <Arch as Syscalls>::syscall5(SYS_CLONE, flags as i64, child_stack as i64, 0, 0, 0) as i32
+    syscall_ret(<Arch as Syscalls>::syscall5(SYS_CLONE, flags as i64, child_stack as i64, 0, 0, 0)) as i32
 }
 
 #[no_mangle]
@@ -18903,7 +19097,7 @@ pub unsafe extern "C" fn hstrerror(_err: i32) -> *const core::ffi::c_char {
 
 #[no_mangle]
 pub unsafe extern "C" fn gettid() -> i32 {
-    <Arch as Syscalls>::syscall0(SYS_GETTID) as i32
+    syscall_ret(<Arch as Syscalls>::syscall0(SYS_GETTID)) as i32
 }
 
 // ============================================================
@@ -18913,13 +19107,13 @@ pub unsafe extern "C" fn gettid() -> i32 {
 #[no_mangle]
 pub unsafe extern "C" fn ioctl(fd: i32, request: u32, mut args: ...) -> i32 {
     let arg = args.next_arg::<i64>();
-    <Arch as Syscalls>::syscall3(SYS_IOCTL, fd as i64, request as i64, arg) as i32
+    syscall_ret(<Arch as Syscalls>::syscall3(SYS_IOCTL, fd as i64, request as i64, arg)) as i32
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn ioperm(from: u64, num: u64, turn_on: i32) -> i32 {
     #[cfg(target_arch = "x86_64")]
-    { <Arch as Syscalls>::syscall3(SYS_IOPERM, from as i64, num as i64, turn_on as i64) as i32 }
+    { syscall_ret(<Arch as Syscalls>::syscall3(SYS_IOPERM, from as i64, num as i64, turn_on as i64)) as i32 }
     #[cfg(not(target_arch = "x86_64"))]
     {
         let _ = (from, num, turn_on);
@@ -18931,7 +19125,7 @@ pub unsafe extern "C" fn ioperm(from: u64, num: u64, turn_on: i32) -> i32 {
 #[no_mangle]
 pub unsafe extern "C" fn iopl(level: i32) -> i32 {
     #[cfg(target_arch = "x86_64")]
-    { <Arch as Syscalls>::syscall1(SYS_IOPL, level as i64) as i32 }
+    { syscall_ret(<Arch as Syscalls>::syscall1(SYS_IOPL, level as i64)) as i32 }
     #[cfg(not(target_arch = "x86_64"))]
     {
         let _ = level;
@@ -18946,62 +19140,62 @@ pub unsafe extern "C" fn iopl(level: i32) -> i32 {
 
 #[no_mangle]
 pub unsafe extern "C" fn getxattr(path: *const core::ffi::c_char, name: *const core::ffi::c_char, value: *mut u8, size: usize) -> isize {
-    <Arch as Syscalls>::syscall4(sysno(191, 8), path as i64, name as i64, value as i64, size as i64) as isize
+    syscall_ret(<Arch as Syscalls>::syscall4(sysno(191, 8), path as i64, name as i64, value as i64, size as i64)) as isize
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn lgetxattr(path: *const core::ffi::c_char, name: *const core::ffi::c_char, value: *mut u8, size: usize) -> isize {
-    <Arch as Syscalls>::syscall4(sysno(192, 9), path as i64, name as i64, value as i64, size as i64) as isize
+    syscall_ret(<Arch as Syscalls>::syscall4(sysno(192, 9), path as i64, name as i64, value as i64, size as i64)) as isize
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn fgetxattr(fd: i32, name: *const core::ffi::c_char, value: *mut u8, size: usize) -> isize {
-    <Arch as Syscalls>::syscall4(sysno(193, 10), fd as i64, name as i64, value as i64, size as i64) as isize
+    syscall_ret(<Arch as Syscalls>::syscall4(sysno(193, 10), fd as i64, name as i64, value as i64, size as i64)) as isize
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn listxattr(path: *const core::ffi::c_char, list: *mut u8, size: usize) -> isize {
-    <Arch as Syscalls>::syscall3(sysno(194, 11), path as i64, list as i64, size as i64) as isize
+    syscall_ret(<Arch as Syscalls>::syscall3(sysno(194, 11), path as i64, list as i64, size as i64)) as isize
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn llistxattr(path: *const core::ffi::c_char, list: *mut u8, size: usize) -> isize {
-    <Arch as Syscalls>::syscall3(sysno(195, 12), path as i64, list as i64, size as i64) as isize
+    syscall_ret(<Arch as Syscalls>::syscall3(sysno(195, 12), path as i64, list as i64, size as i64)) as isize
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn flistxattr(fd: i32, list: *mut u8, size: usize) -> isize {
-    <Arch as Syscalls>::syscall3(sysno(196, 13), fd as i64, list as i64, size as i64) as isize
+    syscall_ret(<Arch as Syscalls>::syscall3(sysno(196, 13), fd as i64, list as i64, size as i64)) as isize
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn setxattr(path: *const core::ffi::c_char, name: *const core::ffi::c_char, value: *const u8, size: usize, flags: i32) -> i32 {
-    <Arch as Syscalls>::syscall5(sysno(188, 5), path as i64, name as i64, value as i64, size as i64, flags as i64) as i32
+    syscall_ret(<Arch as Syscalls>::syscall5(sysno(188, 5), path as i64, name as i64, value as i64, size as i64, flags as i64)) as i32
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn lsetxattr(path: *const core::ffi::c_char, name: *const core::ffi::c_char, value: *const u8, size: usize, flags: i32) -> i32 {
-    <Arch as Syscalls>::syscall5(sysno(189, 6), path as i64, name as i64, value as i64, size as i64, flags as i64) as i32
+    syscall_ret(<Arch as Syscalls>::syscall5(sysno(189, 6), path as i64, name as i64, value as i64, size as i64, flags as i64)) as i32
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn fsetxattr(fd: i32, name: *const core::ffi::c_char, value: *const u8, size: usize, flags: i32) -> i32 {
-    <Arch as Syscalls>::syscall5(sysno(190, 7), fd as i64, name as i64, value as i64, size as i64, flags as i64) as i32
+    syscall_ret(<Arch as Syscalls>::syscall5(sysno(190, 7), fd as i64, name as i64, value as i64, size as i64, flags as i64)) as i32
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn removexattr(path: *const core::ffi::c_char, name: *const core::ffi::c_char) -> i32 {
-    <Arch as Syscalls>::syscall2(sysno(197, 14), path as i64, name as i64) as i32
+    syscall_ret(<Arch as Syscalls>::syscall2(sysno(197, 14), path as i64, name as i64)) as i32
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn lremovexattr(path: *const core::ffi::c_char, name: *const core::ffi::c_char) -> i32 {
-    <Arch as Syscalls>::syscall2(sysno(198, 15), path as i64, name as i64) as i32
+    syscall_ret(<Arch as Syscalls>::syscall2(sysno(198, 15), path as i64, name as i64)) as i32
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn fremovexattr(fd: i32, name: *const core::ffi::c_char) -> i32 {
-    <Arch as Syscalls>::syscall2(sysno(199, 16), fd as i64, name as i64) as i32
+    syscall_ret(<Arch as Syscalls>::syscall2(sysno(199, 16), fd as i64, name as i64)) as i32
 }
 
 // ============================================================
@@ -19010,12 +19204,12 @@ pub unsafe extern "C" fn fremovexattr(fd: i32, name: *const core::ffi::c_char) -
 
 #[no_mangle]
 pub unsafe extern "C" fn adjtime(_delta: *const core::ffi::c_void, olddelta: *mut core::ffi::c_void) -> i32 {
-    <Arch as Syscalls>::syscall1(SYS_ADJTIMEX, olddelta as i64) as i32
+    syscall_ret(<Arch as Syscalls>::syscall1(SYS_ADJTIMEX, olddelta as i64)) as i32
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn adjtimex(buf: *mut core::ffi::c_void) -> i32 {
-    <Arch as Syscalls>::syscall1(SYS_ADJTIMEX, buf as i64) as i32
+    syscall_ret(<Arch as Syscalls>::syscall1(SYS_ADJTIMEX, buf as i64)) as i32
 }
 
 // ============================================================
@@ -19388,12 +19582,12 @@ pub unsafe extern "C" fn at_quick_exit(_func: Option<unsafe extern "C" fn()>) ->
 
 #[no_mangle]
 pub unsafe extern "C" fn brk(addr: *mut u8) -> i32 {
-    <Arch as Syscalls>::syscall1(sysno(12, 214), addr as i64) as i32
+    syscall_ret(<Arch as Syscalls>::syscall1(sysno(12, 214), addr as i64)) as i32
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn copy_file_range(fd_in: i32, off_in: *mut i64, fd_out: i32, off_out: *mut i64, len: usize, flags: u32) -> isize {
-    <Arch as Syscalls>::syscall6(SYS_COPY_FILE_RANGE, fd_in as i64, off_in as i64, fd_out as i64, off_out as i64, len as i64, flags as i64) as isize
+    syscall_ret(<Arch as Syscalls>::syscall6(SYS_COPY_FILE_RANGE, fd_in as i64, off_in as i64, fd_out as i64, off_out as i64, len as i64, flags as i64)) as isize
 }
 
 #[no_mangle]
@@ -19408,7 +19602,7 @@ pub unsafe extern "C" fn ctermid(s: *mut core::ffi::c_char) -> *mut core::ffi::c
 
 #[no_mangle]
 pub unsafe extern "C" fn delete_module(name: *const core::ffi::c_char, flags: u32) -> i32 {
-    <Arch as Syscalls>::syscall2(SYS_DELETE_MODULE, name as i64, flags as i64) as i32
+    syscall_ret(<Arch as Syscalls>::syscall2(SYS_DELETE_MODULE, name as i64, flags as i64)) as i32
 }
 
 
@@ -19481,7 +19675,7 @@ pub unsafe extern "C" fn ftime(tp: *mut core::ffi::c_void) -> i32 {
 
 #[no_mangle]
 pub unsafe extern "C" fn getdents(fd: i32, dirp: *mut u8, count: usize) -> isize {
-    <Arch as Syscalls>::syscall3(SYS_GETDENTS64, fd as i64, dirp as i64, count as i64) as isize
+    syscall_ret(<Arch as Syscalls>::syscall3(SYS_GETDENTS64, fd as i64, dirp as i64, count as i64)) as isize
 }
 
 #[no_mangle]
@@ -19559,7 +19753,7 @@ pub unsafe extern "C" fn getwc(f: *mut core::ffi::c_void) -> u32 {
 
 #[no_mangle]
 pub unsafe extern "C" fn init_module(module_image: *mut u8, len: usize, param_values: *const core::ffi::c_char) -> i32 {
-    <Arch as Syscalls>::syscall3(SYS_INIT_MODULE, module_image as i64, len as i64, param_values as i64) as i32
+    syscall_ret(<Arch as Syscalls>::syscall3(SYS_INIT_MODULE, module_image as i64, len as i64, param_values as i64)) as i32
 }
 
 
@@ -19580,21 +19774,21 @@ pub unsafe extern "C" fn issetugid() -> i32 {
 #[no_mangle]
 pub unsafe extern "C" fn poll(fds: *mut core::ffi::c_void, nfds: u32, timeout: i32) -> i32 {
     #[cfg(target_arch = "x86_64")]
-    { <Arch as Syscalls>::syscall3(SYS_POLL, fds as i64, nfds as i64, timeout as i64) as i32 }
+    { syscall_ret(<Arch as Syscalls>::syscall3(SYS_POLL, fds as i64, nfds as i64, timeout as i64)) as i32 }
     #[cfg(any(target_arch = "aarch64", target_arch = "riscv64"))]
     {
-        <Arch as Syscalls>::syscall5(SYS_PPOLL, fds as i64, nfds as i64, timeout as i64, 0, 0) as i32
+        syscall_ret(<Arch as Syscalls>::syscall5(SYS_PPOLL, fds as i64, nfds as i64, timeout as i64, 0, 0)) as i32
     }
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn ppoll(fds: *mut core::ffi::c_void, nfds: u32, timeout: *const core::ffi::c_void, sigmask: *const u64) -> i32 {
-    <Arch as Syscalls>::syscall5(SYS_PPOLL, fds as i64, nfds as i64, timeout as i64, sigmask as i64, 8) as i32
+    syscall_ret(<Arch as Syscalls>::syscall5(SYS_PPOLL, fds as i64, nfds as i64, timeout as i64, sigmask as i64, 8)) as i32
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn pselect(nfds: i32, readfds: *mut u8, writefds: *mut u8, exceptfds: *mut u8, timeout: *const core::ffi::c_void, sigmask: *const u64) -> i32 {
-    <Arch as Syscalls>::syscall6(SYS_PSELECT6, nfds as i64, readfds as i64, writefds as i64, exceptfds as i64, timeout as i64, sigmask as i64) as i32
+    syscall_ret(<Arch as Syscalls>::syscall6(SYS_PSELECT6, nfds as i64, readfds as i64, writefds as i64, exceptfds as i64, timeout as i64, sigmask as i64)) as i32
 }
 
 // ============================================================
@@ -19616,7 +19810,13 @@ pub unsafe extern "C" fn quick_exit(status: i32) -> ! {
 
 #[no_mangle]
 pub unsafe extern "C" fn lstat(path: *const core::ffi::c_char, buf: *mut core::ffi::c_void) -> i32 {
-    <Arch as Syscalls>::syscall4(SYS_NEWFSTATAT, AT_FDCWD as i64, path as i64, buf as i64, 0x100) as i32
+    let r = <Arch as Syscalls>::syscall4(SYS_NEWFSTATAT, AT_FDCWD as i64, path as i64, buf as i64, 0x100);
+    if r < 0 {
+        ERRNO = (-r) as c_int;
+        -1
+    } else {
+        0
+    }
 }
 
 #[no_mangle]
@@ -19682,27 +19882,27 @@ pub unsafe extern "C" fn personality(persona: u64) -> i64 {
 
 #[no_mangle]
 pub unsafe extern "C" fn reboot(magic: i32, magic2: i32, cmd: u32, arg: *mut u8) -> i32 {
-    <Arch as Syscalls>::syscall4(SYS_REBOOT, magic as i64, magic2 as i64, cmd as i64, arg as i64) as i32
+    syscall_ret(<Arch as Syscalls>::syscall4(SYS_REBOOT, magic as i64, magic2 as i64, cmd as i64, arg as i64)) as i32
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn pivot_root(new_root: *const core::ffi::c_char, put_old: *const core::ffi::c_char) -> i32 {
-    <Arch as Syscalls>::syscall2(SYS_PIVOT_ROOT, new_root as i64, put_old as i64) as i32
+    syscall_ret(<Arch as Syscalls>::syscall2(SYS_PIVOT_ROOT, new_root as i64, put_old as i64)) as i32
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn mount(source: *const core::ffi::c_char, target: *const core::ffi::c_char, filesystemtype: *const core::ffi::c_char, mountflags: u64, data: *const core::ffi::c_void) -> i32 {
-    <Arch as Syscalls>::syscall5(SYS_MOUNT, source as i64, target as i64, filesystemtype as i64, mountflags as i64, data as i64) as i32
+    syscall_ret(<Arch as Syscalls>::syscall5(SYS_MOUNT, source as i64, target as i64, filesystemtype as i64, mountflags as i64, data as i64)) as i32
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn umount(target: *const core::ffi::c_char) -> i32 {
-    <Arch as Syscalls>::syscall2(SYS_UMOUNT2, target as i64, 0) as i32
+    syscall_ret(<Arch as Syscalls>::syscall2(SYS_UMOUNT2, target as i64, 0)) as i32
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn umount2(target: *const core::ffi::c_char, flags: i32) -> i32 {
-    <Arch as Syscalls>::syscall2(SYS_UMOUNT2, target as i64, flags as i64) as i32
+    syscall_ret(<Arch as Syscalls>::syscall2(SYS_UMOUNT2, target as i64, flags as i64)) as i32
 }
 
 // ============================================================
@@ -19798,22 +19998,22 @@ pub unsafe extern "C" fn __strerror_l(errnum: i32, _loc: *mut core::ffi::c_void)
 
 #[no_mangle]
 pub unsafe extern "C" fn preadv(fd: i32, iov: *const core::ffi::c_void, iovcnt: i32, offset: i64) -> isize {
-    <Arch as Syscalls>::syscall4(sysno(295, 69), fd as i64, iov as i64, iovcnt as i64, offset) as isize
+    syscall_ret(<Arch as Syscalls>::syscall4(sysno(295, 69), fd as i64, iov as i64, iovcnt as i64, offset)) as isize
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn pwritev(fd: i32, iov: *const core::ffi::c_void, iovcnt: i32, offset: i64) -> isize {
-    <Arch as Syscalls>::syscall4(sysno(296, 70), fd as i64, iov as i64, iovcnt as i64, offset) as isize
+    syscall_ret(<Arch as Syscalls>::syscall4(sysno(296, 70), fd as i64, iov as i64, iovcnt as i64, offset)) as isize
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn preadv2(fd: i32, iov: *const core::ffi::c_void, iovcnt: i32, offset: i64, flags: u32) -> isize {
-    <Arch as Syscalls>::syscall5(sysno(327, 286), fd as i64, iov as i64, iovcnt as i64, offset, flags as i64) as isize
+    syscall_ret(<Arch as Syscalls>::syscall5(sysno(327, 286), fd as i64, iov as i64, iovcnt as i64, offset, flags as i64)) as isize
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn pwritev2(fd: i32, iov: *const core::ffi::c_void, iovcnt: i32, offset: i64, flags: u32) -> isize {
-    <Arch as Syscalls>::syscall5(sysno(328, 287), fd as i64, iov as i64, iovcnt as i64, offset, flags as i64) as isize
+    syscall_ret(<Arch as Syscalls>::syscall5(sysno(328, 287), fd as i64, iov as i64, iovcnt as i64, offset, flags as i64)) as isize
 }
 
 // ============================================================
@@ -19824,7 +20024,7 @@ pub unsafe extern "C" fn pwritev2(fd: i32, iov: *const core::ffi::c_void, iovcnt
 pub unsafe extern "C" fn nice(inc: i32) -> i32 {
     let r = <Arch as Syscalls>::syscall2(SYS_GETPRIORITY, 0, 0);
     if r < 0 { return -1; }
-    <Arch as Syscalls>::syscall2(SYS_SETPRIORITY, 0, r + inc as i64) as i32
+    syscall_ret(<Arch as Syscalls>::syscall2(SYS_SETPRIORITY, 0, r + inc as i64)) as i32
 }
 
 // ============================================================
@@ -19848,7 +20048,7 @@ pub unsafe extern "C" fn l64a(value: i64) -> *mut core::ffi::c_char {
 
 #[no_mangle]
 pub unsafe extern "C" fn lchmod(path: *const core::ffi::c_char, mode: u32) -> i32 {
-    <Arch as Syscalls>::syscall4(SYS_FCHMODAT, AT_FDCWD as i64, path as i64, mode as i64, 0x100) as i32
+    syscall_ret(<Arch as Syscalls>::syscall4(SYS_FCHMODAT, AT_FDCWD as i64, path as i64, mode as i64, 0x100)) as i32
 }
 
 #[no_mangle]
@@ -19859,28 +20059,28 @@ pub unsafe extern "C" fn lutimes(filename: *const core::ffi::c_char, times: *con
 #[no_mangle]
 pub unsafe extern "C" fn mknod(pathname: *const core::ffi::c_char, mode: u32, dev: u64) -> i32 {
     #[cfg(target_arch = "x86_64")]
-    { <Arch as Syscalls>::syscall3(SYS_MKNOD, pathname as i64, mode as i64, dev as i64) as i32 }
+    { syscall_ret(<Arch as Syscalls>::syscall3(SYS_MKNOD, pathname as i64, mode as i64, dev as i64)) as i32 }
     #[cfg(any(target_arch = "aarch64", target_arch = "riscv64"))]
     {
-        <Arch as Syscalls>::syscall4(SYS_MKNODAT, AT_FDCWD as i64, pathname as i64, mode as i64, dev as i64) as i32
+        syscall_ret(<Arch as Syscalls>::syscall4(SYS_MKNODAT, AT_FDCWD as i64, pathname as i64, mode as i64, dev as i64)) as i32
     }
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn memfd_create(name: *const core::ffi::c_char, flags: u32) -> i32 {
-    <Arch as Syscalls>::syscall2(sysno(319, 279), name as i64, flags as i64) as i32
+    syscall_ret(<Arch as Syscalls>::syscall2(sysno(319, 279), name as i64, flags as i64)) as i32
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn mlock2(addr: *const core::ffi::c_void, len: usize, flags: u32) -> i32 {
-    <Arch as Syscalls>::syscall3(sysno(325, 284), addr as i64, len as i64, flags as i64) as i32
+    syscall_ret(<Arch as Syscalls>::syscall3(sysno(325, 284), addr as i64, len as i64, flags as i64)) as i32
 }
 
 
 
 #[no_mangle]
 pub unsafe extern "C" fn remap_file_pages(addr: *mut core::ffi::c_void, size: usize, prot: i32, pgoff: usize, flags: u32) -> i32 {
-    <Arch as Syscalls>::syscall5(sysno(216, 234), addr as i64, size as i64, prot as i64, pgoff as i64, flags as i64) as i32
+    syscall_ret(<Arch as Syscalls>::syscall5(sysno(216, 234), addr as i64, size as i64, prot as i64, pgoff as i64, flags as i64)) as i32
 }
 
 // ============================================================
@@ -20059,14 +20259,14 @@ pub unsafe extern "C" fn __sched_cpucount(setsize: usize, setp: *const u8) -> i3
 
 #[no_mangle]
 pub unsafe extern "C" fn select(nfds: i32, readfds: *mut u8, writefds: *mut u8, exceptfds: *mut u8, timeout: *mut core::ffi::c_void) -> i32 {
-    <Arch as Syscalls>::syscall6(sysno(23, 72), nfds as i64, readfds as i64, writefds as i64, exceptfds as i64, timeout as i64, 0) as i32
+    syscall_ret(<Arch as Syscalls>::syscall6(sysno(23, 72), nfds as i64, readfds as i64, writefds as i64, exceptfds as i64, timeout as i64, 0)) as i32
 }
 
 
 
 #[no_mangle]
 pub unsafe extern "C" fn sendfile(out_fd: i32, in_fd: i32, offset: *mut i64, count: usize) -> isize {
-    <Arch as Syscalls>::syscall4(sysno(40, 71), out_fd as i64, in_fd as i64, offset as i64, count as i64) as isize
+    syscall_ret(<Arch as Syscalls>::syscall4(sysno(40, 71), out_fd as i64, in_fd as i64, offset as i64, count as i64)) as isize
 }
 
 
@@ -20385,12 +20585,12 @@ pub unsafe extern "C" fn vmsplice(fd: i32, iov: *const c_void, nr_segs: usize, f
 
 #[no_mangle]
 pub unsafe extern "C" fn wait4(pid: i32, wstatus: *mut i32, options: i32, rusage: *mut core::ffi::c_void) -> i32 {
-    <Arch as Syscalls>::syscall4(SYS_WAIT4, pid as i64, wstatus as i64, options as i64, rusage as i64) as i32
+    syscall_ret(<Arch as Syscalls>::syscall4(SYS_WAIT4, pid as i64, wstatus as i64, options as i64, rusage as i64)) as i32
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn waitid(idtype: i32, id: u32, infop: *mut core::ffi::c_void, options: i32) -> i32 {
-    <Arch as Syscalls>::syscall4(sysno(247, 95), idtype as i64, id as i64, infop as i64, options as i64) as i32
+    syscall_ret(<Arch as Syscalls>::syscall4(sysno(247, 95), idtype as i64, id as i64, infop as i64, options as i64)) as i32
 }
 
 #[no_mangle]
@@ -20449,46 +20649,76 @@ struct linux_dirent64 {
     d_name: [u8; 0], // flexible array
 }
 
-static mut DIR_BUF: [u8; 1024] = [0; 1024];
-static mut DIR_FD: i32 = -1;
-static mut DIR_POS: usize = 0;
-static mut DIR_LEN: usize = 0;
+// Directory streams used to be a process-wide singleton, which broke any
+// nested opendir/readdir sequence (git, find, glob, ...). Each DIR now owns
+// its fd and read buffer, like musl's __dirstream.
+const DIR_BUF_SIZE: usize = 4096;
+
+#[repr(C)]
+struct DirStream {
+    fd: i32,
+    pos: usize,
+    len: usize,
+    last_off: i64,
+    buf: [u8; DIR_BUF_SIZE],
+}
+
+unsafe fn dir_stream_new(fd: i32) -> *mut core::ffi::c_void {
+    let ds = malloc(core::mem::size_of::<DirStream>()) as *mut DirStream;
+    if ds.is_null() {
+        crate::close(fd);
+        ERRNO = ENOMEM;
+        return core::ptr::null_mut();
+    }
+    core::ptr::write_bytes(ds, 0, 1);
+    (*ds).fd = fd;
+    ds as *mut core::ffi::c_void
+}
 
 #[no_mangle]
 pub unsafe extern "C" fn opendir(dirname: *const core::ffi::c_char) -> *mut core::ffi::c_void {
     let fd = openat(AT_FDCWD, dirname, O_DIRECTORY, 0); // O_RDONLY | O_DIRECTORY
     if fd < 0 { return core::ptr::null_mut(); }
-    DIR_FD = fd;
-    DIR_POS = 0;
-    DIR_LEN = 0;
-    &DIR_FD as *const i32 as *mut core::ffi::c_void
+    dir_stream_new(fd)
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn closedir(dirp: *mut core::ffi::c_void) -> i32 {
-    if dirp.is_null() { return -1; }
-    let fd = *(dirp as *const i32);
-    crate::close(fd)
+    if dirp.is_null() { ERRNO = 22; return -1; }
+    let ds = dirp as *mut DirStream;
+    let r = crate::close((*ds).fd);
+    free(dirp);
+    r
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn readdir(dirp: *mut core::ffi::c_void) -> *mut core::ffi::c_void {
-    if dirp.is_null() { return core::ptr::null_mut(); }
-    let fd = *(dirp as *const i32);
+    if dirp.is_null() { ERRNO = 22; return core::ptr::null_mut(); }
+    let ds = &mut *(dirp as *mut DirStream);
 
     loop {
-        if DIR_POS >= DIR_LEN {
-            let nread = <Arch as Syscalls>::syscall3(SYS_GETDENTS64, fd as i64, DIR_BUF.as_mut_ptr() as i64, 1024) as isize;
+        if ds.pos >= ds.len {
+            let nread = syscall_ret(<Arch as Syscalls>::syscall3(
+                SYS_GETDENTS64,
+                ds.fd as i64,
+                ds.buf.as_mut_ptr() as i64,
+                DIR_BUF_SIZE as i64,
+            )) as isize;
             if nread <= 0 { return core::ptr::null_mut(); }
-            DIR_LEN = nread as usize;
-            DIR_POS = 0;
+            ds.len = nread as usize;
+            ds.pos = 0;
         }
 
-        let ent = DIR_BUF.as_ptr().add(DIR_POS) as *const linux_dirent64;
+        let ent = ds.buf.as_ptr().add(ds.pos) as *const linux_dirent64;
         let ent_ref = &*ent;
-        DIR_POS += ent_ref.d_reclen as usize;
+        if ent_ref.d_reclen as usize == 0 {
+            ds.len = 0;
+            return core::ptr::null_mut();
+        }
+        ds.pos += ent_ref.d_reclen as usize;
+        ds.last_off = ent_ref.d_off;
 
-        // Return pointer to the entry (reusing static buffer)
+        // Return a pointer into this stream's buffer (valid until next call).
         return ent as *mut core::ffi::c_void;
     }
 }
@@ -20507,25 +20737,32 @@ pub unsafe extern "C" fn readdir_r(dirp: *mut core::ffi::c_void, _entry: *mut co
 #[no_mangle]
 pub unsafe extern "C" fn seekdir(dirp: *mut core::ffi::c_void, loc: i64) {
     if dirp.is_null() { return; }
-    let fd = *(dirp as *const i32);
-    <Arch as Syscalls>::syscall3(SYS_LSEEK, fd as i64, loc, 0);
+    let ds = &mut *(dirp as *mut DirStream);
+    <Arch as Syscalls>::syscall3(SYS_LSEEK, ds.fd as i64, loc, 0);
+    ds.pos = 0;
+    ds.len = 0;
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn telldir(_dirp: *mut core::ffi::c_void) -> i64 {
-    DIR_POS as i64
+pub unsafe extern "C" fn telldir(dirp: *mut core::ffi::c_void) -> i64 {
+    if dirp.is_null() { return -1; }
+    (*(dirp as *mut DirStream)).last_off
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn rewinddir(_dirp: *mut core::ffi::c_void) {
-    DIR_POS = 0;
-    DIR_LEN = 0;
+pub unsafe extern "C" fn rewinddir(dirp: *mut core::ffi::c_void) {
+    if dirp.is_null() { return; }
+    let ds = &mut *(dirp as *mut DirStream);
+    <Arch as Syscalls>::syscall3(SYS_LSEEK, ds.fd as i64, 0, 0);
+    ds.pos = 0;
+    ds.len = 0;
+    ds.last_off = 0;
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn dirfd(dirp: *mut core::ffi::c_void) -> i32 {
-    if dirp.is_null() { return -1; }
-    unsafe { *(dirp as *const i32) }
+    if dirp.is_null() { ERRNO = 22; return -1; }
+    (*(dirp as *mut DirStream)).fd
 }
 
 // ============================================================
@@ -20534,42 +20771,42 @@ pub unsafe extern "C" fn dirfd(dirp: *mut core::ffi::c_void) -> i32 {
 
 #[no_mangle]
 pub unsafe extern "C" fn mprotect(addr: *mut u8, len: usize, prot: i32) -> i32 {
-    <Arch as Syscalls>::syscall3(SYS_MPROTECT, addr as i64, len as i64, prot as i64) as i32
+    syscall_ret(<Arch as Syscalls>::syscall3(SYS_MPROTECT, addr as i64, len as i64, prot as i64)) as i32
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn msync(addr: *mut u8, len: usize, flags: i32) -> i32 {
-    <Arch as Syscalls>::syscall3(sysno(26, 227), addr as i64, len as i64, flags as i64) as i32
+    syscall_ret(<Arch as Syscalls>::syscall3(sysno(26, 227), addr as i64, len as i64, flags as i64)) as i32
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn mlock(addr: *const u8, len: usize) -> i32 {
-    <Arch as Syscalls>::syscall2(sysno(149, 228), addr as i64, len as i64) as i32
+    syscall_ret(<Arch as Syscalls>::syscall2(sysno(149, 228), addr as i64, len as i64)) as i32
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn munlock(addr: *const u8, len: usize) -> i32 {
-    <Arch as Syscalls>::syscall2(sysno(150, 229), addr as i64, len as i64) as i32
+    syscall_ret(<Arch as Syscalls>::syscall2(sysno(150, 229), addr as i64, len as i64)) as i32
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn mlockall(flags: i32) -> i32 {
-    <Arch as Syscalls>::syscall1(sysno(151, 230), flags as i64) as i32
+    syscall_ret(<Arch as Syscalls>::syscall1(sysno(151, 230), flags as i64)) as i32
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn munlockall() -> i32 {
-    <Arch as Syscalls>::syscall0(sysno(152, 231)) as i32
+    syscall_ret(<Arch as Syscalls>::syscall0(sysno(152, 231))) as i32
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn madvise(addr: *mut u8, len: usize, advice: i32) -> i32 {
-    <Arch as Syscalls>::syscall3(sysno(28, 233), addr as i64, len as i64, advice as i64) as i32
+    syscall_ret(<Arch as Syscalls>::syscall3(sysno(28, 233), addr as i64, len as i64, advice as i64)) as i32
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn mincore(addr: *mut u8, len: usize, vec: *mut u8) -> i32 {
-    <Arch as Syscalls>::syscall3(sysno(27, 232), addr as i64, len as i64, vec as i64) as i32
+    syscall_ret(<Arch as Syscalls>::syscall3(sysno(27, 232), addr as i64, len as i64, vec as i64)) as i32
 }
 
 // ============================================================
@@ -21932,7 +22169,7 @@ pub unsafe extern "C" fn sigrelse(sig: c_int) -> c_int {
 pub unsafe extern "C" fn siginterrupt(sig: c_int, flag: c_int) -> c_int {
     let mut sa: sigaction = core::mem::zeroed();
     if sigaction(sig, core::ptr::null(), &mut sa) != 0 { return -1; }
-    if flag != 0 { sa.sa_flags &= !(SA_RESTART as c_ulong); } else { sa.sa_flags |= SA_RESTART as c_ulong; }
+    if flag != 0 { sa.sa_flags &= !(SA_RESTART as c_int); } else { sa.sa_flags |= SA_RESTART as c_int; }
     sigaction(sig, &sa, core::ptr::null_mut())
 }
 

@@ -49,8 +49,15 @@ fn ldso_runs_pie_with_dependency() {
     assert!(status.success(), "musl-gcc needfoo compilation failed");
 
     // Run needfoo with LD_LIBRARY_PATH pointing at fixtures
+    // libfoo.so itself needs libc.so, which lives in target/debug in this
+    // test setup. Real binaries expect their dependencies on the search path.
+    let lib_path = format!(
+        "{}:{}",
+        fixtures.display(),
+        manifest_dir.join("target/debug").display()
+    );
     let output = Command::new(&needfoo_bin)
-        .env("LD_LIBRARY_PATH", fixtures.to_str().unwrap())
+        .env("LD_LIBRARY_PATH", lib_path)
         .output()
         .expect("failed to run needfoo");
 
