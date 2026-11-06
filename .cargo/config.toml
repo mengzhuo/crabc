@@ -1,5 +1,7 @@
 [env]
 RUST_TEST_THREADS = "1"
 
+# Release artifacts are size-sensitive; dropping unwind tables is safe with
+# panic=abort (the dev profile uses abort too).
 [build]
-rustflags = ["-C", "link-dead-code"]
+rustflags = ["-C", "force-unwind-tables=no"]

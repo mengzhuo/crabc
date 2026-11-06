@@ -35,6 +35,11 @@ int main(void) {
     for (int i = 0; i < 20000; i++) { memset(dst, i, 4096); sink += dst[i & 63]; }
     report("memset_4k", ns() - t, 20000);
 
+    /* Compare equal data up to the middle, as in the x86 benchmark; a
+     * first-byte difference only exercises the scalar early-out. */
+    memset(src, 0x5A, 4096);
+    memset(dst, 0x5A, 4096);
+    dst[2048] ^= 1;
     t = ns();
     for (int i = 0; i < 20000; i++) { sink += (uint64_t)memcmp(src, dst, 4096); }
     report("memcmp_4k", ns() - t, 20000);

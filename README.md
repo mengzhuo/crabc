@@ -13,8 +13,8 @@ same binaries under musl and crabc, and it is faster than musl on both
 x86\_64 and riscv64 (qemu-user) in the microbenchmark suite; process startup
 is the one structural exception. See `docs/performance.md`.
 
-Build and cross-compilation instructions are in `AGENTS.md`. Releases are
-produced from `v*` tags and the workspace is published as the `crabc`,
-`crabc-libc` and `crabc-ldso` crates.
+Build and cross-compilation instructions are in `AGENTS.md`. Release builds
+are size-optimized and stripped, and are produced from `v*` tags; the
+workspace is published as the `crabc`, `crabc-libc` and `crabc-ldso` crates.
 
 crabc is licensed under MIT OR Apache-2.0.

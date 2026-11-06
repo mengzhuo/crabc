@@ -32,7 +32,7 @@ cargo test --test math       # one test file, after the build above
 - Tests and the harness hardcode `target/debug`; `cargo test --release` still looks for debug artifacts. Stick to the dev profile.
 - Cargo stops at the first failing test binary; use `cargo test --workspace --no-fail-fast` when you need the full picture.
 - Toolchain is nightly (`rust-toolchain.toml`) and requires `musl-gcc`. `static_hello` also needs host CRT objects under `/usr/lib/<arch>-linux-musl/`.
-- Dev profile is intentional: `opt-level = 2`, `overflow-checks = false`, `panic = "abort"`. `.cargo/config.toml` sets `RUST_TEST_THREADS=1` and `-C link-dead-code`. Do not change these.
+- Dev profile is intentional: `opt-level = 2`, `overflow-checks = false`, `panic = "abort"`. The release profile is size-oriented (`opt-level = "s"`, `strip = "symbols"`, `panic = "abort"`), and `.cargo/config.toml` sets `RUST_TEST_THREADS=1` plus `-C force-unwind-tables=no`. Do not change these without re-running the size and performance measurements.
 - New fixture binaries are written into `tests/fixtures/`; add each output path to the manual list in `.gitignore`.
 
 ## Test Pattern
@@ -72,6 +72,8 @@ Math fixtures add `-frounding-math`; on x86_64 also `-mlong-double-64`. `tests/c
 ## Releasing
 
 Releases are published by `.github/workflows/release.yml` on `v*` tags using crates.io Trusted Publishing (OIDC, no long-lived token). The job uses the GitHub environment `release`.
+
+Release artifacts use the size-oriented profile. Static consumers should link with `-Wl,--gc-sections`; without it a Rust staticlib pulls in far more code.
 
 One-time setup on crates.io, for **each** of `crabc`, `crabc-libc`, and `crabc-ldso`:
 
