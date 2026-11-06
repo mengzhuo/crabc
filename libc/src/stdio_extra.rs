@@ -75,11 +75,11 @@ unsafe extern "C" fn cookie_write(f: *mut FILE, buf: *const u8, len: usize) -> u
 unsafe extern "C" fn cookie_seek(f: *mut FILE, off: i64, whence: c_int) -> i64 {
     let cf = (*f).cookie as *mut CookieFile;
     if cf.is_null() || (*cf).io.seek == 0 {
-        ERRNO = 95; // ENOTSUP
+        ERRNO!() = 95; // ENOTSUP
         return -1;
     }
     if whence < 0 || whence > 2 {
-        ERRNO = EINVAL;
+        ERRNO!() = EINVAL;
         return -1;
     }
     let func: CookieSeekFn = core::mem::transmute((*cf).io.seek);
@@ -104,16 +104,16 @@ unsafe extern "C" fn cookie_close(f: *mut FILE) -> c_int {
 
 #[no_mangle]
 pub unsafe extern "C" fn fopencookie(cookie: *mut c_void, mode: *const c_char, io_funcs: CookieIo) -> *mut FILE {
-    if mode.is_null() { ERRNO = EINVAL; return core::ptr::null_mut(); }
+    if mode.is_null() { ERRNO!() = EINVAL; return core::ptr::null_mut(); }
     let m = *mode;
     if m != b'r' as c_char && m != b'w' as c_char && m != b'a' as c_char {
-        ERRNO = EINVAL;
+        ERRNO!() = EINVAL;
         return core::ptr::null_mut();
     }
     let f = crate::calloc(1, core::mem::size_of::<FILE>() + UNGET + BUFSIZ) as *mut FILE;
-    if f.is_null() { ERRNO = ENOMEM; return core::ptr::null_mut(); }
+    if f.is_null() { ERRNO!() = ENOMEM; return core::ptr::null_mut(); }
     let cf = crate::calloc(1, core::mem::size_of::<CookieFile>()) as *mut CookieFile;
-    if cf.is_null() { crate::free(f as *mut c_void); ERRNO = ENOMEM; return core::ptr::null_mut(); }
+    if cf.is_null() { crate::free(f as *mut c_void); ERRNO!() = ENOMEM; return core::ptr::null_mut(); }
     (*cf).cookie = cookie;
     (*cf).io = io_funcs;
 
@@ -160,7 +160,7 @@ unsafe fn wms_emit(c: *mut WmsCookie, wc: u32) {
         let len2 = ((*c).space * 2 + 1) | ((*c).pos + 1);
         if len2 > (isize::MAX as usize) / 4 { return; }
         let newbuf = crate::realloc((*c).buf as *mut c_void, len2 * 4) as *mut wchar_t;
-        if newbuf.is_null() { ERRNO = ENOMEM; return; }
+        if newbuf.is_null() { ERRNO!() = ENOMEM; return; }
         core::ptr::write_bytes((newbuf as *mut u8).add((*c).space * 4), 0, (len2 - (*c).space) * 4);
         (*c).buf = newbuf;
         (*c).space = len2;
@@ -234,7 +234,7 @@ unsafe extern "C" fn wms_write(f: *mut FILE, buf: *const u8, len: usize) -> usiz
 unsafe extern "C" fn wms_seek(f: *mut FILE, off: i64, whence: c_int) -> i64 {
     let c = (*f).cookie as *mut WmsCookie;
     if c.is_null() || whence < 0 || whence > 2 {
-        ERRNO = EINVAL;
+        ERRNO!() = EINVAL;
         return -1;
     }
     let base: i64 = match whence {
@@ -243,7 +243,7 @@ unsafe extern "C" fn wms_seek(f: *mut FILE, off: i64, whence: c_int) -> i64 {
         _ => (*c).len as i64,
     };
     if off < -base || off > (isize::MAX as i64) / 4 - base {
-        ERRNO = EINVAL;
+        ERRNO!() = EINVAL;
         return -1;
     }
     (*c).pos = (base + off) as usize;
@@ -259,16 +259,16 @@ unsafe extern "C" fn wms_close(_f: *mut FILE) -> c_int {
 
 #[no_mangle]
 pub unsafe extern "C" fn open_wmemstream(bufp: *mut *mut wchar_t, sizep: *mut usize) -> *mut FILE {
-    if bufp.is_null() || sizep.is_null() { ERRNO = EINVAL; return core::ptr::null_mut(); }
+    if bufp.is_null() || sizep.is_null() { ERRNO!() = EINVAL; return core::ptr::null_mut(); }
     let f = crate::calloc(1, core::mem::size_of::<FILE>() + 1) as *mut FILE;
-    if f.is_null() { ERRNO = ENOMEM; return core::ptr::null_mut(); }
+    if f.is_null() { ERRNO!() = ENOMEM; return core::ptr::null_mut(); }
     let c = crate::calloc(1, core::mem::size_of::<WmsCookie>()) as *mut WmsCookie;
-    if c.is_null() { crate::free(f as *mut c_void); ERRNO = ENOMEM; return core::ptr::null_mut(); }
+    if c.is_null() { crate::free(f as *mut c_void); ERRNO!() = ENOMEM; return core::ptr::null_mut(); }
     let buf = crate::calloc(1, 4) as *mut wchar_t;
     if buf.is_null() {
         crate::free(c as *mut c_void);
         crate::free(f as *mut c_void);
-        ERRNO = ENOMEM;
+        ERRNO!() = ENOMEM;
         return core::ptr::null_mut();
     }
     (*c).bufp = bufp;
@@ -489,7 +489,7 @@ pub unsafe extern "C" fn getdate(s: *const c_char) -> *mut crate::tm {
     }
     let f = crate::fopen(datemsk, b"r\0".as_ptr() as *const c_char);
     if f.is_null() {
-        getdate_err = if ERRNO == ENOMEM { 6 } else { 2 };
+        getdate_err = if ERRNO!() == ENOMEM { 6 } else { 2 };
         return core::ptr::null_mut();
     }
     let mut fmt = [0 as c_char; 128];

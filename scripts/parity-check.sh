@@ -16,8 +16,9 @@
 #   scripts/parity-check.sh [functional|regression|all|symbols]
 #
 # `symbols` compares the exported dynamic symbol sets instead of running
-# tests; the four linker-internal symbols musl exports are allowed to be
-# absent from crabc.
+# tests. crabc's libc and ldso exports are unioned because musl's libc.so is
+# also its loader; the four linker-internal symbols musl exports are allowed
+# to be absent.
 #
 # Environment:
 #   LIBC_TEST_DIR  upstream libc-test checkout (default /home/root/libc-test)
@@ -96,8 +97,13 @@ if [ "$SUBSET" = "symbols" ]; then
     crabc_syms="$PARITY_DIR/crabc.syms"
     nm -D --defined-only "$MUSL_LIBC" \
         | awk '$2 ~ /^[TtWwDdBbRrVv]$/ {print $3}' | sort -u > "$musl_syms"
-    nm -D --defined-only "$ROOT/target/debug/libc.so" \
-        | awk '$2 ~ /^[TtWwDdBbRrVv]$/ {print $3}' | sort -u > "$crabc_syms"
+    # musl's libc.so is also its loader. Compare the union of crabc's libc
+    # and ldso exports, otherwise loader-only symbols such as __tls_get_addr
+    # look missing.
+    {
+        nm -D --defined-only "$ROOT/target/debug/libc.so"
+        nm -D --defined-only "$ROOT/target/debug/libldso.so"
+    } | awk '$2 ~ /^[TtWwDdBbRrVv]$/ {print $3}' | sort -u > "$crabc_syms"
     comm -23 "$musl_syms" "$crabc_syms" > "$PARITY_DIR/missing.syms"
     comm -13 "$musl_syms" "$crabc_syms" > "$PARITY_DIR/extra.syms"
     # _init/_fini are ELF entry stubs provided by crt; _dl_debug_addr and

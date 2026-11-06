@@ -156,14 +156,14 @@ pub unsafe extern "C" fn clock_gettime(clockid: c_int, ts: *mut timespec) -> c_i
             return 0;
         }
         if r == -EINVAL {
-            crate::ERRNO = EINVAL;
+            ERRNO!() = EINVAL;
             return -1;
         }
         // Unsupported clock or an old vDSO: fall back to the syscall.
     }
     let r = sys_clock_gettime(clockid, ts);
     if r < 0 {
-        crate::ERRNO = (-r) as c_int;
+        ERRNO!() = (-r) as c_int;
         -1
     } else {
         0

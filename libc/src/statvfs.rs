@@ -76,7 +76,7 @@ pub unsafe extern "C" fn statvfs(path: *const c_char, buf: *mut statvfs) -> c_in
     let mut kbuf: kernel_statfs = core::mem::zeroed();
     let r = sys_statfs(path, &mut kbuf);
     if r < 0 {
-        ERRNO = (-r) as c_int;
+        ERRNO!() = (-r) as c_int;
         return -1;
     }
     fixup(buf, &kbuf);
@@ -88,7 +88,7 @@ pub unsafe extern "C" fn fstatvfs(fd: c_int, buf: *mut statvfs) -> c_int {
     let mut kbuf: kernel_statfs = core::mem::zeroed();
     let r = sys_fstatfs(fd, &mut kbuf);
     if r < 0 {
-        ERRNO = (-r) as c_int;
+        ERRNO!() = (-r) as c_int;
         return -1;
     }
     fixup(buf, &kbuf);

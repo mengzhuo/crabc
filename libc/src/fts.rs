@@ -265,7 +265,7 @@ unsafe fn fts_walk(fts: *mut Fts, ent: *mut FtsEnt) {
                     rc = fts_stat_path((*child).fts_path, true, &mut st);
                 }
                 if rc != 0 {
-                    (*child).fts_errno = ERRNO;
+                    (*child).fts_errno = ERRNO!();
                     (*child).fts_info = FTS_NS_V;
                 } else {
                     core::ptr::copy_nonoverlapping(&st as *const Stat as *const u8, (*child).fts_statp as *mut u8, core::mem::size_of::<Stat>());
@@ -304,7 +304,7 @@ unsafe fn fts_build(fts: *mut Fts) {
         let ent = fts_ent_alloc(root, fts_name_of(root), 0, core::ptr::null_mut());
         if ent.is_null() { continue; }
         if rc != 0 {
-            (*ent).fts_errno = ERRNO;
+            (*ent).fts_errno = ERRNO!();
             (*ent).fts_info = FTS_NS_V;
             fts_push(fts, ent);
             continue;
@@ -325,20 +325,20 @@ pub unsafe extern "C" fn fts_open(
     compar: Option<unsafe extern "C" fn(*const *const FtsEnt, *const *const FtsEnt) -> c_int>,
 ) -> *mut Fts {
     if path_argv.is_null() || (*path_argv).is_null() {
-        ERRNO = EINVAL;
+        ERRNO!() = EINVAL;
         return core::ptr::null_mut();
     }
     let fts = crate::calloc(1, core::mem::size_of::<Fts>()) as *mut Fts;
-    if fts.is_null() { ERRNO = ENOMEM; return core::ptr::null_mut(); }
+    if fts.is_null() { ERRNO!() = ENOMEM; return core::ptr::null_mut(); }
     let mut n = 0usize;
     while !(*path_argv.add(n)).is_null() { n += 1; }
     let roots = crate::malloc((n + 1) * core::mem::size_of::<*mut c_char>()) as *mut *mut c_char;
-    if roots.is_null() { crate::free(fts as *mut c_void); ERRNO = ENOMEM; return core::ptr::null_mut(); }
+    if roots.is_null() { crate::free(fts as *mut c_void); ERRNO!() = ENOMEM; return core::ptr::null_mut(); }
     for i in 0..n {
         let s = *path_argv.add(i);
         let l = crate::strlen(s);
         let copy = crate::malloc(l + 1) as *mut c_char;
-        if copy.is_null() { ERRNO = ENOMEM; crate::free(roots as *mut c_void); crate::free(fts as *mut c_void); return core::ptr::null_mut(); }
+        if copy.is_null() { ERRNO!() = ENOMEM; crate::free(roots as *mut c_void); crate::free(fts as *mut c_void); return core::ptr::null_mut(); }
         core::ptr::copy_nonoverlapping(s, copy, l + 1);
         *roots.add(i) = copy;
     }
@@ -357,7 +357,7 @@ pub unsafe extern "C" fn fts_open(
 
 #[no_mangle]
 pub unsafe extern "C" fn fts_read(fts: *mut Fts) -> *mut FtsEnt {
-    if fts.is_null() { ERRNO = EINVAL; return core::ptr::null_mut(); }
+    if fts.is_null() { ERRNO!() = EINVAL; return core::ptr::null_mut(); }
     if !(*fts).built { fts_build(fts); }
     if (*fts).idx < (*fts).nents {
         let e = *(*fts).ents.add((*fts).idx);
@@ -369,7 +369,7 @@ pub unsafe extern "C" fn fts_read(fts: *mut Fts) -> *mut FtsEnt {
 
 #[no_mangle]
 pub unsafe extern "C" fn fts_set(fts: *mut Fts, ent: *mut FtsEnt, instr: c_int) -> c_int {
-    if fts.is_null() || ent.is_null() { ERRNO = EINVAL; return -1; }
+    if fts.is_null() || ent.is_null() { ERRNO!() = EINVAL; return -1; }
     match instr {
         FTS_SKIP_V => {
             (*ent).fts_instr = FTS_SKIP_V as u16;
@@ -398,14 +398,14 @@ pub unsafe extern "C" fn fts_set(fts: *mut Fts, ent: *mut FtsEnt, instr: c_int) 
             }
         }
         FTS_NOINSTR_V => { (*ent).fts_instr = FTS_NOINSTR_V as u16; }
-        _ => { ERRNO = EINVAL; return -1; }
+        _ => { ERRNO!() = EINVAL; return -1; }
     }
     0
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn fts_children(fts: *mut Fts, _instr: c_int) -> *mut FtsEnt {
-    if fts.is_null() { ERRNO = EINVAL; return core::ptr::null_mut(); }
+    if fts.is_null() { ERRNO!() = EINVAL; return core::ptr::null_mut(); }
     if !(*fts).built { fts_build(fts); }
     if (*fts).idx == 0 { return core::ptr::null_mut(); }
     let parent = *(*fts).ents.add((*fts).idx - 1);
@@ -429,7 +429,7 @@ pub unsafe extern "C" fn fts_children(fts: *mut Fts, _instr: c_int) -> *mut FtsE
 
 #[no_mangle]
 pub unsafe extern "C" fn fts_close(fts: *mut Fts) -> c_int {
-    if fts.is_null() { ERRNO = EINVAL; return -1; }
+    if fts.is_null() { ERRNO!() = EINVAL; return -1; }
     for i in 0..(*fts).nents {
         fts_free_ent(*(*fts).ents.add(i));
     }

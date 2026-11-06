@@ -133,6 +133,7 @@ struct LoadedObject {
     strsz: usize,
     gnu_hash: usize,
     hash: usize,
+    versym: usize,
     dyn_addr: usize,
     dyn_memsz: usize,
     tls_image: *const u8,
@@ -162,6 +163,7 @@ const EMPTY_OBJ: LoadedObject = LoadedObject {
     strsz: 0,
     gnu_hash: 0,
     hash: 0,
+    versym: 0,
     dyn_addr: 0,
     dyn_memsz: 0,
     tls_image: core::ptr::null(),
@@ -1592,6 +1594,7 @@ unsafe fn load_dso_from_fd(fd: i64, desired_base: u64) -> Option<u64> {
     let mut dt_init_array_present = false;
     let mut dt_gnu_hash: u64 = 0;
     let mut dt_hash: u64 = 0;
+    let mut dt_versym: u64 = 0;
     let mut dp = dyn_addr;
     while dp + 16 <= dyn_end {
         let d_tag = u64::from_le_bytes(core::ptr::read_unaligned(dp as *const [u8; 8]));
@@ -1605,6 +1608,7 @@ unsafe fn load_dso_from_fd(fd: i64, desired_base: u64) -> Option<u64> {
             DT_STRSZ => dt_strsz = d_val,
             DT_GNU_HASH => dt_gnu_hash = d_val,
             DT_HASH => dt_hash = d_val,
+            0x6ffffff0 => dt_versym = d_val, // DT_VERSYM
             DT_INIT => { dt_init = d_val; dt_init_present = true; }
             DT_INIT_ARRAY => { dt_init_array = d_val; dt_init_array_present = true; }
             DT_INIT_ARRAYSZ => dt_init_array_sz = d_val,
@@ -1635,6 +1639,7 @@ unsafe fn load_dso_from_fd(fd: i64, desired_base: u64) -> Option<u64> {
             strsz,
             gnu_hash: if dt_gnu_hash != 0 { (actual_base + dt_gnu_hash) as usize } else { 0 },
             hash: if dt_hash != 0 { (actual_base + dt_hash) as usize } else { 0 },
+            versym: if dt_versym != 0 { (actual_base + dt_versym) as usize } else { 0 },
             dyn_addr,
             dyn_memsz: dyn_memsz as usize,
             tls_image,
@@ -1743,6 +1748,20 @@ unsafe fn match_sym(
     Some((obj.base + value, ld_u64(sym.add(16)) as usize))
 }
 
+/// A symbol is "default" when its .gnu.version entry does not have the hidden
+/// bit set (i.e. it is exported as `foo@@VER`, not `foo@VER`). Symbol lookup
+/// must prefer the default version; libnuma, for example, exports an old 1.1
+/// ABI and a 1.2 ABI under the same name.
+unsafe fn sym_is_default(obj: &LoadedObject, idx: usize) -> bool {
+    if obj.versym == 0 || idx >= obj.sym_count {
+        return true;
+    }
+    let v = u16::from_le_bytes(core::ptr::read_unaligned(
+        (obj.versym as *const u8).add(idx * 2) as *const [u8; 2],
+    ));
+    v & 0x8000 == 0
+}
+
 unsafe fn lookup_gnu(
     obj: &LoadedObject,
     name: *const u8,
@@ -1769,11 +1788,17 @@ unsafe fn lookup_gnu(
     if idx < symoffset || idx >= obj.sym_count {
         return None;
     }
+    let mut fallback = None;
     loop {
         let c = ld_u32(chain.add((idx - symoffset) * 4));
         if (c | 1) == (h | 1) {
             if let Some(r) = match_sym(obj, idx, name, name_len) {
-                return Some(r);
+                if sym_is_default(obj, idx) {
+                    return Some(r);
+                }
+                if fallback.is_none() {
+                    fallback = Some(r);
+                }
             }
         }
         if c & 1 != 0 {
@@ -1784,7 +1809,7 @@ unsafe fn lookup_gnu(
             break;
         }
     }
-    None
+    fallback
 }
 
 unsafe fn lookup_sysv(
@@ -1801,13 +1826,19 @@ unsafe fn lookup_sysv(
     let buckets = h.add(8);
     let chains = buckets.add(nbucket * 4);
     let mut idx = ld_u32(buckets.add((hash_sysv(name, name_len) as usize % nbucket) * 4)) as usize;
+    let mut fallback = None;
     while idx != 0 && idx < nchain {
         if let Some(r) = match_sym(obj, idx, name, name_len) {
-            return Some(r);
+            if sym_is_default(obj, idx) {
+                return Some(r);
+            }
+            if fallback.is_none() {
+                fallback = Some(r);
+            }
         }
         idx = ld_u32(chains.add(idx * 4)) as usize;
     }
-    None
+    fallback
 }
 
 unsafe fn lookup_linear(
@@ -1816,13 +1847,19 @@ unsafe fn lookup_linear(
     name_len: usize,
 ) -> Option<(u64, usize)> {
     let mut j = 0usize;
+    let mut fallback = None;
     while j < obj.sym_count {
         if let Some(r) = match_sym(obj, j, name, name_len) {
-            return Some(r);
+            if sym_is_default(obj, j) {
+                return Some(r);
+            }
+            if fallback.is_none() {
+                fallback = Some(r);
+            }
         }
         j += 1;
     }
-    None
+    fallback
 }
 
 /// Search all loaded objects for a symbol with the given null-terminated name.
@@ -1846,6 +1883,9 @@ unsafe fn resolve_symbol_with_size(name: *const u8, exclude: usize) -> (u64, usi
     }
     if str_eq(name, name_len, b"__rc_tls_block_size\0".as_ptr()) {
         return ((__rc_tls_block_size as *const () as usize) as u64, 0);
+    }
+    if str_eq(name, name_len, b"__rc_init_thread_tls_at\0".as_ptr()) {
+        return ((__rc_init_thread_tls_at as *const () as usize) as u64, 0);
     }
 
     for i in 0..LOADED_COUNT {
@@ -2384,6 +2424,7 @@ unsafe fn lookup_symbol_in_object(obj_idx: usize, name: *const u8, name_len: usi
     if obj.symtab.is_null() || obj.strtab.is_null() {
         return 0;
     }
+    let mut fallback = 0u64;
     for j in 0..obj.sym_count {
         let sym_entry = obj.symtab.add(j * SYMTAB_ENT_SIZE);
         let st_name_off = u32::from_le_bytes(core::ptr::read_unaligned(sym_entry as *const [u8; 4])) as usize;
@@ -2396,10 +2437,15 @@ unsafe fn lookup_symbol_in_object(obj_idx: usize, name: *const u8, name_len: usi
         }
         let sym_name = obj.strtab.add(st_name_off);
         if str_eq(name, name_len, sym_name) {
-            return obj.base + st_value;
+            if sym_is_default(obj, j) {
+                return obj.base + st_value;
+            }
+            if fallback == 0 {
+                fallback = obj.base + st_value;
+            }
         }
     }
-    0
+    fallback
 }
 
 static mut DLERROR_BUF: [u8; 128] = [0; 128];
@@ -2900,6 +2946,14 @@ pub unsafe extern "C" fn __rc_create_thread_tls() -> *mut u8 {
 }
 
 #[no_mangle]
+pub unsafe extern "C" fn __rc_init_thread_tls_at(block: *mut u8) -> *mut u8 {
+    // Lay out the TLS block inside an application-provided thread stack.
+    // musl does the same: keeping the loader's separate mmap away from the
+    // stack leaves MAP_GROWSDOWN free to grow into the pages below it.
+    init_tls_block(block)
+}
+
+#[no_mangle]
 pub unsafe extern "C" fn __rc_tls_block_size() -> usize {
     TLS_TOTAL_SIZE + TCB_SIZE
 }
@@ -2969,6 +3023,7 @@ unsafe fn register_self(ldso_base: u64) {
             strsz: dt_strsz as usize,
             gnu_hash: if dt_gnu_hash != 0 { (ldso_base + dt_gnu_hash) as usize } else { 0 },
             hash: if dt_hash != 0 { (ldso_base + dt_hash) as usize } else { 0 },
+            versym: 0,
             is_self: true,
             dyn_addr,
             dyn_memsz: dyn_memsz as usize,
@@ -3205,6 +3260,7 @@ unsafe fn load_and_jump(sp: usize, ldso_base: u64) -> ! {
     let mut dt_rpath_present = false;
     let mut dt_gnu_hash: u64 = 0;
     let mut dt_hash: u64 = 0;
+    let mut dt_versym: u64 = 0;
 
     // ponytail: max 32 DT_NEEDED, enough for any realistic binary
     let mut needed_offsets: [u64; 32] = [0; 32];
@@ -3232,6 +3288,7 @@ unsafe fn load_and_jump(sp: usize, ldso_base: u64) -> ! {
                 DT_STRSZ => dt_strsz = d_val,
                 DT_GNU_HASH => dt_gnu_hash = d_val,
                 DT_HASH => dt_hash = d_val,
+                0x6ffffff0 => dt_versym = d_val, // DT_VERSYM
                 DT_INIT => { dt_init = d_val; dt_init_present = true; }
                 DT_INIT_ARRAY => { dt_init_array = d_val; dt_init_array_present = true; }
                 DT_INIT_ARRAYSZ => dt_init_array_sz = d_val,
@@ -3277,6 +3334,7 @@ unsafe fn load_and_jump(sp: usize, ldso_base: u64) -> ! {
         strsz: dt_strsz as usize,
         gnu_hash: if dt_gnu_hash != 0 { (exec_base + dt_gnu_hash) as usize } else { 0 },
         hash: if dt_hash != 0 { (exec_base + dt_hash) as usize } else { 0 },
+        versym: if dt_versym != 0 { (exec_base + dt_versym) as usize } else { 0 },
         is_self: false,
         dyn_addr: (exec_base + dyn_vaddr) as usize,
         dyn_memsz: dyn_memsz as usize,

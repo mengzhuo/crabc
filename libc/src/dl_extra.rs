@@ -263,7 +263,7 @@ unsafe fn elf_symbol_lookup(path: *const c_char, addr: u64) -> (bool, u64) {
 
 #[no_mangle]
 pub unsafe extern "C" fn dladdr(addr: *const c_void, info: *mut DlInfo) -> c_int {
-    if info.is_null() { ERRNO = EINVAL; return 0; }
+    if info.is_null() { ERRNO!() = EINVAL; return 0; }
     (*info).dli_fname = core::ptr::null();
     (*info).dli_fbase = core::ptr::null_mut();
     (*info).dli_sname = core::ptr::null();
@@ -403,6 +403,6 @@ pub unsafe extern "C" fn dlinfo(handle: *mut c_void, request: c_int, info: *mut 
     if let Some(f) = LDSO_DLINFO {
         return f(handle, request, info);
     }
-    ERRNO = 95; // ENOTSUP
+    ERRNO!() = 95; // ENOTSUP
     -1
 }

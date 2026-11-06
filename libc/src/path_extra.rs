@@ -19,10 +19,10 @@ pub unsafe extern "C" fn realpath(
     filename: *const c_char,
     resolved: *mut c_char,
 ) -> *mut c_char {
-    if filename.is_null() { ERRNO = EINVAL; return core::ptr::null_mut(); }
+    if filename.is_null() { ERRNO!() = EINVAL; return core::ptr::null_mut(); }
     let flen = crate::strlen(filename);
-    if flen == 0 { ERRNO = 2; return core::ptr::null_mut(); }
-    if flen >= PATH_MAX_V { ERRNO = 36; return core::ptr::null_mut(); }
+    if flen == 0 { ERRNO!() = 2; return core::ptr::null_mut(); }
+    if flen >= PATH_MAX_V { ERRNO!() = 36; return core::ptr::null_mut(); }
 
     let mut out = [0u8; PATH_MAX_V + 1];
     let mut olen;
@@ -70,29 +70,29 @@ pub unsafe extern "C" fn realpath(
             olen = 1;
         }
         if olen > 0 && out[olen - 1] != b'/' {
-            if olen + 1 >= PATH_MAX_V { ERRNO = 36; return core::ptr::null_mut(); }
+            if olen + 1 >= PATH_MAX_V { ERRNO!() = 36; return core::ptr::null_mut(); }
             out[olen] = b'/';
             olen += 1;
         }
-        if olen + comp_len >= PATH_MAX_V { ERRNO = 36; return core::ptr::null_mut(); }
+        if olen + comp_len >= PATH_MAX_V { ERRNO!() = 36; return core::ptr::null_mut(); }
         core::ptr::copy_nonoverlapping(pend.as_ptr().add(start), out.as_mut_ptr().add(olen), comp_len);
         olen += comp_len;
         out[olen] = 0;
 
         let mut st: Stat = core::mem::zeroed();
         if crate::lstat(out.as_ptr() as *const c_char, &mut st as *mut Stat as *mut c_void) != 0 {
-            if ERRNO == 2 { ERRNO = 2; }
+            if ERRNO!() == 2 { ERRNO!() = 2; }
             return core::ptr::null_mut();
         }
         let mode = st.st_mode;
         if mode & 0o170000 == 0o120000 {
             symlinks += 1;
-            if symlinks > 40 { ERRNO = 40; return core::ptr::null_mut(); }
+            if symlinks > 40 { ERRNO!() = 40; return core::ptr::null_mut(); }
             let mut link = [0u8; PATH_MAX_V + 1];
             let n = crate::readlink(out.as_ptr() as *const c_char, link.as_mut_ptr() as *mut c_char, PATH_MAX_V);
             if n < 0 { return core::ptr::null_mut(); }
             let n = n as usize;
-            if n == 0 { ERRNO = 2; return core::ptr::null_mut(); }
+            if n == 0 { ERRNO!() = 2; return core::ptr::null_mut(); }
             link[n] = 0;
             // Remove the component we just appended.
             while olen > 0 && out[olen - 1] != b'/' { olen -= 1; }
@@ -108,7 +108,7 @@ pub unsafe extern "C" fn realpath(
                     next[nl] = b'/';
                     nl += 1;
                 }
-                if nl + rest_len >= next.len() { ERRNO = 36; return core::ptr::null_mut(); }
+                if nl + rest_len >= next.len() { ERRNO!() = 36; return core::ptr::null_mut(); }
                 core::ptr::copy_nonoverlapping(rest.as_ptr(), next.as_mut_ptr().add(nl), rest_len + 1);
                 nl += rest_len;
             }
@@ -119,7 +119,7 @@ pub unsafe extern "C" fn realpath(
             continue;
         }
         if mode & 0o170000 != 0o040000 && needs_dir {
-            ERRNO = 20; // ENOTDIR
+            ERRNO!() = 20; // ENOTDIR
             return core::ptr::null_mut();
         }
     }
@@ -398,7 +398,7 @@ unsafe fn glob_walk(
     let (names, count) = list_dir_names(dp);
     if names.is_null() {
         if flags & GLOB_ERR_V != 0 {
-            if let Some(f) = errfunc { let _ = f(dp, ERRNO); }
+            if let Some(f) = errfunc { let _ = f(dp, ERRNO!()); }
             return GLOB_ABORTED_V;
         }
         return 0;
@@ -488,7 +488,7 @@ pub unsafe extern "C" fn glob(
     errfunc: Option<unsafe extern "C" fn(*const c_char, c_int) -> c_int>,
     pglob: *mut GlobT,
 ) -> c_int {
-    if pattern.is_null() || pglob.is_null() { ERRNO = EINVAL; return GLOB_ABORTED_V; }
+    if pattern.is_null() || pglob.is_null() { ERRNO!() = EINVAL; return GLOB_ABORTED_V; }
 
     let mut expanded = [0u8; PATH_MAX_V + 1];
     let mut pat_ptr = pattern as *const u8;
@@ -660,9 +660,9 @@ unsafe fn nftw_do(
     let mut stat_ok = true;
     let rc = if phys { crate::lstat(path, &mut st as *mut Stat as *mut c_void) } else { crate::stat(path, &mut st) };
     if rc != 0 {
-        if !phys && ERRNO == 2 && crate::lstat(path, &mut st as *mut Stat as *mut c_void) == 0 {
+        if !phys && ERRNO!() == 2 && crate::lstat(path, &mut st as *mut Stat as *mut c_void) == 0 {
             type_ = FTW_SLN_V;
-        } else if ERRNO != 13 {
+        } else if ERRNO!() != 13 {
             return -1;
         } else {
             type_ = FTW_NS_V;
@@ -703,7 +703,7 @@ unsafe fn nftw_do(
     let mut open_err: c_int = 0;
     if type_ == FTW_D_V || type_ == FTW_DP_V {
         dfd = crate::open(path, 0, 0);
-        open_err = ERRNO;
+        open_err = ERRNO!();
         if dfd < 0 && open_err == 13 { type_ = FTW_DNR_V; }
         if fd_limit == 0 && dfd >= 0 { crate::close(dfd); dfd = -1; }
     }
@@ -721,7 +721,7 @@ unsafe fn nftw_do(
 
     if (type_ == FTW_D_V || type_ == FTW_DP_V) && fd_limit > 0 {
         if dfd < 0 {
-            ERRNO = open_err;
+            ERRNO!() = open_err;
             return -1;
         }
         // Enumerate with getdents64 so nested walks are independent.
@@ -750,7 +750,7 @@ unsafe fn nftw_do(
                 }
                 let nl = crate::strlen(name);
                 if len + 1 + nl >= cap {
-                    ERRNO = 36;
+                    ERRNO!() = 36;
                     crate::close(dfd);
                     return -1;
                 }
@@ -782,10 +782,10 @@ pub unsafe extern "C" fn nftw(
     fd_limit: c_int,
     flags: c_int,
 ) -> c_int {
-    if path.is_null() || f.is_none() { ERRNO = EINVAL; return -1; }
+    if path.is_null() || f.is_none() { ERRNO!() = EINVAL; return -1; }
     if fd_limit <= 0 { return 0; }
     let l = crate::strlen(path);
-    if l >= PATH_MAX_V { ERRNO = 36; return -1; }
+    if l >= PATH_MAX_V { ERRNO!() = 36; return -1; }
     let mut buf = [0u8; PATH_MAX_V + 1];
     core::ptr::copy_nonoverlapping(path as *const u8, buf.as_mut_ptr(), l + 1);
     nftw_do(buf.as_mut_ptr(), buf.len(), l, WalkCb::N(f), fd_limit, flags, core::ptr::null_mut(), 0, 0)
@@ -797,10 +797,10 @@ pub unsafe extern "C" fn ftw(
     f: Option<unsafe extern "C" fn(*const c_char, *const Stat, c_int) -> c_int>,
     fd_limit: c_int,
 ) -> c_int {
-    if path.is_null() || f.is_none() { ERRNO = EINVAL; return -1; }
+    if path.is_null() || f.is_none() { ERRNO!() = EINVAL; return -1; }
     if fd_limit <= 0 { return 0; }
     let l = crate::strlen(path);
-    if l >= PATH_MAX_V { ERRNO = 36; return -1; }
+    if l >= PATH_MAX_V { ERRNO!() = 36; return -1; }
     let mut buf = [0u8; PATH_MAX_V + 1];
     core::ptr::copy_nonoverlapping(path as *const u8, buf.as_mut_ptr(), l + 1);
     nftw_do(buf.as_mut_ptr(), buf.len(), l, WalkCb::F(f), fd_limit, FTW_PHYS_V, core::ptr::null_mut(), 0, 0)

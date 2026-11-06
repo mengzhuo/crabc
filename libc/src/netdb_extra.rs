@@ -1169,7 +1169,7 @@ pub unsafe extern "C" fn ttyname_r(fd: c_int, name: *mut c_char, size: usize) ->
     o += nd_itoa(fd as u32, procname.as_mut_ptr().add(o));
     procname[o] = 0;
     let n = crate::readlink(procname.as_ptr(), name, size - 1);
-    if n < 0 { return ERRNO; }
+    if n < 0 { return ERRNO!(); }
     if n as usize == size - 1 { return NDB_ERANGE; }
     *name.add(n as usize) = 0;
     0
@@ -1311,7 +1311,7 @@ pub unsafe extern "C" fn gethostbyaddr_r(
 
 #[no_mangle]
 pub unsafe extern "C" fn initgroups(user: *const c_char, group: u32) -> c_int {
-    if user.is_null() { ERRNO = EINVAL; return -1; }
+    if user.is_null() { ERRNO!() = EINVAL; return -1; }
     let mut buf = [0u32; 256];
     let mut n: c_int = buf.len() as c_int;
     if getgrouplist(user, group, buf.as_mut_ptr(), &mut n) < 0 {

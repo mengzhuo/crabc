@@ -9,14 +9,14 @@ pub unsafe extern "C" fn daemon(nochdir: c_int, noclose: c_int) -> c_int {
     if nochdir == 0 {
         let r = sys_chdir(ROOT_PATH.as_ptr());
         if r < 0 {
-            ERRNO = (-r) as c_int;
+            ERRNO!() = (-r) as c_int;
             return -1;
         }
     }
     if noclose == 0 {
         let fd = sys_open(DEV_NULL.as_ptr(), O_RDWR as i64, 0);
         if fd < 0 {
-            ERRNO = (-fd) as c_int;
+            ERRNO!() = (-fd) as c_int;
             return -1;
         }
         let mut failed = false;
@@ -40,7 +40,7 @@ pub unsafe extern "C" fn daemon(nochdir: c_int, noclose: c_int) -> c_int {
             sys_close(fd);
         }
         if failed {
-            ERRNO = err as c_int;
+            ERRNO!() = err as c_int;
             return -1;
         }
     }
@@ -48,21 +48,21 @@ pub unsafe extern "C" fn daemon(nochdir: c_int, noclose: c_int) -> c_int {
     match ret {
         0 => {}
         -1 => {
-            ERRNO = (-ret) as c_int;
+            ERRNO!() = (-ret) as c_int;
             return -1;
         }
         _ => _exit(0),
     }
     let r = sys_setsid();
     if r < 0 {
-        ERRNO = (-r) as c_int;
+        ERRNO!() = (-r) as c_int;
         return -1;
     }
     let ret = sys_fork();
     match ret {
         0 => {}
         -1 => {
-            ERRNO = (-ret) as c_int;
+            ERRNO!() = (-ret) as c_int;
             return -1;
         }
         _ => _exit(0),

@@ -23,6 +23,8 @@ int fcntl(int, int, ...);
 int posix_fadvise(int, off_t, off_t, int);
 int posix_fallocate(int, off_t, off_t);
 
+ssize_t readahead(int, off_t, size_t);
+
 #define O_CREAT        0100
 #define O_EXCL         0200
 #define O_NOCTTY       0400

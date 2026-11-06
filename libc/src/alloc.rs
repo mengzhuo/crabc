@@ -71,12 +71,12 @@ unsafe fn alloc_large(size: usize) -> *mut u8 {
     let total = match size.checked_add(ALLOC_HDR) {
         Some(v) => v,
         None => {
-            ERRNO = ENOMEM;
+            ERRNO!() = ENOMEM;
             return null_mut();
         }
     };
     if total > usize::MAX - (PAGE - 1) {
-        ERRNO = ENOMEM;
+        ERRNO!() = ENOMEM;
         return null_mut();
     }
     let pages = (total + PAGE - 1) / PAGE;
@@ -93,7 +93,7 @@ unsafe fn alloc_large(size: usize) -> *mut u8 {
 
 unsafe fn alloc_aligned_impl(alignment: usize, size: usize) -> *mut u8 {
     if alignment == 0 || !alignment.is_power_of_two() {
-        ERRNO = EINVAL;
+        ERRNO!() = EINVAL;
         return null_mut();
     }
     if alignment <= ALLOC_STEP {
@@ -102,12 +102,12 @@ unsafe fn alloc_aligned_impl(alignment: usize, size: usize) -> *mut u8 {
     let total = match size.checked_add(alignment).and_then(|v| v.checked_add(ALLOC_HDR)) {
         Some(v) => v,
         None => {
-            ERRNO = ENOMEM;
+            ERRNO!() = ENOMEM;
             return null_mut();
         }
     };
     if total > usize::MAX - (PAGE - 1) {
-        ERRNO = ENOMEM;
+        ERRNO!() = ENOMEM;
         return null_mut();
     }
     let pages = (total + PAGE - 1) / PAGE;
@@ -215,7 +215,7 @@ pub unsafe extern "C" fn calloc(count: SizeT, size: SizeT) -> *mut c_void {
     let total = match count.checked_mul(size) {
         Some(v) => v,
         None => {
-            ERRNO = ENOMEM;
+            ERRNO!() = ENOMEM;
             return null_mut();
         }
     };

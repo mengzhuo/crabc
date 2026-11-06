@@ -16,7 +16,7 @@ pub unsafe extern "C" fn syscall(num: c_long, mut args: ...) -> c_long {
     );
 
     if (result as u64) > (-4096i64 as u64) {
-        ERRNO = (-result) as c_int;
+        ERRNO!() = (-result) as c_int;
         return -1;
     }
     result as c_long

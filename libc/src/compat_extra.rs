@@ -83,7 +83,7 @@ unsafe fn aio_find(cb: *const Aiocb) -> *mut AioSlot {
 
 #[no_mangle]
 pub unsafe extern "C" fn aio_read(aiocbp: *mut Aiocb) -> c_int {
-    if aiocbp.is_null() { ERRNO = EINVAL; return -1; }
+    if aiocbp.is_null() { ERRNO!() = EINVAL; return -1; }
     let r = crate::pread(
         (*aiocbp).aio_fildes,
         (*aiocbp).aio_buf,
@@ -91,7 +91,7 @@ pub unsafe extern "C" fn aio_read(aiocbp: *mut Aiocb) -> c_int {
         (*aiocbp).aio_offset,
     );
     if r < 0 {
-        aio_record(aiocbp, -1, ERRNO);
+        aio_record(aiocbp, -1, ERRNO!());
     } else {
         aio_record(aiocbp, r, 0);
     }
@@ -100,7 +100,7 @@ pub unsafe extern "C" fn aio_read(aiocbp: *mut Aiocb) -> c_int {
 
 #[no_mangle]
 pub unsafe extern "C" fn aio_write(aiocbp: *mut Aiocb) -> c_int {
-    if aiocbp.is_null() { ERRNO = EINVAL; return -1; }
+    if aiocbp.is_null() { ERRNO!() = EINVAL; return -1; }
     let r = crate::pwrite(
         (*aiocbp).aio_fildes,
         (*aiocbp).aio_buf as *const u8,
@@ -108,7 +108,7 @@ pub unsafe extern "C" fn aio_write(aiocbp: *mut Aiocb) -> c_int {
         (*aiocbp).aio_offset,
     );
     if r < 0 {
-        aio_record(aiocbp, -1, ERRNO);
+        aio_record(aiocbp, -1, ERRNO!());
     } else {
         aio_record(aiocbp, r, 0);
     }
@@ -117,10 +117,10 @@ pub unsafe extern "C" fn aio_write(aiocbp: *mut Aiocb) -> c_int {
 
 #[no_mangle]
 pub unsafe extern "C" fn aio_fsync(op: c_int, aiocbp: *mut Aiocb) -> c_int {
-    if aiocbp.is_null() { ERRNO = EINVAL; return -1; }
+    if aiocbp.is_null() { ERRNO!() = EINVAL; return -1; }
     let r = if op == 1 { crate::fdatasync((*aiocbp).aio_fildes) } else { crate::fsync((*aiocbp).aio_fildes) };
     if r < 0 {
-        aio_record(aiocbp, -1, ERRNO);
+        aio_record(aiocbp, -1, ERRNO!());
     } else {
         aio_record(aiocbp, 0, 0);
     }
@@ -138,9 +138,9 @@ pub unsafe extern "C" fn aio_error(aiocbp: *const Aiocb) -> c_int {
 
 #[no_mangle]
 pub unsafe extern "C" fn aio_return(aiocbp: *mut Aiocb) -> isize {
-    if aiocbp.is_null() { ERRNO = EINVAL; return -1; }
+    if aiocbp.is_null() { ERRNO!() = EINVAL; return -1; }
     let s = aio_find(aiocbp);
-    if s.is_null() { ERRNO = EINVAL; return -1; }
+    if s.is_null() { ERRNO!() = EINVAL; return -1; }
     let r = (*s).ret;
     (*s).active = false;
     (*s).cb = core::ptr::null_mut();
@@ -176,13 +176,13 @@ pub unsafe extern "C" fn aio_suspend(
     nent: c_int,
     _timeout: *const timespec,
 ) -> c_int {
-    if nent <= 0 || aiocb_list.is_null() { ERRNO = EINVAL; return -1; }
+    if nent <= 0 || aiocb_list.is_null() { ERRNO!() = EINVAL; return -1; }
     // Every request completes synchronously, so all of them are already done.
     for i in 0..nent as usize {
         let cb = *aiocb_list.add(i);
         if cb.is_null() { continue; }
         if aio_find(cb).is_null() {
-            ERRNO = EINVAL;
+            ERRNO!() = EINVAL;
             return -1;
         }
     }
@@ -213,7 +213,7 @@ pub unsafe extern "C" fn lio_listio(
     nent: c_int,
     sevp: *mut SigEvent,
 ) -> c_int {
-    if nent < 0 || aiocb_list.is_null() { ERRNO = EINVAL; return -1; }
+    if nent < 0 || aiocb_list.is_null() { ERRNO!() = EINVAL; return -1; }
     let mut ok = 0;
     for i in 0..nent as usize {
         let cb = *aiocb_list.add(i);
@@ -229,103 +229,6 @@ pub unsafe extern "C" fn lio_listio(
         aio_notify(sevp);
     }
     if ok == 0 && nent > 0 { -1 } else { 0 }
-}
-
-// ============================================================
-// POSIX message queues: attributes and notification
-// ============================================================
-
-#[repr(C)]
-pub struct MqAttr {
-    pub mq_flags: c_long,
-    pub mq_maxmsg: c_long,
-    pub mq_msgsize: c_long,
-    pub mq_curmsgs: c_long,
-}
-
-#[derive(Copy, Clone)]
-struct MqNotify {
-    mqd: i64,
-    sev: SigEvent,
-    used: bool,
-}
-
-static mut MQ_NOTIFIES: [MqNotify; 8] = [MqNotify {
-    mqd: -1,
-    sev: SigEvent { sigev_value: 0, sigev_signo: 0, sigev_notify: 0, sigev_un: [0; 48] },
-    used: false,
-}; 8];
-
-unsafe fn mq_attr_fill(mqd: i64, attr: *mut MqAttr) -> c_int {
-    if attr.is_null() { ERRNO = EINVAL; return -1; }
-    let mut st: crate::Stat = core::mem::zeroed();
-    if crate::fstat(mqd as c_int, &mut st) != 0 { return -1; }
-    (*attr).mq_flags = if (crate::fcntl(mqd as c_int, 3) & 0o4000) != 0 { 0o4000 } else { 0 };
-    (*attr).mq_msgsize = 4096;
-    (*attr).mq_maxmsg = if st.st_size > 0 { (st.st_size as c_long / 4096) + 1 } else { 1 };
-    (*attr).mq_curmsgs = 0;
-    0
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn mq_getattr(mqd: i64, attr: *mut MqAttr) -> c_int {
-    mq_attr_fill(mqd, attr)
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn mq_setattr(mqd: i64, attr: *const MqAttr, oldattr: *mut MqAttr) -> c_int {
-    if attr.is_null() { ERRNO = EINVAL; return -1; }
-    if !oldattr.is_null() && mq_attr_fill(mqd, oldattr) != 0 { return -1; }
-    let fd = mqd as c_int;
-    let mut fl = crate::fcntl(fd, 3);
-    if fl < 0 { return -1; }
-    if ((*attr).mq_flags & 0o4000) != 0 { fl |= 0o4000; } else { fl &= !0o4000; }
-    crate::fcntl(fd, 4, fl)
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn mq_notify(mqd: i64, notification: *const SigEvent) -> c_int {
-    let base = core::ptr::addr_of_mut!(MQ_NOTIFIES[0]);
-    // NULL deregisters.
-    if notification.is_null() {
-        for i in 0..MQ_NOTIFIES.len() {
-            let s = base.add(i);
-            if (*s).used && (*s).mqd == mqd { (*s).used = false; return 0; }
-        }
-        ERRNO = EINVAL;
-        return -1;
-    }
-    for i in 0..MQ_NOTIFIES.len() {
-        let s = base.add(i);
-        if (*s).used && (*s).mqd == mqd {
-            (*s).sev = *notification;
-            return 0;
-        }
-    }
-    for i in 0..MQ_NOTIFIES.len() {
-        let s = base.add(i);
-        if !(*s).used {
-            (*s).used = true;
-            (*s).mqd = mqd;
-            (*s).sev = *notification;
-            return 0;
-        }
-    }
-    ERRNO = EBUSY;
-    -1
-}
-
-unsafe fn mq_notify_fire(mqd: i64) {
-    let base = core::ptr::addr_of_mut!(MQ_NOTIFIES[0]);
-    for i in 0..MQ_NOTIFIES.len() {
-        let s = base.add(i);
-        if (*s).used && (*s).mqd == mqd {
-            let sev = (*s).sev;
-            (*s).used = false;
-            aio_notify(&sev);
-            return;
-        }
-    }
 }
 
 // ============================================================
@@ -437,7 +340,8 @@ pub unsafe extern "C" fn pthread_getattr_np(thread: PthreadT, attr: *mut pthread
     }
     *((*attr).__i.as_mut_ptr() as *mut usize) = stack_size;
     *((*attr).__i.as_mut_ptr().add(2) as *mut usize) = PTHREAD_DEFAULT_GUARD;
-    *((*attr).__i.as_mut_ptr().add(4) as *mut *mut c_void) = stack_base as *mut c_void;
+    *((*attr).__i.as_mut_ptr().add(4) as *mut *mut c_void) =
+        (stack_base + stack_size) as *mut c_void;
     (*attr).__i[6] = if (*slot).detach_state == DT_DETACHED { 1 } else { 0 };
     (*attr).__i[7] = 0;
     0
@@ -496,7 +400,7 @@ pub unsafe extern "C" fn pthread_setname_np(thread: PthreadT, name: *const c_cha
     if crate::strnlen(name as *const u8, 16) > 15 { return 34; }
     let slot = thread as *mut Thread;
     if slot == pthread_self() as *mut Thread {
-        return if crate::prctl(15, name as c_long) < 0 { ERRNO } else { 0 };
+        return if crate::prctl(15, name as c_long) < 0 { ERRNO!() } else { 0 };
     }
     let mut path = [0 as c_char; 48];
     let mut o = 0usize;
@@ -509,11 +413,11 @@ pub unsafe extern "C" fn pthread_setname_np(thread: PthreadT, name: *const c_cha
     while d > 0 { d -= 1; path[o] = digits[d] as c_char; o += 1; }
     for &c in b"/comm\0" { path[o] = c as c_char; o += 1; }
     let fd = crate::open(path.as_ptr(), 1, 0);
-    if fd < 0 { return ERRNO; }
+    if fd < 0 { return ERRNO!(); }
     let n = crate::strlen(name);
     let w = crate::write(fd, name as *const c_void, n);
     crate::close(fd);
-    if w < 0 { ERRNO } else { 0 }
+    if w < 0 { ERRNO!() } else { 0 }
 }
 
 #[no_mangle]
@@ -522,7 +426,7 @@ pub unsafe extern "C" fn pthread_getname_np(thread: PthreadT, name: *mut c_char,
     if len < 16 { return 34; }
     let slot = thread as *mut Thread;
     if slot == pthread_self() as *mut Thread {
-        return if crate::prctl(16, name as c_long) < 0 { ERRNO } else { 0 };
+        return if crate::prctl(16, name as c_long) < 0 { ERRNO!() } else { 0 };
     }
     let mut path = [0 as c_char; 48];
     let mut o = 0usize;
@@ -535,10 +439,10 @@ pub unsafe extern "C" fn pthread_getname_np(thread: PthreadT, name: *mut c_char,
     while d > 0 { d -= 1; path[o] = digits[d] as c_char; o += 1; }
     for &c in b"/comm\0" { path[o] = c as c_char; o += 1; }
     let fd = crate::open(path.as_ptr(), 0, 0);
-    if fd < 0 { return ERRNO; }
+    if fd < 0 { return ERRNO!(); }
     let n = crate::read(fd, name as *mut c_void, len);
     crate::close(fd);
-    if n < 0 { return ERRNO; }
+    if n < 0 { return ERRNO!(); }
     let mut l = n as usize;
     if l > 0 && *name.add(l - 1) == b'\n' as c_char { l -= 1; }
     *name.add(l) = 0;
@@ -987,7 +891,7 @@ pub unsafe extern "C" fn sigqueue(pid: c_int, sig: c_int, value: *mut c_void) ->
     *(si.as_mut_ptr().add(20) as *mut u32) = crate::getuid();
     *(si.as_mut_ptr().add(24) as *mut *mut c_void) = value;
     let r = <Arch as Syscalls>::syscall3(sysno(129, 138), pid as i64, sig as i64, si.as_ptr() as i64);
-    if r < 0 { ERRNO = (-r) as c_int; -1 } else { 0 }
+    if r < 0 { ERRNO!() = (-r) as c_int; -1 } else { 0 }
 }
 
 #[no_mangle]

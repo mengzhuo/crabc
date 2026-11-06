@@ -72,20 +72,20 @@ unsafe fn ns_skiprr_inner(ptr: *const u8, eom: *const u8, section: c_int, mut co
 #[no_mangle]
 pub unsafe extern "C" fn ns_skiprr(ptr: *const u8, eom: *const u8, section: c_int, count: c_int) -> c_int {
     let r = ns_skiprr_inner(ptr, eom, section, count);
-    if r < 0 { ERRNO = 90; } // EMSGSIZE
+    if r < 0 { ERRNO!() = 90; } // EMSGSIZE
     r
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn ns_initparse(msg: *const u8, msglen: c_int, handle: *mut NsMsg) -> c_int {
     if msg.is_null() || handle.is_null() || msglen < 0 {
-        ERRNO = 90;
+        ERRNO!() = 90;
         return -1;
     }
     (*handle)._msg = msg;
     (*handle)._eom = msg.add(msglen as usize);
     if (msglen as usize) < (2 + NS_S_MAX_V) * NS_INT16SZ_V {
-        ERRNO = 90;
+        ERRNO!() = 90;
         return -1;
     }
     let mut p = msg;
@@ -102,7 +102,7 @@ pub unsafe extern "C" fn ns_initparse(msg: *const u8, msglen: c_int, handle: *mu
             (*handle)._sections[i] = p;
             let r = ns_skiprr_inner(p, (*handle)._eom, i as c_int, (*handle)._counts[i] as c_int);
             if r < 0 {
-                ERRNO = 90;
+                ERRNO!() = 90;
                 return -1;
             }
             p = p.add(r as usize);
@@ -111,7 +111,7 @@ pub unsafe extern "C" fn ns_initparse(msg: *const u8, msglen: c_int, handle: *mu
         }
     }
     if p != (*handle)._eom {
-        ERRNO = 90;
+        ERRNO!() = 90;
         return -1;
     }
     (*handle)._sect = NS_S_MAX_V as c_int;
@@ -129,14 +129,14 @@ pub unsafe extern "C" fn ns_name_uncompress(
     dstsiz: usize,
 ) -> c_int {
     let r = crate::dn_expand(msg, eom, src, dst, dstsiz as c_int);
-    if r < 0 { ERRNO = 90; }
+    if r < 0 { ERRNO!() = 90; }
     r
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn ns_parserr(handle: *mut NsMsg, section: c_int, rrnum_in: c_int, rr: *mut NsRr) -> c_int {
     if handle.is_null() || rr.is_null() || section < 0 || section >= NS_S_MAX_V as c_int {
-        ERRNO = 19; // ENODEV
+        ERRNO!() = 19; // ENODEV
         return -1;
     }
     let sec = section as usize;
@@ -148,7 +148,7 @@ pub unsafe extern "C" fn ns_parserr(handle: *mut NsMsg, section: c_int, rrnum_in
     let mut rrnum = rrnum_in;
     if rrnum == -1 { rrnum = (*handle)._rrnum; }
     if rrnum < 0 || rrnum >= (*handle)._counts[sec] as c_int {
-        ERRNO = 19;
+        ERRNO!() = 19;
         return -1;
     }
     if rrnum < (*handle)._rrnum {
@@ -163,7 +163,7 @@ pub unsafe extern "C" fn ns_parserr(handle: *mut NsMsg, section: c_int, rrnum_in
             rrnum - (*handle)._rrnum,
         );
         if r < 0 {
-            ERRNO = 90;
+            ERRNO!() = 90;
             return -1;
         }
         (*handle)._msg_ptr = (*handle)._msg_ptr.add(r as usize);
@@ -179,7 +179,7 @@ pub unsafe extern "C" fn ns_parserr(handle: *mut NsMsg, section: c_int, rrnum_in
     if r < 0 { return -1; }
     (*handle)._msg_ptr = (*handle)._msg_ptr.add(r as usize);
     if 2 * NS_INT16SZ_V > (*handle)._eom as usize - (*handle)._msg_ptr as usize {
-        ERRNO = 90;
+        ERRNO!() = 90;
         return -1;
     }
     (*rr).type_ = ns_get16((*handle)._msg_ptr) as u16;
@@ -188,7 +188,7 @@ pub unsafe extern "C" fn ns_parserr(handle: *mut NsMsg, section: c_int, rrnum_in
     (*handle)._msg_ptr = (*handle)._msg_ptr.add(2);
     if section != 0 {
         if NS_INT32SZ_V + NS_INT16SZ_V > (*handle)._eom as usize - (*handle)._msg_ptr as usize {
-            ERRNO = 90;
+            ERRNO!() = 90;
             return -1;
         }
         (*rr).ttl = ns_get32((*handle)._msg_ptr) as u32;
@@ -196,7 +196,7 @@ pub unsafe extern "C" fn ns_parserr(handle: *mut NsMsg, section: c_int, rrnum_in
         (*rr).rdlength = ns_get16((*handle)._msg_ptr) as u16;
         (*handle)._msg_ptr = (*handle)._msg_ptr.add(2);
         if (*rr).rdlength as usize > (*handle)._eom as usize - (*handle)._msg_ptr as usize {
-            ERRNO = 90;
+            ERRNO!() = 90;
             return -1;
         }
         (*rr).rdata = (*handle)._msg_ptr;

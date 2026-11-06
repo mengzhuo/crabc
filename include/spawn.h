@@ -7,9 +7,12 @@
 extern "C" {
 #endif
 
+#ifndef __sigset_t_defined
+#define __sigset_t_defined
 #ifndef _SIGSET_T_DEFINED
 #define _SIGSET_T_DEFINED
-typedef unsigned long sigset_t;
+#endif
+typedef struct __sigset_t { unsigned long __bits[128/sizeof(unsigned long)]; } sigset_t;
 #endif
 
 #ifndef _PID_T_DEFINED

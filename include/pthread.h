@@ -16,15 +16,15 @@ struct sched_param {
 };
 #endif
 
-#ifndef __crabc_sigset_t_defined
-#define __crabc_sigset_t_defined
+#ifndef __sigset_t_defined
+#define __sigset_t_defined
 #ifndef __DEFINED_sigset_t
 #define __DEFINED_sigset_t
+#endif
 #ifndef _SIGSET_T_DEFINED
 #define _SIGSET_T_DEFINED
 #endif
-typedef unsigned long sigset_t;
-#endif
+typedef struct __sigset_t { unsigned long __bits[128/sizeof(unsigned long)]; } sigset_t;
 #endif
 
 #define PTHREAD_CREATE_JOINABLE 0
