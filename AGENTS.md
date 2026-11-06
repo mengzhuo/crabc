@@ -58,7 +58,9 @@ Math fixtures add `-frounding-math`; on x86_64 also `-mlong-double-64`. `tests/c
 ## Implementation Notes
 
 - `libc/src/lib.rs` is a single large `no_std` file. Subsystems are `include!`-ed, not `mod`-declared. The compatibility surface is split across area files: `netdb_extra.rs`, `compat_extra.rs`, `stdio_extra.rs`, `ns_parse.rs`, `fts.rs`, `ifaddrs.rs`, `dl_extra.rs`, `path_extra.rs`, `wordexp.rs`, `des.rs`, and `getopt_impl.rs`.
-- `libc/src/alloc.rs` implements `malloc`/`free`/`calloc`/`realloc` with 16-byte size classes from 32 to 32768 bytes, mmap-backed chunks, direct mmap for large blocks, and a global spin lock. `fork()` resets the lock in the child. Joinable thread slots are reused; the thread table is still capped at 64 concurrent threads.
+- `libc/src/alloc.rs` implements `malloc`/`free`/`calloc`/`realloc` with 16-byte size classes from 32 to 32768 bytes, mmap-backed chunks, direct mmap for large blocks, and a global spin lock. `fork()` resets the lock in the child. Joinable thread slots are reused; the thread table is capped at 1024 concurrent threads.
+- `errno` is thread-local for dynamically linked programs: it lives at offset `0x30` in the 256-byte TCB that `ldso` allocates for every thread (`0x00` self pointer, `0x08` generation, `0x28` stack canary). `__libc_start_main` calls `errno_init()`; when no TCB is present (static executables), `errno` falls back to a process-global slot. Internal code must use the `ERRNO!()` accessor, never a direct static.
+- `pthread_create()` carves the TLS block out of the top of an application-provided stack when it fits. This mirrors musl and keeps the loader's separate TLS mmap from landing directly below a `MAP_GROWSDOWN` stack, which would block stack growth (`LTP mmap18`). `__rc_init_thread_tls_at` in `libldso.so` initializes the embedded block.
 - `libc` and `ldso` are `no_std`; only the `src/` loader uses `std`.
 - C ABI exports need `#[no_mangle] pub unsafe extern "C" fn ...`. A plain Rust function will not appear in `libc.so`/`libc.a`.
 - `libm = "0.2"` is only a stopgap for functions not yet ported. When porting one, remove its `libm::` call.
@@ -66,7 +68,7 @@ Math fixtures add `-frounding-math`; on x86_64 also `-mlong-double-64`. `tests/c
 - `ldso/build.rs` links with `-nostartfiles -nostdlib -e _start -Wl,-Bsymbolic`; keep `_start` as the `global_asm!` entry in `ldso/src/lib.rs`.
 - CI (`.github/workflows/ci.yml`) runs build + `cargo test --workspace` natively on x86_64 and aarch64 (`ubuntu-24.04-arm`). The native riscv64 entry (RISE `ubuntu-24.04-riscv`) is currently commented out because the runner does not come up; the x86-hosted `riscv64-cross` job still cross-builds the musl target and runs the qemu smoke suite (non-blocking, 10 minute cap).
 - `scripts/local-ci.sh` accepts `CI_RUNNER` (podman/docker) and `CI_IMAGE` overrides.
-- All public musl function symbols are now exported. The resolver (`res_*`) and utmp/utmpx are real implementations; `_init`, `_fini`, and `_dl_debug_*` are linker internals and are intentionally absent from `libc.so`.
+- All public musl function symbols are exported from `libc.so` or `libldso.so`. Because musl's `libc.so` is also its loader, `scripts/parity-check.sh symbols` compares musl against the union of crabc's two libraries; `__tls_get_addr` is a loader symbol and lives only in `libldso.so`. The resolver (`res_*`) and utmp/utmpx are real implementations; `_init`, `_fini`, and `_dl_debug_*` are linker internals and are intentionally absent.
 - `tests/compat.rs` exercises the non-libc-test ABI surface (resolver, netdb, passwd/group/shadow, utmp, AIO, glob/nftw/realpath, wordexp, fopencookie, DES crypt, dladdr, statfs, sysinfo, posix_getdents, pthread join variants, futimesat, mremap, etc.).
 
 ## Releasing
@@ -174,18 +176,33 @@ rounds.
 
 ## Current Baseline
 
-Verified on 2026-11-05:
+Verified on 2026-11-07:
 
 ```text
 cargo test --workspace          # green
-./run.sh all                    # 419 total: 414 PASS, 5 SKIP, 0 FAIL (as root)
 ./run.sh api                    # 79/79
 ./run.sh functional             # 73/73
 ./run.sh regression             # 67 PASS, 1 SKIP, 0 FAIL (as root)
 ./run.sh math                   # 195 PASS, 4 SKIP, 0 FAIL
 scripts/parity-check.sh all     # 0 unexpected diffs vs musl 1.2.6
 scripts/riscv-smoke.sh          # riscv64 cross-build + qemu fixtures, 0 failures
+
+LTP 20250930, x86_64, 1488 syscalls tags:
+  musl baseline                 # 112 FAIL, 139 TCONF
+  crabc                         # 104 FAIL, 139 TCONF
+  per-test diff                 # crabc-only: preadv203 (cache/timing flake)
+math / mm / sched / nptl / ipc  # failure lists identical to musl
 ```
+
+- `scripts/parity-check.sh` needs an x86_64 musl 1.2.6 build; the
+  `/home/root/musl` checkout in this lab is riscv64. Use
+  `MUSL_LIBC=/tmp/opencode/musl-clean-install/lib/libc.so` (or another x86_64
+  1.2.6 build). Passing the riscv64 `libc.so` produces spurious
+  "corrupted shared library" diffs.
+- LTP details, setup, and caveats are in `docs/ltp.md`. The full LTP tree must
+  be built and installed explicitly; a bare `make -k` leaves about 110
+  syscall binaries unbuilt after the `timer_create` failure. Verify with
+  `grep -c "execvp of" /tmp/ltp-*.out` (must be 0).
 
 - CI runs as an unprivileged user, so `pthread_atfork-errno-clobber` runs and
   passes there: `415 PASS, 4 SKIP`.
