@@ -710,10 +710,14 @@ fn bf_set_key(key: &[u8], expanded: &mut [u32; 18], initial: &mut [u32; 18], fla
     let mut ptr = 0usize;
     let klen = key.len();
 
+    // musl walks a C string here: after the last key byte it feeds the
+    // terminating NUL, then wraps back to the start. Reproduce that with a
+    // virtual NUL instead of copying the key into a fixed-size buffer, so
+    // arbitrarily long passwords hash instead of failing.
     for i in 0..BF_N + 2 {
         let mut tmp = [0u32; 2];
         for j in 0..4 {
-            let b = key[ptr];
+            let b = if ptr < klen { key[ptr] } else { 0 };
             tmp[0] = (tmp[0] << 8) | (b as u32);
             tmp[1] = (tmp[1] << 8) | ((b as i8 as i32) as u32);
             if j != 0 { sign |= tmp[1] & 0x80; }
@@ -721,7 +725,6 @@ fn bf_set_key(key: &[u8], expanded: &mut [u32; 18], initial: &mut [u32; 18], fla
                 ptr = 0;
             } else {
                 ptr += 1;
-                if ptr >= klen { ptr = 0; }
             }
         }
         diff |= tmp[0] ^ tmp[1];
@@ -802,15 +805,7 @@ pub unsafe extern "C" fn __crypt_blowfish(key: *const c_char, setting: *const c_
     let ss = cstr_bytes(setting);
     let out = core::slice::from_raw_parts_mut(output as *mut u8, 256);
 
-    let mut key_buf = [0u8; 128];
-    if ks.len() >= key_buf.len() {
-        *output = b'*' as c_char;
-        *output.add(1) = 0;
-        return output;
-    }
-    key_buf[..ks.len()].copy_from_slice(ks);
-
-    let retval = bf_crypt_inner(&key_buf[..ks.len() + 1], ss, out, 16);
+    let retval = bf_crypt_inner(ks, ss, out, 16);
     if retval.is_some() {
         out[retval.unwrap()] = 0;
         return output;

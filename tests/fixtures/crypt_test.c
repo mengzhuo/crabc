@@ -35,6 +35,17 @@ int main() {
     CHECK("$2a$04$abcdefghijklmnopqrstuu8J3SjO9LQpndv9O3HW/e0PB1xKk.PJu", "$2a$04$abcdefghijklmnopqrstuv", "Aa@\xaa 0123456789")
     CHECK("$2y$04$abcdefghijklmnopqrstuubUAnPDiHn0JtKfNM4q6HN1ZsdaC1D8i", "$2y$04$abcdefghijklmnopqrstuv", "\xff\xff\xff\xa3\x33\x01\x40")
 
+    /* Blowfish long keys: musl feeds them cyclically, so a key past the
+       128-byte buffer crabc used to have must still produce a hash. */
+    {
+        static char longpw[301];
+        memset(longpw, 'A', 300);
+        p = crypt(longpw, "$2b$04$abcdefghijklmnopqrstuu");
+        if (!p || strcmp(p, "$2b$04$abcdefghijklmnopqrstuusBdtCq5VHp1ZWh/QwIMafig7GoIpK9C") != 0) {
+            write(2, "FAIL\n", 5); failures++;
+        }
+    }
+
     /* Blowfish invalid salts return "*" */
     p = crypt("", "$2a$00$0123456789012345678901");
     if (!p || strcmp(p, "*") != 0) { write(2, "FAIL\n", 5); failures++; }
