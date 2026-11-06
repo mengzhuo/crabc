@@ -34,6 +34,8 @@ include!("math_hyperbolic.rs");
 include!("math_invtrig.rs");
 include!("math_lrint.rs");
 include!("math_long_double.rs");
+include!("string_fast.rs");
+include!("vdso.rs");
 
 // ============================================================
 // errno
@@ -971,95 +973,14 @@ unsafe fn sys_munmap(addr: *mut u8, length: usize) -> i64 {
 // String/memory functions
 // ============================================================
 
-#[no_mangle]
-pub unsafe extern "C" fn strlen(s: *const c_char) -> usize {
-    let s = s as *const u8;
-    let mut len = 0;
-    while *s.add(len) != 0 {
-        len += 1;
-    }
-    len
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn memcpy(dst: *mut c_void, src: *const c_void, n: usize) -> *mut c_void {
-    let dst = dst as *mut u8;
-    let src = src as *const u8;
-    let mut i = 0;
-    while i < n {
-        *dst.add(i) = *src.add(i);
-        i += 1;
-    }
-    dst as *mut c_void
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn memset(s: *mut c_void, c: c_int, n: usize) -> *mut c_void {
-    let s = s as *mut u8;
-    let mut i = 0;
-    while i < n {
-        *s.add(i) = c as u8;
-        i += 1;
-    }
-    s as *mut c_void
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn memmove(dst: *mut c_void, src: *const c_void, n: usize) -> *mut c_void {
-    let dst = dst as *mut u8;
-    let src = src as *const u8;
-    if (dst as usize) < (src as usize) {
-        let mut i = 0;
-        while i < n {
-            *dst.add(i) = *src.add(i);
-            i += 1;
-        }
-    } else {
-        let mut i = n;
-        while i > 0 {
-            i -= 1;
-            *dst.add(i) = *src.add(i);
-        }
-    }
-    dst as *mut c_void
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn memcmp(s1: *const c_void, s2: *const c_void, n: usize) -> c_int {
-    let s1 = s1 as *const u8;
-    let s2 = s2 as *const u8;
-    let mut i = 0;
-    while i < n {
-        let a = *s1.add(i);
-        let b = *s2.add(i);
-        if a != b {
-            return a as c_int - b as c_int;
-        }
-        i += 1;
-    }
-    0
-}
+// strlen, memcpy, memset, memmove and memcmp live in string_fast.rs.
 
 #[no_mangle]
 pub unsafe extern "C" fn bcmp(s1: *const c_void, s2: *const c_void, n: usize) -> c_int {
     memcmp(s1, s2, n)
 }
 
-#[no_mangle]
-pub unsafe extern "C" fn strcmp(s1: *const u8, s2: *const u8) -> c_int {
-    let mut i = 0;
-    loop {
-        let a = *s1.add(i);
-        let b = *s2.add(i);
-        if a != b {
-            return a as c_int - b as c_int;
-        }
-        if a == 0 {
-            return 0;
-        }
-        i += 1;
-    }
-}
+// strcmp lives in string_fast.rs.
 
 #[no_mangle]
 pub unsafe extern "C" fn strncmp(s1: *const u8, s2: *const u8, n: usize) -> c_int {
@@ -2058,10 +1979,8 @@ unsafe fn sys_clock_gettime(clockid: c_int, ts: *mut timespec) -> i64 {
     <Arch as Syscalls>::syscall2(SYS_CLOCK_GETTIME, clockid as i64, ts as i64)
 }
 
-#[no_mangle]
-pub unsafe extern "C" fn clock_gettime(clockid: c_int, ts: *mut timespec) -> c_int {
-    if sys_clock_gettime(clockid, ts) < 0 { -1 } else { 0 }
-}
+// clock_gettime lives in vdso.rs: it prefers the kernel's vDSO entry point
+// and only falls back to sys_clock_gettime() there.
 
 #[no_mangle]
 pub unsafe extern "C" fn sigprocmask(
@@ -19103,26 +19022,36 @@ pub unsafe extern "C" fn adjtimex(buf: *mut core::ffi::c_void) -> i32 {
 // pty functions
 // ============================================================
 
+// Linux devpts ioctls (asm-generic/ioctls.h): TIOCGPTN = _IOR('T', 0x30, int),
+// TIOCSPTLCK = _IOW('T', 0x31, int). The old 0x541x values are the window-size
+// and process-group requests, which both return the wrong data and write more
+// bytes than the int the caller supplied.
+const TIOCGPTN: i64 = 0x80045430;
+const TIOCSPTLCK: i64 = 0x40045431;
+
 #[no_mangle]
-pub unsafe extern "C" fn grantpt(fd: i32) -> i32 {
-    // PTY grant - just change ownership
-    let mut s: u32 = 0;
-    <Arch as Syscalls>::syscall3(SYS_IOCTL, fd as i64, 0x5410, &mut s as *mut u32 as i64);
+pub unsafe extern "C" fn grantpt(_fd: i32) -> i32 {
+    // devpts creates the slave already owned by the caller.
     0
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn unlockpt(fd: i32) -> i32 {
     let mut unlock: i32 = 0;
-    <Arch as Syscalls>::syscall3(SYS_IOCTL, fd as i64, 0x5411, &mut unlock as *mut i32 as i64);
-    0
+    let r = <Arch as Syscalls>::syscall3(
+        SYS_IOCTL,
+        fd as i64,
+        TIOCSPTLCK,
+        &mut unlock as *mut i32 as i64,
+    );
+    if r < 0 { -1 } else { 0 }
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn ptsname(fd: i32) -> *mut core::ffi::c_char {
     static mut BUF: [core::ffi::c_char; 32] = [0; 32];
     let mut pty_nr: i32 = 0;
-    if <Arch as Syscalls>::syscall3(SYS_IOCTL, fd as i64, 0x5413, &mut pty_nr as *mut i32 as i64) < 0 {
+    if <Arch as Syscalls>::syscall3(SYS_IOCTL, fd as i64, TIOCGPTN, &mut pty_nr as *mut i32 as i64) < 0 {
         return core::ptr::null_mut();
     }
     // Format /dev/pts/N

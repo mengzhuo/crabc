@@ -119,6 +119,9 @@ int main(void) {
     if (pty >= 0) {
         char name[64];
         CHECK(ptsname_r(pty, name, sizeof(name)) == 0, "ptsname_r");
+        /* TIOCGPTN, not TIOCGWINSZ: the name must be /dev/pts/<n>, not the
+           window size interpreted as a pty number. */
+        CHECK(strncmp(name, "/dev/pts/", 9) == 0 && name[9] != 0, "ptsname_r name");
         close(pty);
     }
 

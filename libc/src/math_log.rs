@@ -572,37 +572,8 @@ pub extern "C" fn log(x: f64) -> f64 {
     let top = log_top16(x);
 
     if predict_false(ix.wrapping_sub(LOG_LO) < LOG_HI.wrapping_sub(LOG_LO)) {
-        if predict_false(ix == asuint64(1.0)) {
-            return 0.0;
-        }
-        let r = x - 1.0;
-        let r2 = r * r;
-        let r3 = r * r2;
-        let y = r3
-            * (LOG_POLY1[1]
-                + r * LOG_POLY1[2]
-                + r2 * LOG_POLY1[3]
-                + r3
-                    * (LOG_POLY1[4]
-                        + r * LOG_POLY1[5]
-                        + r2 * LOG_POLY1[6]
-                        + r3
-                            * (LOG_POLY1[7]
-                                + r * LOG_POLY1[8]
-                                + r2 * LOG_POLY1[9]
-                                + r3 * LOG_POLY1[10])));
-        let w = r * 134217728.0;
-        let rhi = r + w - w;
-        let rlo = r - rhi;
-        let w = rhi * rhi * LOG_POLY1[0];
-        let hi = r + w;
-        let lo = r - hi + w;
-        let lo = lo + LOG_POLY1[0] * rlo * (rhi + r);
-        let y = y + lo;
-        let y = y + hi;
-        return eval_as_double(y);
+        return log_near1(x);
     }
-
     if predict_false(top.wrapping_sub(0x0010) >= 0x7ff0 - 0x0010) {
         if ix * 2 == 0 {
             return __math_divzero(1);
@@ -619,6 +590,43 @@ pub extern "C" fn log(x: f64) -> f64 {
     }
 
     log_main(ix)
+}
+
+
+// Kept out of the hot path: only inputs within ~6% of 1.0 take this branch,
+// and keeping it out of line lets the common path stay contiguous.
+#[inline(never)]
+fn log_near1(x: f64) -> f64 {
+    let ix = asuint64(x);
+    if predict_false(ix == asuint64(1.0)) {
+        return 0.0;
+    }
+    let r = x - 1.0;
+    let r2 = r * r;
+    let r3 = r * r2;
+    let y = r3
+        * (LOG_POLY1[1]
+            + r * LOG_POLY1[2]
+            + r2 * LOG_POLY1[3]
+            + r3
+                * (LOG_POLY1[4]
+                    + r * LOG_POLY1[5]
+                    + r2 * LOG_POLY1[6]
+                    + r3
+                        * (LOG_POLY1[7]
+                            + r * LOG_POLY1[8]
+                            + r2 * LOG_POLY1[9]
+                            + r3 * LOG_POLY1[10])));
+    let w = r * 134217728.0;
+    let rhi = r + w - w;
+    let rlo = r - rhi;
+    let w = rhi * rhi * LOG_POLY1[0];
+    let hi = r + w;
+    let lo = r - hi + w;
+    let lo = lo + LOG_POLY1[0] * rlo * (rhi + r);
+    let y = y + lo;
+    let y = y + hi;
+    eval_as_double(y)
 }
 
 #[inline]

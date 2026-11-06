@@ -11,6 +11,7 @@ Cargo.lock
 /tests/fixtures/tlstest
 /tests/fixtures/ctype_test
 /tests/fixtures/string_test
+/tests/fixtures/string_fast_test
 /tests/fixtures/stdlib_test
 /tests/fixtures/stdio_input_test
 /tests/fixtures/stdio_input_test.txt

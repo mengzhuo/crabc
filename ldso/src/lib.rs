@@ -17,6 +17,7 @@ fn panic(_: &core::panic::PanicInfo) -> ! {
 
 const PT_LOAD: u32 = 1;
 const PT_DYNAMIC: u32 = 2;
+const PT_PHDR: u32 = 6;
 const PT_TLS: u32 = 7;
 const PF_R: u32 = 4;
 const PF_W: u32 = 2;
@@ -127,6 +128,8 @@ struct LoadedObject {
     sym_count: usize,
     strtab: *const u8,
     strsz: usize,
+    gnu_hash: usize,
+    hash: usize,
     dyn_addr: usize,
     dyn_memsz: usize,
     tls_image: *const u8,
@@ -139,6 +142,7 @@ struct LoadedObject {
     init_present: bool,
     init_array_present: bool,
     global: bool,
+    is_self: bool,
     name: [u8; 256],
 }
 
@@ -148,6 +152,8 @@ const EMPTY_OBJ: LoadedObject = LoadedObject {
     sym_count: 0,
     strtab: core::ptr::null(),
     strsz: 0,
+    gnu_hash: 0,
+    hash: 0,
     dyn_addr: 0,
     dyn_memsz: 0,
     tls_image: core::ptr::null(),
@@ -160,6 +166,7 @@ const EMPTY_OBJ: LoadedObject = LoadedObject {
     init_present: false,
     init_array_present: false,
     global: false,
+    is_self: false,
     name: [0; 256],
 };
 
@@ -182,6 +189,7 @@ static mut RUNPATH: *const u8 = core::ptr::null();
 static mut RUNPATH_LEN: usize = 0;
 static mut ORIGIN_DIR: [u8; 256] = [0; 256];
 static mut ORIGIN_LEN: usize = 0;
+static mut ORIGIN_READY: bool = false;
 
 // ============================================================
 // _start: self-relocate ldso, then call run_main(sp)
@@ -493,11 +501,26 @@ pub unsafe extern "C" fn run_main(sp: usize, ldso_base: u64) -> ! {
 // ============================================================
 
 unsafe fn str_len(s: *const u8) -> usize {
-    let mut len = 0;
-    while *s.add(len) != 0 {
-        len += 1;
+    let start = s as usize;
+    let mut p = s;
+    // Volatile keeps the byte loop from being turned back into a call to
+    // strlen(), which would recurse into this function.
+    while (p as usize) & 7 != 0 {
+        if core::ptr::read_volatile(p) == 0 {
+            return p as usize - start;
+        }
+        p = p.add(1);
     }
-    len
+    const ONES: u64 = 0x0101_0101_0101_0101;
+    const HIGHS: u64 = 0x8080_8080_8080_8080;
+    loop {
+        let w = core::ptr::read(p as *const u64);
+        let z = w.wrapping_sub(ONES) & !w & HIGHS;
+        if z != 0 {
+            return (p as usize - start) + (z.trailing_zeros() as usize / 8);
+        }
+        p = p.add(8);
+    }
 }
 
 unsafe fn sym_count_from_gnu_hash(gh: usize) -> usize {
@@ -548,10 +571,18 @@ pub unsafe extern "C" fn strlen(s: *const c_char) -> usize {
 pub unsafe extern "C" fn memcmp(a: *const c_void, b: *const c_void, n: usize) -> i32 {
     let a = a as *const u8;
     let b = b as *const u8;
-    let mut i = 0;
+    let mut i = 0usize;
+    while i + 8 <= n {
+        let wa = core::ptr::read_unaligned(a.add(i) as *const u64);
+        let wb = core::ptr::read_unaligned(b.add(i) as *const u64);
+        if wa != wb {
+            break;
+        }
+        i += 8;
+    }
     while i < n {
-        let va = *a.add(i);
-        let vb = *b.add(i);
+        let va = core::ptr::read_volatile(a.add(i));
+        let vb = core::ptr::read_volatile(b.add(i));
         if va != vb {
             return va as i32 - vb as i32;
         }
@@ -1105,6 +1136,7 @@ unsafe fn write_hex_stderr(v: usize) {
     write_stderr(&buf);
 }
 
+
 unsafe fn die(code: i32, label: &[u8], detail: usize) -> ! {
     write_stderr(b"[ldso fatal ");
     write_stderr(label);
@@ -1165,6 +1197,35 @@ unsafe fn try_open(
     sys_open(path_buf.as_ptr())
 }
 
+/// Resolve $ORIGIN lazily: only binaries whose RUNPATH uses it need the
+/// /proc/self/exe readlink, and skipping it keeps startup lean.
+unsafe fn ensure_origin() {
+    if ORIGIN_READY {
+        return;
+    }
+    ORIGIN_READY = true;
+    let proc_exe = b"/proc/self/exe\0";
+    let mut exe_path = [0u8; 256];
+    let r = sys_readlink(proc_exe.as_ptr(), exe_path.as_mut_ptr(), exe_path.len());
+    if r <= 0 {
+        return;
+    }
+    let len = r as usize;
+    let mut slash = len;
+    while slash > 0 {
+        slash -= 1;
+        if exe_path[slash] == b'/' {
+            break;
+        }
+    }
+    ORIGIN_LEN = slash;
+    let mut i = 0;
+    while i < slash {
+        ORIGIN_DIR[i] = exe_path[i];
+        i += 1;
+    }
+}
+
 unsafe fn try_open_expanded(
     path_buf: &mut [u8; 512],
     dir: *const u8,
@@ -1172,6 +1233,7 @@ unsafe fn try_open_expanded(
     lib_name: *const u8,
     lib_name_len: usize,
 ) -> i64 {
+    ensure_origin();
     if dir_len >= 7 {
         let origin = b"$ORIGIN";
         let mut matches = true;
@@ -1223,10 +1285,20 @@ unsafe fn find_library_fd(
 ) -> i64 {
     let mut path_buf = [0u8; 512];
 
+    // A name with a slash is a path, not something to search for.
     if lib_name_len > 0 {
-        let fd = sys_open(lib_name);
-        if fd >= 0 {
-            return fd;
+        let mut i = 0usize;
+        let mut has_slash = false;
+        while i < lib_name_len {
+            if *lib_name.add(i) == b'/' {
+                has_slash = true;
+                break;
+            }
+            i += 1;
+        }
+        if has_slash {
+            let fd = sys_open(lib_name);
+            return if fd >= 0 { fd } else { -1 };
         }
     }
 
@@ -1511,6 +1583,8 @@ unsafe fn load_dso_from_fd(fd: i64, desired_base: u64) -> Option<u64> {
             sym_count,
             strtab: strtab_ptr,
             strsz,
+            gnu_hash: if dt_gnu_hash != 0 { (actual_base + dt_gnu_hash) as usize } else { 0 },
+            hash: if dt_hash != 0 { (actual_base + dt_hash) as usize } else { 0 },
             dyn_addr,
             dyn_memsz: dyn_memsz as usize,
             tls_image,
@@ -1523,6 +1597,7 @@ unsafe fn load_dso_from_fd(fd: i64, desired_base: u64) -> Option<u64> {
             init_present: dt_init_present,
             init_array_present: dt_init_array_present,
             global: false,
+            is_self: false,
             name: [0; 256],
         };
         LOADED_COUNT += 1;
@@ -1548,6 +1623,154 @@ unsafe fn resolve_symbol_from_index(obj_idx: usize, sym_idx: usize) -> u64 {
     }
     let name = obj.strtab.add(st_name);
     resolve_symbol(name)
+}
+
+/// Read a little-endian 32-bit word from an unaligned address.
+#[inline]
+unsafe fn ld_u32(p: *const u8) -> u32 {
+    u32::from_le(core::ptr::read_unaligned(p as *const u32))
+}
+
+/// Read a little-endian 64-bit word from an unaligned address.
+#[inline]
+unsafe fn ld_u64(p: *const u8) -> u64 {
+    u64::from_le(core::ptr::read_unaligned(p as *const u64))
+}
+
+#[inline]
+unsafe fn hash_gnu(name: *const u8, len: usize) -> u32 {
+    let mut h: u32 = 5381;
+    let mut i = 0usize;
+    while i < len {
+        h = h.wrapping_mul(33).wrapping_add(*name.add(i) as u32);
+        i += 1;
+    }
+    h
+}
+
+#[inline]
+unsafe fn hash_sysv(name: *const u8, len: usize) -> u32 {
+    let mut h: u32 = 0;
+    let mut i = 0usize;
+    while i < len {
+        h = h.wrapping_shl(4).wrapping_add(*name.add(i) as u32);
+        let g = h & 0xf000_0000;
+        if g != 0 {
+            h ^= g >> 24;
+            h &= !g;
+        }
+        i += 1;
+    }
+    h
+}
+
+/// Return the symbol at `idx` if it is a defined global/weak symbol named
+/// `name`, preserving the filtering the linear scan used to do.
+unsafe fn match_sym(
+    obj: &LoadedObject,
+    idx: usize,
+    name: *const u8,
+    name_len: usize,
+) -> Option<(u64, usize)> {
+    if idx == 0 || idx >= obj.sym_count {
+        return None;
+    }
+    let sym = obj.symtab.add(idx * SYMTAB_ENT_SIZE);
+    let st_name = ld_u32(sym) as usize;
+    let info = *sym.add(4);
+    if info >> 4 == 0 {
+        return None;
+    }
+    let value = ld_u64(sym.add(8));
+    if value == 0 || st_name >= obj.strsz {
+        return None;
+    }
+    if !str_eq(name, name_len, obj.strtab.add(st_name)) {
+        return None;
+    }
+    Some((obj.base + value, ld_u64(sym.add(16)) as usize))
+}
+
+unsafe fn lookup_gnu(
+    obj: &LoadedObject,
+    name: *const u8,
+    name_len: usize,
+) -> Option<(u64, usize)> {
+    let gh = obj.gnu_hash as *const u8;
+    let nbuckets = ld_u32(gh) as usize;
+    let symoffset = ld_u32(gh.add(4)) as usize;
+    let bloom_size = ld_u32(gh.add(8)) as usize;
+    let bloom_shift = ld_u32(gh.add(12));
+    if nbuckets == 0 || bloom_size == 0 || symoffset >= obj.sym_count {
+        return None;
+    }
+    let bloom = (gh as usize + 16) as *const u8;
+    let buckets = bloom.add(bloom_size * 8);
+    let chain = buckets.add(nbuckets * 4);
+    let h = hash_gnu(name, name_len);
+    let word = ld_u64(bloom.add(((h as usize) / 64) % bloom_size * 8));
+    let mask = (1u64 << (h % 64)) | (1u64 << ((h >> bloom_shift) % 64));
+    if word & mask != mask {
+        return None;
+    }
+    let mut idx = ld_u32(buckets.add((h as usize % nbuckets) * 4)) as usize;
+    if idx < symoffset || idx >= obj.sym_count {
+        return None;
+    }
+    loop {
+        let c = ld_u32(chain.add((idx - symoffset) * 4));
+        if (c | 1) == (h | 1) {
+            if let Some(r) = match_sym(obj, idx, name, name_len) {
+                return Some(r);
+            }
+        }
+        if c & 1 != 0 {
+            break;
+        }
+        idx += 1;
+        if idx >= obj.sym_count {
+            break;
+        }
+    }
+    None
+}
+
+unsafe fn lookup_sysv(
+    obj: &LoadedObject,
+    name: *const u8,
+    name_len: usize,
+) -> Option<(u64, usize)> {
+    let h = obj.hash as *const u8;
+    let nbucket = ld_u32(h) as usize;
+    let nchain = ld_u32(h.add(4)) as usize;
+    if nbucket == 0 || nchain == 0 {
+        return None;
+    }
+    let buckets = h.add(8);
+    let chains = buckets.add(nbucket * 4);
+    let mut idx = ld_u32(buckets.add((hash_sysv(name, name_len) as usize % nbucket) * 4)) as usize;
+    while idx != 0 && idx < nchain {
+        if let Some(r) = match_sym(obj, idx, name, name_len) {
+            return Some(r);
+        }
+        idx = ld_u32(chains.add(idx * 4)) as usize;
+    }
+    None
+}
+
+unsafe fn lookup_linear(
+    obj: &LoadedObject,
+    name: *const u8,
+    name_len: usize,
+) -> Option<(u64, usize)> {
+    let mut j = 0usize;
+    while j < obj.sym_count {
+        if let Some(r) = match_sym(obj, j, name, name_len) {
+            return Some(r);
+        }
+        j += 1;
+    }
+    None
 }
 
 /// Search all loaded objects for a symbol with the given null-terminated name.
@@ -1581,30 +1804,18 @@ unsafe fn resolve_symbol_with_size(name: *const u8, exclude: usize) -> (u64, usi
         if obj.symtab.is_null() || obj.strtab.is_null() {
             continue;
         }
-        for j in 0..obj.sym_count {
-            let sym_entry = obj.symtab.add(j * SYMTAB_ENT_SIZE);
-            let st_name_off =
-                u32::from_le_bytes(core::ptr::read_unaligned(sym_entry as *const [u8; 4])) as usize;
-            let st_info = *sym_entry.add(4);
-            if st_info >> 4 == 0 {
-                continue;
+        // Use the object's own hash table; only objects without one need
+        // the linear walk.
+        if obj.gnu_hash != 0 {
+            if let Some(r) = lookup_gnu(obj, name, name_len) {
+                return r;
             }
-            let st_value = u64::from_le_bytes(core::ptr::read_unaligned(
-                sym_entry.add(8) as *const [u8; 8],
-            ));
-            if st_value == 0 {
-                continue;
+        } else if obj.hash != 0 {
+            if let Some(r) = lookup_sysv(obj, name, name_len) {
+                return r;
             }
-            if st_name_off >= obj.strsz {
-                continue;
-            }
-            let sym_name = obj.strtab.add(st_name_off);
-            if str_eq(name, name_len, sym_name) {
-                let st_size = u64::from_le_bytes(core::ptr::read_unaligned(
-                    sym_entry.add(16) as *const [u8; 8],
-                ));
-                return (obj.base + st_value, st_size as usize);
-            }
+        } else if let Some(r) = lookup_linear(obj, name, name_len) {
+            return r;
         }
     }
     (0, 0)
@@ -2593,6 +2804,8 @@ unsafe fn register_self(ldso_base: u64) {
     let mut dt_symtab: u64 = 0;
     let mut dt_strtab: u64 = 0;
     let mut dt_strsz: u64 = 0;
+    let mut dt_gnu_hash: u64 = 0;
+    let mut dt_hash: u64 = 0;
     let mut pos = dyn_addr;
     while pos + 16 <= dyn_end {
         let d_tag = u64::from_le_bytes(core::ptr::read_unaligned(pos as *const [u8; 8]));
@@ -2604,6 +2817,8 @@ unsafe fn register_self(ldso_base: u64) {
             DT_SYMTAB => dt_symtab = d_val,
             DT_STRTAB => dt_strtab = d_val,
             DT_STRSZ => dt_strsz = d_val,
+            DT_GNU_HASH => dt_gnu_hash = d_val,
+            DT_HASH => dt_hash = d_val,
             _ => {}
         }
         pos += 16;
@@ -2621,6 +2836,9 @@ unsafe fn register_self(ldso_base: u64) {
             sym_count,
             strtab: strtab_ptr,
             strsz: dt_strsz as usize,
+            gnu_hash: if dt_gnu_hash != 0 { (ldso_base + dt_gnu_hash) as usize } else { 0 },
+            hash: if dt_hash != 0 { (ldso_base + dt_hash) as usize } else { 0 },
+            is_self: true,
             dyn_addr,
             dyn_memsz: dyn_memsz as usize,
             tls_image: core::ptr::null(),
@@ -2671,152 +2889,76 @@ unsafe fn loaded_object_by_name(name: *const u8, name_len: usize) -> Option<usiz
 // ============================================================
 
 unsafe fn load_and_jump(sp: usize, ldso_base: u64) -> ! {
+
     // 1. Find LD_LIBRARY_PATH from kernel envp
     let ld_path = find_env(sp, b"LD_LIBRARY_PATH=");
     LD_LIBRARY_PATH = ld_path.unwrap_or(core::ptr::null());
 
-    // 2. Open and read the executable (the PIE that invoked us as PT_INTERP)
-    let proc_exe = b"/proc/self/exe\0";
-    let fd = sys_open(proc_exe.as_ptr());
-    if fd < 0 {
-        die(99, b"open_exe", fd as usize);
+    // 2. The kernel has already mapped the executable and placed its program
+    //    headers at AT_PHDR. Use that mapping instead of re-reading
+    //    /proc/self/exe and remapping every segment: the old path cost a
+    //    procfs open+read plus a second set of page faults on every exec.
+    let argc0 = *(sp as *const u64) as usize;
+    let argv0 = sp + 8;
+    let envp0 = argv0 + (argc0 + 1) * 8;
+    let mut envc0 = 0usize;
+    while *((envp0 + envc0 * 8) as *const u64) != 0 {
+        envc0 += 1;
     }
-    {
-        let mut exe_path = [0u8; 256];
-        let r = sys_readlink(proc_exe.as_ptr(), exe_path.as_mut_ptr(), exe_path.len());
-        if r > 0 {
-            let len = r as usize;
-            let mut slash = len;
-            while slash > 0 {
-                slash -= 1;
-                if exe_path[slash] == b'/' {
-                    break;
-                }
-            }
-            ORIGIN_LEN = slash;
-            let mut i = 0;
-            while i < slash {
-                ORIGIN_DIR[i] = exe_path[i];
-                i += 1;
-            }
+    let auxv0 = (envp0 + (envc0 + 1) * 8) as *const u64;
+
+    let mut at_phdr: u64 = 0;
+    let mut at_phent: u64 = PHDR_SIZE as u64;
+    let mut at_phnum: u64 = 0;
+    let mut at_entry: u64 = 0;
+    let mut ai = 0usize;
+    loop {
+        let tag = *auxv0.add(ai * 2);
+        let val = *auxv0.add(ai * 2 + 1);
+        if tag == AT_NULL {
+            break;
         }
+        match tag {
+            AT_PHDR => at_phdr = val,
+            AT_PHENT => at_phent = val,
+            AT_PHNUM => at_phnum = val,
+            AT_ENTRY => at_entry = val,
+            _ => {}
+        }
+        ai += 1;
+    }
+    if at_phdr == 0 || at_phnum == 0 || at_entry == 0 || at_phent < PHDR_SIZE as u64 {
+        die(96, b"auxv_phdr", at_phdr as usize);
     }
 
-    let mut buf = [0u8; 4096];
-    let n = sys_read(fd, buf.as_mut_ptr(), buf.len());
-    if n < 64 {
-        die(98, b"read_exe", n as usize);
-    }
+    let phdr = at_phdr as *const u8;
+    let phnum = at_phnum as usize;
+    let phent = at_phent as usize;
 
-    if buf[0] != 0x7f || buf[1] != b'E' {
-        die(97, b"elf_magic", u16::from_le_bytes([buf[0], buf[1]]) as usize);
-    }
-
-    let e_phoff = u64::from_le_bytes(buf[32..40].try_into().unwrap());
-    let e_phnum = u16::from_le_bytes(buf[56..58].try_into().unwrap());
-    let e_entry = u64::from_le_bytes(buf[24..32].try_into().unwrap());
-
-    // 3. Map executable's PT_LOAD segments at a safe base address.
-    //    PIE p_vaddr often starts at 0 which is below mmap_min_addr on CI.
-    //    Pre-scan to find span, probe for free region, then MAP_FIXED there.
-    let page = 4096u64;
-    let mut min_vaddr = u64::MAX;
-    let mut max_vaddr_end = 0u64;
-    for i in 0..e_phnum as usize {
-        let ph = buf.as_ptr().add(e_phoff as usize + i * PHDR_SIZE);
+    // PT_PHDR's p_vaddr is the load bias of the program headers.
+    let mut exec_base: u64 = u64::MAX;
+    let mut i = 0usize;
+    while i < phnum {
+        let ph = phdr.add(i * phent);
         let p_type = u32::from_le_bytes(core::ptr::read_unaligned(ph as *const [u8; 4]));
-        if p_type != PT_LOAD {
-            continue;
+        if p_type == PT_PHDR {
+            let p_vaddr = u64::from_le_bytes(core::ptr::read_unaligned(ph.add(PH_VADDR) as *const [u8; 8]));
+            exec_base = at_phdr.wrapping_sub(p_vaddr);
+            break;
         }
-        let p_vaddr = u64::from_le_bytes(core::ptr::read_unaligned(ph.add(PH_VADDR) as *const [u8; 8]));
-        let p_memsz = u64::from_le_bytes(core::ptr::read_unaligned(ph.add(PH_MEMSZ) as *const [u8; 8]));
-        if p_vaddr < min_vaddr { min_vaddr = p_vaddr; }
-        let end = p_vaddr + p_memsz;
-        if end > max_vaddr_end { max_vaddr_end = end; }
+        i += 1;
     }
-    let total_size = ((max_vaddr_end - min_vaddr + page - 1) & !(page - 1)) as usize;
-    // ponytail: mmap_min_addr is typically 65536; probe upward to find free span
-    let desired = if min_vaddr < 0x10000 { 0x10000 } else { min_vaddr };
-    let mut probe_addr = desired;
-    let load_start = loop {
-        let probe = sys_mmap(
-            probe_addr as *mut u8, total_size,
-            PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0,
-        );
-        if probe as usize == probe_addr as usize {
-            sys_munmap(probe, total_size);
-            break probe_addr;
-        }
-        if probe as usize != MAP_FAILED {
-            sys_munmap(probe, total_size);
-        }
-        probe_addr += DSO_BASE_STRIDE;
-        if probe_addr > desired + DSO_BASE_STRIDE * 16 {
-            die(95, b"map_exec", probe_addr as usize);
-        }
-    };
-    let exec_base = load_start - min_vaddr;
-
-    for i in 0..e_phnum as usize {
-        let ph = buf.as_ptr().add(e_phoff as usize + i * PHDR_SIZE);
-        let p_type = u32::from_le_bytes(core::ptr::read_unaligned(ph as *const [u8; 4]));
-        if p_type != PT_LOAD {
-            continue;
-        }
-        let p_flags = u32::from_le_bytes(core::ptr::read_unaligned(ph.add(PH_FLAGS) as *const [u8; 4]));
-        let p_offset = u64::from_le_bytes(core::ptr::read_unaligned(ph.add(PH_OFFSET) as *const [u8; 8]));
-        let p_vaddr = u64::from_le_bytes(core::ptr::read_unaligned(ph.add(PH_VADDR) as *const [u8; 8]));
-        let p_filesz = u64::from_le_bytes(core::ptr::read_unaligned(ph.add(PH_FILESZ) as *const [u8; 8]));
-        let p_memsz = u64::from_le_bytes(core::ptr::read_unaligned(ph.add(PH_MEMSZ) as *const [u8; 8]));
-
-        let adj = p_vaddr & (page - 1);
-        let map_addr = exec_base + p_vaddr - adj;
-        let map_off = p_offset - adj;
-        let map_len = ((p_memsz + adj + page - 1) & !(page - 1)) as usize;
-        let prot = prot_from_flags(p_flags);
-
-        // Map the whole segment anonymously first so the tail (bss) is backed
-        // by zeroed anonymous pages, then overlay the file-backed portion.
-        let ptr = sys_mmap(
-            map_addr as *mut u8,
-            map_len,
-            prot,
-            MAP_PRIVATE | MAP_FIXED | MAP_ANONYMOUS,
-            -1,
-            0,
-        );
-        if ptr as usize == MAP_FAILED {
-            die(95, b"map_exec", map_addr as usize);
-        }
-
-        let file_map_len = ((p_filesz + adj + page - 1) & !(page - 1)) as usize;
-        if file_map_len > 0 {
-            let fptr = sys_mmap(
-                map_addr as *mut u8,
-                file_map_len,
-                prot,
-                MAP_PRIVATE | MAP_FIXED,
-                fd as i32,
-                map_off as i64,
-            );
-            if fptr as usize == MAP_FAILED {
-                die(95, b"map_exec_file", map_addr as usize);
-            }
-        }
-
-        if p_memsz > p_filesz {
-            let bss_start = (exec_base + p_vaddr + p_filesz) as *mut u8;
-            let bss_len = (p_memsz - p_filesz) as usize;
-            core::ptr::write_bytes(bss_start, 0, bss_len);
-        }
+    if exec_base == u64::MAX {
+        die(95, b"no_pt_phdr", at_phdr as usize);
     }
 
     let mut exec_tls_image: *const u8 = core::ptr::null();
     let mut exec_tls_filesz: u64 = 0;
     let mut exec_tls_memsz: u64 = 0;
     let mut exec_tls_align: u64 = 0;
-    for i in 0..e_phnum as usize {
-        let ph = buf.as_ptr().add(e_phoff as usize + i * PHDR_SIZE);
+    let mut i = 0usize;
+    while i < phnum {
+        let ph = phdr.add(i * phent);
         let p_type = u32::from_le_bytes(core::ptr::read_unaligned(ph as *const [u8; 4]));
         if p_type == PT_TLS {
             let p_vaddr = u64::from_le_bytes(core::ptr::read_unaligned(ph.add(PH_VADDR) as *const [u8; 8]));
@@ -2826,15 +2968,16 @@ unsafe fn load_and_jump(sp: usize, ldso_base: u64) -> ! {
             exec_tls_image = (exec_base + p_vaddr) as *const u8;
             break;
         }
+        i += 1;
     }
-
-    sys_close(fd);
+    let e_entry = at_entry;
+    let e_phnum = at_phnum as u16;
 
     // 4. Parse executable's PT_DYNAMIC (base = 0)
     let mut dyn_vaddr: u64 = 0;
     let mut dyn_memsz: u64 = 0;
     for i in 0..e_phnum as usize {
-        let ph = buf.as_ptr().add(e_phoff as usize + i * PHDR_SIZE);
+        let ph = phdr.add(i * phent);
         let p_type = u32::from_le_bytes(core::ptr::read_unaligned(ph as *const [u8; 4]));
         if p_type == PT_DYNAMIC {
             dyn_vaddr = u64::from_le_bytes(core::ptr::read_unaligned(ph.add(PH_VADDR) as *const [u8; 8]));
@@ -2911,6 +3054,7 @@ unsafe fn load_and_jump(sp: usize, ldso_base: u64) -> ! {
         RUNPATH_LEN = str_len(RUNPATH);
     }
 
+
     // Register executable as LOADED[0]
     let mut exec_sym_count: usize = 0;
     if dt_gnu_hash != 0 {
@@ -2926,6 +3070,9 @@ unsafe fn load_and_jump(sp: usize, ldso_base: u64) -> ! {
         sym_count: exec_sym_count,
         strtab: (exec_base + dt_strtab) as *const u8,
         strsz: dt_strsz as usize,
+        gnu_hash: if dt_gnu_hash != 0 { (exec_base + dt_gnu_hash) as usize } else { 0 },
+        hash: if dt_hash != 0 { (exec_base + dt_hash) as usize } else { 0 },
+        is_self: false,
         dyn_addr: (exec_base + dyn_vaddr) as usize,
         dyn_memsz: dyn_memsz as usize,
         tls_image: exec_tls_image,
@@ -2941,7 +3088,6 @@ unsafe fn load_and_jump(sp: usize, ldso_base: u64) -> ! {
         name: [0; 256],
     };
     LOADED_COUNT = 1;
-    register_self(ldso_base);
 
     // 5. Load each DT_NEEDED DSO
     for i in 0..needed_count {
@@ -2958,6 +3104,10 @@ unsafe fn load_and_jump(sp: usize, ldso_base: u64) -> ! {
         sys_close(lib_fd);
         set_loaded_name(LOADED_COUNT - 1, name_ptr, name_len);
     }
+
+    // Register the interpreter last: symbol lookup walks LOADED in order, and
+    // the loader's private memcpy/strlen/etc. must never shadow libc.
+    register_self(ldso_base);
 
     compute_tls_layout();
     TLS_OLD_TOTAL = TLS_TOTAL_SIZE;
@@ -3002,8 +3152,7 @@ unsafe fn load_and_jump(sp: usize, ldso_base: u64) -> ! {
 
     run_constructors();
 
-    let phdr_addr = exec_base + e_phoff;
-    build_and_jump(exec_base + e_entry, phdr_addr, e_phnum, sp)
+    build_and_jump(e_entry, at_phdr, e_phnum, sp)
 }
 
 // ============================================================
@@ -3212,31 +3361,52 @@ unsafe fn build_and_jump(entry: u64, phdr_addr: u64, phnum: u16, orig_sp: usize)
 
 #[no_mangle]
 pub unsafe extern "C" fn memset(s: *mut c_void, c: i32, n: usize) -> *mut c_void {
-    let s = s as *mut u8;
-    let mut p = s;
-    let mut i = 0;
-    while i < n {
-        unsafe {
-            *p = c as u8;
-        }
-        p = unsafe { p.add(1) };
-        i += 1;
+    let d = s as *mut u8;
+    let byte = c as u8;
+    #[cfg(target_arch = "x86_64")]
+    {
+        core::arch::asm!("rep stosb", inout("rdi") d => _, inout("rcx") n => _, in("al") byte,
+                         options(nostack, preserves_flags));
     }
-    s as *mut c_void
+    #[cfg(not(target_arch = "x86_64"))]
+    {
+        let word = 0x0101_0101_0101_0101u64 * byte as u64;
+        let mut i = 0usize;
+        while i + 8 <= n {
+            core::ptr::write_unaligned(d.add(i) as *mut u64, word);
+            i += 8;
+        }
+        while i < n {
+            *d.add(i) = byte;
+            i += 1;
+        }
+    }
+    s
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn memcpy(dst: *mut c_void, src: *const c_void, n: usize) -> *mut c_void {
-    let dst = dst as *mut u8;
-    let src = src as *const u8;
-    let mut i = 0;
-    while i < n {
-        unsafe {
-            *dst.add(i) = *src.add(i);
-        }
-        i += 1;
+    let d = dst as *mut u8;
+    let s = src as *const u8;
+    #[cfg(target_arch = "x86_64")]
+    {
+        core::arch::asm!("rep movsb", inout("rdi") d => _, inout("rsi") s => _,
+                         inout("rcx") n => _, options(nostack, preserves_flags));
     }
-    dst as *mut c_void
+    #[cfg(not(target_arch = "x86_64"))]
+    {
+        let mut i = 0usize;
+        while i + 8 <= n {
+            core::ptr::write_unaligned(d.add(i) as *mut u64,
+                core::ptr::read_unaligned(s.add(i) as *const u64));
+            i += 8;
+        }
+        while i < n {
+            *d.add(i) = *s.add(i);
+            i += 1;
+        }
+    }
+    dst
 }
 
 #[no_mangle]
