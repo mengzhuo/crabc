@@ -659,12 +659,14 @@ pub unsafe extern "C" fn strcmp(s1: *const u8, s2: *const u8) -> c_int {
     const ONES: u64 = 0x0101_0101_0101_0101;
     const HIGHS: u64 = 0x8080_8080_8080_8080;
     loop {
-        // Word loads must not cross a page boundary, because a string may end
-        // on the last byte of a mapping. Walk only up to the page end when
-        // either pointer is close to it, then resume the word path.
+        // Walk to the next page end (or as far as the shorter string allows)
+        // with a tight word loop; the room computation runs once per page,
+        // not once per word.
         let room_a = 4096 - ((a as usize) & 4095);
         let room_b = 4096 - ((b as usize) & 4095);
-        if room_a >= 8 && room_b >= 8 {
+        let room = if room_a < room_b { room_a } else { room_b };
+        let words_end = a.add(room & !7usize);
+        while a < words_end {
             let wa = load_u64(a);
             let wb = load_u64(b);
             if wa == wb {
@@ -687,22 +689,21 @@ pub unsafe extern "C" fn strcmp(s1: *const u8, s2: *const u8) -> c_int {
                 }
                 i += 1;
             }
-        } else {
-            let room = if room_a < room_b { room_a } else { room_b };
-            let mut i = 0usize;
-            while i < room {
-                let x = *a;
-                let y = *b;
-                if x != y {
-                    return x as c_int - y as c_int;
-                }
-                if x == 0 {
-                    return 0;
-                }
-                a = a.add(1);
-                b = b.add(1);
-                i += 1;
+        }
+        let tail = room & 7;
+        let mut i = 0usize;
+        while i < tail {
+            let x = *a;
+            let y = *b;
+            if x != y {
+                return x as c_int - y as c_int;
             }
+            if x == 0 {
+                return 0;
+            }
+            a = a.add(1);
+            b = b.add(1);
+            i += 1;
         }
     }
 }

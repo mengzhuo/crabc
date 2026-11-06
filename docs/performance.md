@@ -28,31 +28,31 @@ and the reproduction scripts rather than the absolute values.
 | Benchmark | musl | crabc | crabc/musl |
 |---|---:|---:|---:|
 | `memcpy` 64B | 10.9 ns | 6.8 ns | 0.62x |
-| `memcpy` 4KB | 59.0 ns | 43.4 ns | 0.74x |
-| `memset` 4KB | 63.4 ns | 48.4 ns | 0.76x |
-| `memcmp` 4KB | 869 ns | 43.8 ns | 0.05x |
-| `strlen` 4KB | 316 ns | 55.2 ns | 0.17x |
-| `strcmp` (short) | 10.3 ns | 6.1 ns | 0.60x |
-| `strstr` | 54.2 ns | 7.5 ns | 0.14x |
-| `snprintf` | 435 ns | 232 ns | 0.53x |
-| `fprintf` → `/dev/null` | 416 ns | 227 ns | 0.55x |
-| `malloc`/`free` 16B | 110 ns | 13.1 ns | 0.12x |
-| `malloc`/`free` 256B | 109 ns | 13.0 ns | 0.12x |
-| `calloc` 1KB | 174 ns | 23.2 ns | 0.13x |
-| `realloc` (grow) | 21.9 ns | 9.3 ns | 0.42x |
+| `memcpy` 4KB | 59.4 ns | 44.3 ns | 0.75x |
+| `memset` 4KB | 63.8 ns | 48.4 ns | 0.76x |
+| `memcmp` 4KB | 869 ns | 37.6 ns | 0.04x |
+| `strlen` 4KB | 317 ns | 54.6 ns | 0.17x |
+| `strcmp` (short) | 9.3 ns | 4.8 ns | 0.52x |
+| `strstr` | 56.2 ns | 7.1 ns | 0.13x |
+| `snprintf` | 438 ns | 233 ns | 0.53x |
+| `fprintf` → `/dev/null` | 418 ns | 227 ns | 0.54x |
+| `malloc`/`free` 16B | 110 ns | 13.3 ns | 0.12x |
+| `malloc`/`free` 256B | 112 ns | 13.1 ns | 0.12x |
+| `calloc` 1KB | 176 ns | 23.6 ns | 0.13x |
+| `realloc` (grow) | 22.7 ns | 9.6 ns | 0.42x |
 | `sin` | 5.19 ns | 5.25 ns | 1.01x |
-| `exp` | 6.57 ns | 6.59 ns | 1.00x |
-| `log` | 8.58 ns | 8.90 ns | 1.04x |
+| `exp` | 6.59 ns | 6.59 ns | 1.00x |
+| `log` | 8.57 ns | 8.98 ns | 1.05x |
 | `pow` | 21.9 ns | 23.3 ns | 1.07x |
-| `sqrt` | 2.91 ns | 2.94 ns | 1.01x |
+| `sqrt` | 2.93 ns | 2.89 ns | 0.98x |
 | `getpid` | 183 ns | 183 ns | 1.00x |
-| `clock_gettime` | 27.9 ns | 27.8 ns | 1.00x |
+| `clock_gettime` | 27.7 ns | 28.0 ns | 1.01x |
 | `open`+`close` | 3481 ns | 3409 ns | 0.98x |
-| `stat` | 1469 ns | 1466 ns | 1.00x |
-| `getenv` | 89.7 ns | 26.3 ns | 0.29x |
+| `stat` | 1466 ns | 1455 ns | 0.99x |
+| `getenv` | 100 ns | 39.4 ns | 0.39x |
 | `pthread_mutex` lock/unlock | 12.4 ns | 7.2 ns | 0.58x |
-| `pthread_create`+`join` | 39.3 µs | 40.7 µs | 1.04x |
-| Process startup | 338 µs | 417 µs | 1.23x |
+| `pthread_create`+`join` | 39.4 µs | 40.7 µs | 1.03x |
+| Process startup | 335 µs | 422 µs | 1.26x |
 
 The thread benchmark creates and joins 2000 threads; all 2000 ran in every
 crabc round.
@@ -65,14 +65,14 @@ QEMU/TCG numbers are not hardware numbers; only the ratios are meaningful.
 
 | Benchmark | crabc/musl |
 |---|---:|
-| `memcpy` 4KB | 0.52x |
+| `memcpy` 4KB | 0.53x |
 | `memset` 4KB | 0.98x |
-| `memcmp` 4KB | 0.97x |
-| `strlen` 4KB | 0.95x |
-| `strcmp` (short) | 1.14x |
+| `memcmp` 4KB | 0.98x |
+| `strlen` 4KB | 0.96x |
+| `strcmp` (short) | 0.52x |
 | `malloc`/`free` 16B | 0.11x |
-| `calloc` 1KB | 0.37x |
-| `clock_gettime` | 1.04x |
+| `calloc` 1KB | 0.35x |
+| `clock_gettime` | 1.03x |
 
 ## What changed
 
@@ -102,7 +102,7 @@ QEMU/TCG numbers are not hardware numbers; only the ratios are meaningful.
 
 ## Remaining gaps
 
-- **Process startup, 1.23x.** musl's dynamic linker *is* its libc, so one
+- **Process startup, 1.26x.** musl's dynamic linker *is* its libc, so one
   file is mapped by the kernel. crabc maps `libldso.so` and then loads and
   relocates a separate `libc.so`; the remaining difference is mostly that
   second DSO's relocation and first-touch page-fault cost.
