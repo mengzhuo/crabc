@@ -1,6 +1,6 @@
 [package]
 name = "crabc-ldso"
-version = "0.4.1"
+version = "0.4.2"
 edition = "2021"
 description = "A Rust dynamic linker for musl-linked ELF binaries"
 license = "MIT OR Apache-2.0"
